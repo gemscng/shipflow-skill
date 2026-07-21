@@ -2803,6 +2803,12 @@ class ShipFlowClient {
       form.set("caption", opts.caption);
     for (const l of opts.labels ?? [])
       form.append("pairLabel", l);
+    for (const c of opts.beforeCaptions ?? [])
+      form.append("beforeCaption", c);
+    for (const c of opts.afterCaptions ?? [])
+      form.append("afterCaption", c);
+    for (const c of opts.imageCaptions ?? [])
+      form.append("imageCaption", c);
     for (const tf of opts.touched ?? [])
       form.append("touched", tf);
     const appendAll = (field, imgs) => {
@@ -4172,7 +4178,7 @@ function isImagePath(p) {
   const lower = p.toLowerCase();
   return IMAGE_EXTS.some((e) => lower.endsWith(e));
 }
-function validateEvidenceSelection(before, after, misc, labels = []) {
+function validateEvidenceSelection(before, after, misc, labels = [], beforeCaptions = [], afterCaptions = [], imageCaptions = []) {
   const hasBefore = before.length > 0;
   const hasAfter = after.length > 0;
   if (hasBefore !== hasAfter) {
@@ -4186,6 +4192,15 @@ function validateEvidenceSelection(before, after, misc, labels = []) {
   }
   if (labels.length > before.length) {
     return `${labels.length} --label(s) for ${before.length} pair(s) — labels name pairs by position, so pass at most one per --before/--after pair.`;
+  }
+  if (beforeCaptions.length > before.length) {
+    return `${beforeCaptions.length} --before-caption(s) for ${before.length} --before shot(s) — captions describe shots by position, at most one per screenshot.`;
+  }
+  if (afterCaptions.length > after.length) {
+    return `${afterCaptions.length} --after-caption(s) for ${after.length} --after shot(s) — captions describe shots by position, at most one per screenshot.`;
+  }
+  if (imageCaptions.length > misc.length) {
+    return `${imageCaptions.length} --image-caption(s) for ${misc.length} supplementary file(s) — captions describe files by position, at most one per --image/--file.`;
   }
   if (!hasBefore && !hasAfter) {
     if (misc.some(isImagePath)) {
@@ -4382,12 +4397,15 @@ ${formatPrecedentSuggestion(precedent)}`;
       precedent: surfaced ? { outcome: precedent.outcome, sourceIssue: precedent.precedent.sourceIssue, answer: precedent.precedent.answer } : null
     }, () => console.log(`\uD83D\uDEA7 #${number} escalated${updated ? " (existing \uD83D\uDEA7 comment updated)" : ""} → labelled "${NEEDS_HUMAN_LABEL}"${owner ? `, owner @${owner}` : ""}${surfaced ? ", precedent on file surfaced" : ""}${released ? " and claim released" : " (claim kept — loop skips it this run)"}.`));
   }));
-  issue.command("evidence <number>").description("Attach testing evidence. Screenshots must show the fix: --before AND --after pairs, one per changed surface, named with --label (reporter thread + a PR comment, or the issue if no --pr)").option("--before <path...>", "Screenshot(s) BEFORE the fix — before[i] pairs with after[i]").option("--after <path...>", "Screenshot(s) AFTER the fix — one per --before").option("--label <text...>", 'Name for each pair, by position (e.g. --label "Mode row" "Grade ladder") — a multi-surface change attaches one labeled pair per surface').option("--touched <name...>", "Touched feature names — the evidence gallery renders a red gap card for each one without a matching proof pair").option("--image <path...>", "Extra screenshot file(s) — prefer --before/--after").option("--file <path...>", "Supplementary media — a screen recording (mp4/mov/webm) or extra files").option("--pr <n>", "Related PR number — when set, the evidence comment lands on the PR instead of the issue").option("--preview-url <url>", "Testing site URL").option("--caption <text>", "Short note shown with the evidence").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  issue.command("evidence <number>").description("Attach testing evidence. Screenshots must show the fix: --before AND --after pairs, one per changed surface, named with --label (reporter thread + a PR comment, or the issue if no --pr)").option("--before <path...>", "Screenshot(s) BEFORE the fix — before[i] pairs with after[i]").option("--after <path...>", "Screenshot(s) AFTER the fix — one per --before").option("--label <text...>", 'Name for each pair, by position (e.g. --label "Mode row" "Grade ladder") — a multi-surface change attaches one labeled pair per surface').option("--before-caption <text...>", "Caption for each --before shot, by position — describes what THAT shot shows (keeps a summary from over-claiming)").option("--after-caption <text...>", "Caption for each --after shot, by position").option("--image-caption <text...>", "Caption for each supplementary --image/--file, by position").option("--touched <name...>", "Touched feature names — the evidence gallery renders a red gap card for each one without a matching proof pair").option("--image <path...>", "Extra screenshot file(s) — prefer --before/--after").option("--file <path...>", "Supplementary media — a screen recording (mp4/mov/webm) or extra files").option("--pr <n>", "Related PR number — when set, the evidence comment lands on the PR instead of the issue").option("--preview-url <url>", "Testing site URL").option("--caption <text>", "Short note shown with the evidence").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const before = opts.before ?? [];
     const after = opts.after ?? [];
     const labels = opts.label ?? [];
+    const beforeCaptions = opts.beforeCaption ?? [];
+    const afterCaptions = opts.afterCaption ?? [];
+    const imageCaptions = opts.imageCaption ?? [];
     const misc = [...opts.file ?? [], ...opts.image ?? []];
-    const selErr = validateEvidenceSelection(before, after, misc, labels);
+    const selErr = validateEvidenceSelection(before, after, misc, labels, beforeCaptions, afterCaptions, imageCaptions);
     if (selErr) {
       console.error(selErr);
       process.exit(1);
@@ -4403,6 +4421,9 @@ ${formatPrecedentSuggestion(precedent)}`;
       before: before.map(toImg),
       after: after.map(toImg),
       labels,
+      beforeCaptions,
+      afterCaptions,
+      imageCaptions,
       touched: opts.touched ?? [],
       images: misc.map(toImg)
     });

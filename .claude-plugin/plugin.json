@@ -1,6 +1,6 @@
 {
   "name": "shipflow",
-  "version": "0.25.1",
+  "version": "0.25.2",
   "description": "ShipFlow for Claude Code: dedicated /shipflow-* commands (loop, status, issues, PRs, releases) plus a natural-language skill. Bundles the renaiss-shipflow CLI (no separate install) and self-updates on use.",
   "author": {
     "name": "Renaiss Protocol"
