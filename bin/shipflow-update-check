@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# shipflow-update-check — compares the installed ShipFlow plugin version against
+# the published one (raw plugin.json on the shipflow-skill main branch).
+#
+# Output (one line, or nothing):
+#   UPGRADE_AVAILABLE <installed> <latest>   — a newer version is published
+#   (nothing)                                — up to date, disabled, or offline
+#
+# Result is cached in ~/.shipflow/last-update-check (re-checks every 4h) so it
+# never hits the network more than a few times a day. Opt out with
+# SHIPFLOW_UPDATE_CHECK=false.
+set -euo pipefail
+
+PLUGIN_DIR="${SHIPFLOW_PLUGIN_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+STATE_DIR="${SHIPFLOW_STATE_DIR:-$HOME/.shipflow}"
+CACHE="$STATE_DIR/last-update-check"
+LOCAL_JSON="$PLUGIN_DIR/.claude-plugin/plugin.json"
+REMOTE_URL="${SHIPFLOW_REMOTE_URL:-https://raw.githubusercontent.com/gemscng/shipflow-skill/main/.claude-plugin/plugin.json}"
+TTL="${SHIPFLOW_UPDATE_TTL:-14400}" # 4h
+
+[ "${SHIPFLOW_UPDATE_CHECK:-}" = "false" ] && exit 0
+[ "${1:-}" = "--force" ] && rm -f "$CACHE"
+
+# Extract the first "version": "x.y.z" without needing jq.
+_ver() { grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/'; }
+
+LOCAL="$(_ver < "$LOCAL_JSON" 2>/dev/null || true)"
+[ -z "$LOCAL" ] && exit 0
+
+mkdir -p "$STATE_DIR"
+# Serve cached verdict if the last check is still fresh.
+if [ -f "$CACHE" ]; then
+  _mtime="$(stat -f %m "$CACHE" 2>/dev/null || stat -c %Y "$CACHE" 2>/dev/null || echo 0)"
+  if [ "$(( $(date +%s) - _mtime ))" -lt "$TTL" ]; then
+    cat "$CACHE"
+    exit 0
+  fi
+fi
+
+REMOTE="$(curl -fsSL --max-time 5 "$REMOTE_URL" 2>/dev/null | _ver || true)"
+: > "$CACHE" # default: up to date (empty)
+[ -z "$REMOTE" ] && exit 0
+
+# Newer published version? (sort -V puts the higher semver last)
+if [ "$LOCAL" != "$REMOTE" ] && \
+   [ "$(printf '%s\n%s\n' "$LOCAL" "$REMOTE" | sort -V | tail -1)" = "$REMOTE" ]; then
+  printf 'UPGRADE_AVAILABLE %s %s\n' "$LOCAL" "$REMOTE" | tee "$CACHE"
+fi

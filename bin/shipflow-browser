@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Resolve AND (optionally) ensure a healthy headed browser for ShipFlow loop E2E,
+# preferring gstack `browse` (the sanctioned browser). Prints the browse command
+# on stdout; guidance on stderr + exit 1 when none is found.
+#
+#   BROWSE="$(shipflow-browser)"           # just resolve the command
+#   BROWSE="$(shipflow-browser --ensure)"  # resolve + heal a wedged browse server
+#
+# --ensure heals the "Auth failed — server may have restarted" wedge (which
+# `browse restart` itself can't recover, since it tries to auth to the broken
+# server first) by killing the stale server + its chromium so the next command
+# respawns fresh. The chromium profile (cookies, auth, scroll) persists on disk,
+# so nothing is lost.
+set -euo pipefail
+
+# 1. Resolve the browse binary.
+BROWSE=""
+if command -v browse >/dev/null 2>&1; then
+  BROWSE="browse"
+else
+  for p in \
+    "$HOME/.claude/skills/gstack/browse/dist/browse" \
+    "$HOME/.claude/skills/gstack/browse/bin/browse" \
+    "./.claude/skills/gstack/browse/dist/browse"; do
+    if [ -x "$p" ]; then BROWSE="$p"; break; fi
+  done
+fi
+
+if [ -z "$BROWSE" ]; then
+  echo "No gstack browser found. Install gstack (provides 'browse'), or drive the app with your project's own E2E runner (Playwright/Cypress) and still capture a screenshot for evidence." >&2
+  exit 1
+fi
+
+# 2. Health-check + heal (only with --ensure, so plain resolution stays cheap).
+if [ "${1:-}" = "--ensure" ]; then
+  if ! "$BROWSE" status >/dev/null 2>&1; then
+    # Wedged (auth failed / stale port). Kill the stale server + its chromium;
+    # the next browse command respawns a fresh server against the same profile.
+    pkill -f 'gstack/browse/.*server' 2>/dev/null || true
+    pkill -f 'gstack/chromium-profile' 2>/dev/null || true
+    sleep 1
+    "$BROWSE" status >/dev/null 2>&1 || true # respawn fresh
+  fi
+fi
+
+echo "$BROWSE"

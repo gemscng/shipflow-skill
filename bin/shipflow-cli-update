@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# shipflow-cli-update — keep the CLI fresh from npm, independently of plugin
+# publishes (issue #307).
+#
+# The plugin bundles a CLI snapshot frozen at publish time; npm gets a new CLI
+# on every merge to main. This script bridges the two: when npm has a newer
+# version than ANY local copy (plugin-bundled or previously fetched), it
+# installs it under ~/.shipflow/cli/<version>/ where the launcher
+# (bin/renaiss-shipflow) picks the newest copy across both sources. Net effect:
+# the skill always resolves the latest CLI, even when plugin publishing lags.
+#
+# Design constraints:
+#   - THROTTLED: registry checked at most every SHIPFLOW_CLI_UPDATE_TTL seconds
+#     (default 4h, same cadence as shipflow-update-check), state in ~/.shipflow.
+#   - FAIL-SILENT: offline, no npm, registry error, partial install — all exit 0
+#     with no output; the launcher's existing copies keep working.
+#   - ATOMIC: installs into a tmp dir, then mv into place — the launcher never
+#     sees a half-installed version.
+#   - BOUNDED: old fetched versions are pruned (keep the newest 2).
+#
+# Output: `CLI_UPDATED <version>` when a new version was installed; else nothing.
+# Opt out with SHIPFLOW_CLI_UPDATE=false. `--force` skips the TTL.
+set -euo pipefail
+
+[ "${SHIPFLOW_CLI_UPDATE:-}" = "false" ] && exit 0
+
+STATE_DIR="${SHIPFLOW_STATE_DIR:-$HOME/.shipflow}"
+CLI_DIR="$STATE_DIR/cli"
+STAMP="$STATE_DIR/last-cli-update-check"
+TTL="${SHIPFLOW_CLI_UPDATE_TTL:-14400}" # 4h
+REGISTRY="${SHIPFLOW_NPM_REGISTRY:-https://registry.npmjs.org}"
+PKG="@renaiss-shipflow/cli"
+# Scoped-package registry paths need the inner slash percent-encoded.
+PKG_URL="@renaiss-shipflow%2Fcli"
+
+command -v npm >/dev/null 2>&1 || exit 0
+mkdir -p "$CLI_DIR"
+
+# Throttle: skip if the last check is fresh (unless --force).
+if [ "${1:-}" != "--force" ] && [ -f "$STAMP" ]; then
+  _mtime="$(stat -f %m "$STAMP" 2>/dev/null || stat -c %Y "$STAMP" 2>/dev/null || echo 0)"
+  [ "$(( $(date +%s) - _mtime ))" -lt "$TTL" ] && exit 0
+fi
+
+# Latest published version — one small registry JSON fetch, no npm invocation.
+LATEST="$(curl -fsSL --max-time 5 "$REGISTRY/$PKG_URL/latest" 2>/dev/null \
+  | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+  | sed 's/.*"\([0-9][^"]*\)".*/\1/' || true)"
+[ -z "$LATEST" ] && exit 0
+# Stamp only after a successful fetch — a failed/offline check must not reset
+# the timer, or one offline session start would block retries for a full TTL.
+touch "$STAMP"
+
+# Newest version already available locally, across BOTH sources the launcher
+# scans: plugin-bundled copies and previously fetched npm copies.
+_local_versions() {
+  # NB: every iteration must end in a successful command — a trailing failed
+  # test would leak out as the function's exit status and, under
+  # `set -eo pipefail`, kill the script mid-substitution (e.g. first run,
+  # when the $CLI_DIR glob is empty).
+  for pj in "$HOME"/.claude/plugins/cache/renaissshipflow/shipflow/*/cli/package.json; do
+    [ -f "$pj" ] || continue
+    grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$pj" | head -1 \
+      | sed 's/.*"\([0-9][^"]*\)".*/\1/' || true
+  done 2>/dev/null
+  for d in "$CLI_DIR"/*/; do
+    [ -f "${d}node_modules/@renaiss-shipflow/cli/dist/index.js" ] || continue
+    basename "$d"
+  done 2>/dev/null
+  return 0
+}
+NEWEST_LOCAL="$(_local_versions | sort -V | tail -1 || true)"
+if [ -n "$NEWEST_LOCAL" ] && \
+   [ "$(printf '%s\n%s\n' "$NEWEST_LOCAL" "$LATEST" | sort -V | tail -1)" = "$NEWEST_LOCAL" ]; then
+  exit 0 # local is already >= latest
+fi
+
+# Atomic install: tmp dir → mv into place. Never leave a half-install visible.
+TMP="$(mktemp -d "$CLI_DIR/.tmp-XXXXXX")" || exit 0
+trap 'rm -rf "$TMP"' EXIT
+# Stub package.json: anchors $TMP as the project root so no npm version is
+# tempted to walk up to an ancestor package.json (e.g. one in $HOME).
+echo '{}' > "$TMP/package.json"
+if npm install --prefix "$TMP" --silent --no-audit --no-fund "$PKG@$LATEST" >/dev/null 2>&1 \
+   && [ -f "$TMP/node_modules/@renaiss-shipflow/cli/dist/index.js" ]; then
+  rm -rf "$CLI_DIR/$LATEST"
+  mv "$TMP" "$CLI_DIR/$LATEST"
+  trap - EXIT
+  # Prune: keep the newest 2 fetched versions (portable — no GNU head -n -N).
+  ls -d "$CLI_DIR"/*/ 2>/dev/null | sort -Vr | tail -n +3 | while read -r old; do rm -rf "$old"; done || true
+  printf 'CLI_UPDATED %s\n' "$LATEST"
+fi
+exit 0
