@@ -3898,6 +3898,54 @@ function registerStatusCommand(program2) {
   }));
 }
 
+// src/commands/version.ts
+import { readdirSync as readdirSync2, readFileSync as readFileSync2 } from "node:fs";
+import { join as join2 } from "node:path";
+import { homedir as homedir2 } from "node:os";
+function installedPluginVersion(cacheBase = join2(homedir2(), ".claude", "plugins", "cache", "renaissshipflow", "shipflow")) {
+  try {
+    const versions = readdirSync2(cacheBase).map((dir) => {
+      try {
+        const j = JSON.parse(readFileSync2(join2(cacheBase, dir, ".claude-plugin", "plugin.json"), "utf8"));
+        return j.version || dir;
+      } catch {
+        return dir;
+      }
+    }).filter((v) => /^\d/.test(v));
+    if (!versions.length)
+      return null;
+    return versions.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).at(-1) ?? null;
+  } catch {
+    return null;
+  }
+}
+function registerVersionCommand(program2, cliVersion) {
+  program2.command("version").description("Show ShipFlow component versions: CLI, installed plugin/skill, and the server build").option("--api-url <url>", "Override the server URL for the build probe").option("--json", "Output JSON").action(runAction(async (opts) => {
+    const cli = cliVersion;
+    const plugin = installedPluginVersion();
+    const apiUrl = resolveApiUrl(opts.apiUrl);
+    let server;
+    try {
+      const res = await fetch(`${apiUrl}/api/v1/version`, { signal: AbortSignal.timeout(8000) });
+      server = res.ok ? await res.json() : { error: `HTTP ${res.status}` };
+    } catch (e) {
+      server = { error: e instanceof Error ? e.message : String(e) };
+    }
+    emit(opts, { cli, plugin, server: { url: apiUrl, ...server } }, () => {
+      const serverCell = server.error ? `unreachable (${server.error})` : `${(server.revision || "unknown").slice(0, 12)}${server.dirty ? "+dirty" : ""}${server.buildTime ? ` · built ${server.buildTime}` : ""}`;
+      for (const line of renderTable(["Component", "Version"], [
+        ["cli", cli],
+        ["plugin/skill", plugin ?? "not installed"],
+        [`server (${apiUrl})`, serverCell]
+      ]))
+        console.log(line);
+      if (plugin && plugin !== cli) {
+        console.log(`⚠️  plugin ${plugin} ≠ cli ${cli} — they are lockstep-versioned, so one lags; run /shipflow-update.`);
+      }
+    });
+  }));
+}
+
 // src/commands/issues.ts
 import { writeFileSync as writeFileSync2 } from "node:fs";
 import { resolve as resolve3 } from "node:path";
@@ -4093,7 +4141,7 @@ function issueRow(i) {
 
 // src/commands/issue.ts
 import { hostname as hostname2 } from "node:os";
-import { readFileSync as readFileSync2 } from "node:fs";
+import { readFileSync as readFileSync3 } from "node:fs";
 import { basename as basename2 } from "node:path";
 
 // src/message-lint.ts
@@ -4504,7 +4552,7 @@ ${formatPrecedentSuggestion(precedent)}`;
     }
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
-    const toImg = (p) => ({ filename: basename2(p), data: new Uint8Array(readFileSync2(p)) });
+    const toImg = (p) => ({ filename: basename2(p), data: new Uint8Array(readFileSync3(p)) });
     const res = await ctx.client.attachEvidence(ctx.creds.org, ctx.project.projectId, number, {
       repo,
       pr: opts.pr ? parseInt(opts.pr, 10) : undefined,
@@ -4843,8 +4891,8 @@ ${cat}`);
 }
 
 // src/priorities.ts
-import { existsSync as existsSync2, readFileSync as readFileSync3 } from "node:fs";
-import { join as join2 } from "node:path";
+import { existsSync as existsSync2, readFileSync as readFileSync4 } from "node:fs";
+import { join as join3 } from "node:path";
 var PRIORITIES_DOC_RELPATH = "docs/PRIORITIES.md";
 function tableCells(line) {
   const t = line.trim();
@@ -4893,10 +4941,10 @@ function repoRoot() {
   }
 }
 function loadPrioritiesDoc(root = repoRoot()) {
-  const path = join2(root, PRIORITIES_DOC_RELPATH);
+  const path = join3(root, PRIORITIES_DOC_RELPATH);
   if (!existsSync2(path))
     return { found: false, path, classes: [] };
-  const classes = parseWorkClasses(readFileSync3(path, "utf8"));
+  const classes = parseWorkClasses(readFileSync4(path, "utf8"));
   if (!classes.length) {
     return {
       found: true,
@@ -5144,7 +5192,7 @@ function registerCapabilityCommand(program2) {
 
 // src/commands/pr.ts
 import { execSync as execSync4 } from "node:child_process";
-import { readFileSync as readFileSync4 } from "node:fs";
+import { readFileSync as readFileSync5 } from "node:fs";
 import { hostname as hostname3 } from "node:os";
 
 // src/review-contract-data.ts
@@ -5935,7 +5983,7 @@ ${opts.body ?? ""}`;
   pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", "1-2 sentence verdict summary").option("--verdict <v>", "approve | comment | request_changes | reject", "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...]}); '-' or omitted reads stdin").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
-    const rawFindings = opts.findings && opts.findings !== "-" ? readFileSync4(opts.findings, "utf8") : opts.findings === "-" ? await readStdin2() : "";
+    const rawFindings = opts.findings && opts.findings !== "-" ? readFileSync5(opts.findings, "utf8") : opts.findings === "-" ? await readStdin2() : "";
     let parsed;
     try {
       parsed = JSON.parse(rawFindings || "[]");
@@ -6050,8 +6098,8 @@ function buildShipFlowHeader(project, issueNumber, issueUrl) {
 }
 
 // src/commands/test.ts
-import { existsSync as existsSync3, readFileSync as readFileSync5 } from "node:fs";
-import { join as join3 } from "node:path";
+import { existsSync as existsSync3, readFileSync as readFileSync6 } from "node:fs";
+import { join as join4 } from "node:path";
 function registerTestCommand(program2) {
   program2.command("test").description("Run the project's local test command (auto-detected)").option("--json", "Emit a machine-readable summary line (runner + exit code); test output still streams").allowUnknownOption().action((opts) => {
     const root = getCwdRepoRoot();
@@ -6096,32 +6144,32 @@ function runRunner(runner, root) {
 }
 function hasTestScript(root) {
   try {
-    const pkg = JSON.parse(readFileSync5(join3(root, "package.json"), "utf8"));
+    const pkg = JSON.parse(readFileSync6(join4(root, "package.json"), "utf8"));
     return typeof pkg?.scripts?.test === "string" && pkg.scripts.test.trim() !== "";
   } catch {
     return false;
   }
 }
 function detectRunner(root) {
-  if (existsSync3(join3(root, "package.json"))) {
+  if (existsSync3(join4(root, "package.json"))) {
     const bunArgs = hasTestScript(root) ? ["run", "test"] : ["test"];
-    if (existsSync3(join3(root, "bun.lockb")))
+    if (existsSync3(join4(root, "bun.lockb")))
       return { cmd: "bun", args: bunArgs, source: "bun.lockb" };
-    if (existsSync3(join3(root, "bun.lock")))
+    if (existsSync3(join4(root, "bun.lock")))
       return { cmd: "bun", args: bunArgs, source: "bun.lock" };
-    if (existsSync3(join3(root, "pnpm-lock.yaml")))
+    if (existsSync3(join4(root, "pnpm-lock.yaml")))
       return { cmd: "pnpm", args: ["test"], source: "pnpm-lock.yaml" };
-    if (existsSync3(join3(root, "yarn.lock")))
+    if (existsSync3(join4(root, "yarn.lock")))
       return { cmd: "yarn", args: ["test"], source: "yarn.lock" };
     return { cmd: "npm", args: ["test"], source: "package.json" };
   }
-  if (existsSync3(join3(root, "go.mod")))
+  if (existsSync3(join4(root, "go.mod")))
     return { cmd: "go", args: ["test", "./..."], source: "go.mod" };
-  if (existsSync3(join3(root, "Cargo.toml")))
+  if (existsSync3(join4(root, "Cargo.toml")))
     return { cmd: "cargo", args: ["test"], source: "Cargo.toml" };
-  if (existsSync3(join3(root, "pyproject.toml")))
+  if (existsSync3(join4(root, "pyproject.toml")))
     return { cmd: "pytest", args: [], source: "pyproject.toml" };
-  if (existsSync3(join3(root, "pytest.ini")))
+  if (existsSync3(join4(root, "pytest.ini")))
     return { cmd: "pytest", args: [], source: "pytest.ini" };
   return null;
 }
@@ -6369,6 +6417,7 @@ registerLoginCommand(program2);
 registerGitIdentityCommand(program2);
 registerInitCommand(program2);
 registerStatusCommand(program2);
+registerVersionCommand(program2, pkg.version);
 registerIssuesCommand(program2);
 registerIssueCommand(program2);
 registerInboxCommand(program2);
