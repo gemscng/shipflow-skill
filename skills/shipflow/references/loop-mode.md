@@ -190,7 +190,12 @@ PRs-opened-this-run < `cap`, admit ONE issue — each step a fresh subagent:
    priority → severity → newest; optional `--label bug`; skips `needs-human`/claimed).
    **Exit 4** / `issue: null` → nothing to admit.
    - **Dependency check:** blocked-by / depends-on an unmerged `#X` →
-     `renaiss-shipflow issue escalate <n> --reason "blocked by #X"` and pick the next.
+     `renaiss-shipflow issue wait <n> --on <#X> --reason "…"` and pick the next.
+     NOT `escalate` — a dependency is a timer, not a human decision: `wait`
+     labels `⏳ waiting-on`, and `issue next` re-admits the issue automatically
+     once the dependency merges/closes (cross-repo refs like `owner/repo#N`
+     work). Reserve `escalate`/`needs-human` for questions only a person can
+     answer.
    - **Missing capability/secret/access:** when you escalate for something the loop
      can't grant itself (a missing secret, an access grant, a tool/permission, or a
      governance call), ALSO file `renaiss-shipflow capability request --class <capability|access|secret|policy> --title "…" --why "…" --issue <n>` so the ask lands in the standing queue an operator works through (pairs with `docs/PRIORITIES.md` governance).

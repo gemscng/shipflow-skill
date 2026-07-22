@@ -60,8 +60,10 @@ open PR into a `state`. Act, then re-run A until nothing `needsAttention`:
 `wip-limit`, skip B. Else while PRs-this-run < `cap`, admit ONE issue (each step a
 subagent):
 1. **Pick** — `renaiss-shipflow issue next --json` (priority→severity→newest; skips
-   `needs-human`/claimed). Exit 4 / `issue: null` → nothing to admit. Dependency:
-   blocked-by an unmerged `#X` → `issue escalate` + next.
+   `needs-human`/claimed/`⏳ waiting-on`). Exit 4 / `issue: null` → nothing to
+   admit. Dependency: blocked-by an unmerged `#X` → `issue wait <n> --on <#X>`
+   + next (NOT escalate — `issue next` re-admits it automatically when the
+   dependency merges/closes; `needs-human` is for real human decisions only).
 2. **Reviewer — intake** (mandatory): dispatch the reviewer; it pulls `features
    --json`, validates + maps the issue to features, returns an acceptance brief.
    Reject (invalid/dup/needs-human) → `issue escalate` + next.

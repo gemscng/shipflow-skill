@@ -2157,7 +2157,8 @@ var SHIPFLOW_CONTRACT = {
       "severity:medium": "fbca04",
       "severity:low": "c2e0c6",
       "via-shipflow": "0e7490",
-      "auto-harvested": "d876e3"
+      "auto-harvested": "d876e3",
+      "⏳ waiting-on": "fbca04"
     },
     prefixColors: {
       "category:": "5319e7",
@@ -2171,7 +2172,8 @@ var SHIPFLOW_CONTRACT = {
       shipflowApproved: "shipflow-approved",
       verifyFailed: "verify-failed",
       viaShipflow: "via-shipflow",
-      autoHarvested: "auto-harvested"
+      autoHarvested: "auto-harvested",
+      waitingOn: "⏳ waiting-on"
     }
   },
   markers: {
@@ -3432,6 +3434,14 @@ function ghIssueView(repo, number) {
   const out = _exec(`gh issue view ${number} --repo ${shellQuote(repo)} --json ${FIELDS}`).toString();
   return JSON.parse(out);
 }
+function ghIssueOrPrState(repo, number) {
+  try {
+    const out = _exec(`gh api ${shellQuote(`repos/${repo}/issues/${number}`)} --jq .state`).toString().trim();
+    return out === "open" || out === "closed" ? out : null;
+  } catch {
+    return null;
+  }
+}
 var SHIPFLOW_TRIAGED_MARKER = SHIPFLOW_CONTRACT.markers.triaged;
 var VIA_SHIPFLOW_LABEL = SHIPFLOW_CONTRACT.labels.names.viaShipflow;
 function ghIssueCreate(repo, title, body, labels = []) {
@@ -4121,6 +4131,7 @@ function lintMessageBody(body) {
 // src/issue-order.ts
 var NEEDS_HUMAN_LABEL = SHIPFLOW_CONTRACT.labels.names.needsHuman;
 var IN_PROGRESS_LABEL = SHIPFLOW_CONTRACT.labels.names.inProgress;
+var WAITING_ON_LABEL = SHIPFLOW_CONTRACT.labels.names.waitingOn;
 function isActionableForPickup(issue, filter) {
   if (filter.claimed)
     return false;
@@ -4129,11 +4140,37 @@ function isActionableForPickup(issue, filter) {
     return false;
   if (labels.includes(IN_PROGRESS_LABEL))
     return false;
+  if (labels.includes(WAITING_ON_LABEL))
+    return false;
   if (filter.label && !labels.includes(filter.label))
     return false;
   if (filter.assignee && !issue.assignees.some((a) => a.login === filter.assignee))
     return false;
   return true;
+}
+function parseDependencyRef(ref, defaultRepo) {
+  const r = ref.trim();
+  const url = r.match(/github\.com\/([^/\s]+\/[^/\s]+)\/(?:issues|pull)\/(\d+)/);
+  if (url)
+    return { repo: url[1], number: parseInt(url[2], 10) };
+  const qualified = r.match(/^([\w.-]+\/[\w.-]+)#(\d+)$/);
+  if (qualified)
+    return { repo: qualified[1], number: parseInt(qualified[2], 10) };
+  const bare = r.match(/^#?(\d+)$/);
+  if (bare)
+    return { repo: defaultRepo, number: parseInt(bare[1], 10) };
+  return null;
+}
+function formatWaitingOnMarker(dep) {
+  return `<!-- shipflow:waiting-on ${dep.repo}#${dep.number} -->`;
+}
+function extractWaitingOnDep(comments) {
+  for (let i = comments.length - 1;i >= 0; i--) {
+    const m = comments[i].body.match(/<!--\s*shipflow:waiting-on\s+([\w.-]+\/[\w.-]+)#(\d+)\s*-->/);
+    if (m)
+      return { repo: m[1], number: parseInt(m[2], 10) };
+  }
+  return null;
 }
 function isStaleInProgress(issue, claimed, openPRIssues) {
   if (!issue.labels.some((l) => l.name === IN_PROGRESS_LABEL))
@@ -4278,6 +4315,23 @@ function registerIssueCommand(program2) {
         }
       }
     }
+    for (const i of open) {
+      if (!i.labels.some((l) => l.name === WAITING_ON_LABEL) || claimed.has(i.number))
+        continue;
+      try {
+        const dep = extractWaitingOnDep(ghIssueComments(repo, i.number));
+        if (!dep)
+          continue;
+        if (ghIssueOrPrState(dep.repo, dep.number) !== "closed")
+          continue;
+        ghIssueRemoveLabel(repo, i.number, WAITING_ON_LABEL);
+        i.labels = i.labels.filter((l) => l.name !== WAITING_ON_LABEL);
+        ghIssueComment(repo, i.number, `✅ Dependency ${dep.repo}#${dep.number} closed — re-admitted to the loop queue.`);
+        console.warn(`⏳ #${i.number}: dependency ${dep.repo}#${dep.number} closed — cleared "${WAITING_ON_LABEL}", competing this tick.`);
+      } catch (e) {
+        console.warn(`waiting-on heal failed for #${i.number} (still waiting): ${e.message}`);
+      }
+    }
     const matching = open.filter((i) => isActionableForPickup(i, { claimed: claimed.has(i.number), label: opts.label, assignee: opts.assignee }));
     const candidates = sortIssuesForPickup(matching);
     let raced = 0;
@@ -4396,6 +4450,44 @@ ${formatPrecedentSuggestion(precedent)}`;
       updated,
       precedent: surfaced ? { outcome: precedent.outcome, sourceIssue: precedent.precedent.sourceIssue, answer: precedent.precedent.answer } : null
     }, () => console.log(`\uD83D\uDEA7 #${number} escalated${updated ? " (existing \uD83D\uDEA7 comment updated)" : ""} → labelled "${NEEDS_HUMAN_LABEL}"${owner ? `, owner @${owner}` : ""}${surfaced ? ", precedent on file surfaced" : ""}${released ? " and claim released" : " (claim kept — loop skips it this run)"}.`));
+  }));
+  issue.command("wait <number>").description("Park an issue on a dependency: label ⏳ waiting-on + comment. Unlike escalate, no human is needed — issue next skips it while the dependency is open and re-admits it automatically when the dependency merges/closes.").option("--on <ref>", "The blocking issue/PR: #123, 123, owner/repo#123, or a GitHub issue/PR URL").option("--reason <reason>", "One line on why this waits", "").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for ⏳ waiting-on)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+    if (!opts.on?.trim()) {
+      console.error("--on <ref> is required — the dependency this issue waits for (#123, owner/repo#123, or a GitHub URL).");
+      process.exit(1);
+    }
+    const ctx = await loadCtx(program2);
+    const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    const dep = parseDependencyRef(opts.on, repo);
+    if (!dep) {
+      console.error(`Could not parse --on ${JSON.stringify(opts.on)} — use #123, 123, owner/repo#123, or a GitHub issue/PR URL.`);
+      process.exit(1);
+    }
+    if (dep.repo === repo && dep.number === number) {
+      console.error(`#${number} cannot wait on itself.`);
+      process.exit(1);
+    }
+    if (ghIssueOrPrState(dep.repo, dep.number) === "closed") {
+      console.error(`Dependency ${dep.repo}#${dep.number} is already closed — nothing to wait for; work the issue instead.`);
+      process.exit(1);
+    }
+    const reason = (opts.reason ?? "").trim();
+    const depLabel = dep.repo === repo ? `#${dep.number}` : `${dep.repo}#${dep.number}`;
+    const body = [
+      `⏳ **Waiting on ${depLabel}**${reason ? ` — ${reason}` : ""}`,
+      "",
+      "The loop skips this issue while the dependency is open and **re-admits it automatically** once the dependency merges or closes. No human action needed.",
+      "",
+      formatWaitingOnMarker(dep)
+    ].join(`
+`);
+    ghEnsureLabel(repo, WAITING_ON_LABEL, "fbca04", "Blocked by another issue/PR — the ShipFlow loop re-checks automatically");
+    ghIssueAddLabels(repo, number, [WAITING_ON_LABEL]);
+    if (!opts.keepInProgress)
+      ghIssueRemoveLabel(repo, number, IN_PROGRESS_LABEL);
+    ghIssueComment(repo, number, body);
+    const released = await signalBestEffort(ctx, "issues", number, "release-claim", { repo, reason: `waiting on ${dep.repo}#${dep.number}` }, "Parked as waiting, but the release signal failed");
+    emit(opts, { number, waiting: true, label: WAITING_ON_LABEL, on: `${dep.repo}#${dep.number}`, released, reason }, () => console.log(`⏳ #${number} waiting on ${depLabel} — labelled "${WAITING_ON_LABEL}"${released ? ", claim released" : ""}; the loop re-admits it when the dependency closes.`));
   }));
   issue.command("evidence <number>").description("Attach testing evidence. Screenshots must show the fix: --before AND --after pairs, one per changed surface, named with --label (reporter thread + a PR comment, or the issue if no --pr)").option("--before <path...>", "Screenshot(s) BEFORE the fix — before[i] pairs with after[i]").option("--after <path...>", "Screenshot(s) AFTER the fix — one per --before").option("--label <text...>", 'Name for each pair, by position (e.g. --label "Mode row" "Grade ladder") — a multi-surface change attaches one labeled pair per surface').option("--before-caption <text...>", "Caption for each --before shot, by position — describes what THAT shot shows (keeps a summary from over-claiming)").option("--after-caption <text...>", "Caption for each --after shot, by position").option("--image-caption <text...>", "Caption for each supplementary --image/--file, by position").option("--touched <name...>", "Touched feature names — the evidence gallery renders a red gap card for each one without a matching proof pair").option("--image <path...>", "Extra screenshot file(s) — prefer --before/--after").option("--file <path...>", "Supplementary media — a screen recording (mp4/mov/webm) or extra files").option("--pr <n>", "Related PR number — when set, the evidence comment lands on the PR instead of the issue").option("--preview-url <url>", "Testing site URL").option("--caption <text>", "Short note shown with the evidence").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const before = opts.before ?? [];
