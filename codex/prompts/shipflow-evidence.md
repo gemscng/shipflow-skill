@@ -23,6 +23,11 @@ renaiss-shipflow issue evidence <number> [--pr <pr>] \
   directly under that image, so a shot can't be mislabeled by a blanket summary. Pass
   one per screenshot; skip a shot with an empty string. `--caption` stays the optional
   one-line summary. (`--image-caption` captions supplementary `--image`/`--file` items.)
+- **One claim per image**: a caption asserts only what its own image shows — if it
+  needs "and" or lists surfaces/viewports, split into more labeled pairs.
+- **Mark the change without covering it**: before each after-shot, outline the changed
+  element (`outline: 3px solid #ff3b30; outline-offset: 3px` via your browser tool's
+  JS eval) — the outline surrounds the change; never overlay content with boxes/arrows.
 - `--file` is only for supplementary media (a screen recording); `--pr` lands the
   comment on the PR for reviewers. The reporter's chat thread is pinged either way.
 - Capture flow (headed browser, per-surface loop): `references/browser-testing.md` §4.

@@ -74,7 +74,10 @@ $BROWSE fill @e4 "value"
 $BROWSE press Enter
 $BROWSE snapshot -D                          # DIFF — proves what changed, the heart of the check
 $BROWSE console --errors                     # no new console errors introduced
-$BROWSE screenshot "$EV/<surface>-after.png" # the fix working
+# Mark WHERE the change is before the shot — an outline AROUND the element,
+# never an overlay/arrow ACROSS it (outline-offset keeps every pixel visible):
+$BROWSE js 'document.querySelectorAll("<changed-el-selector>").forEach(e=>{e.style.outline="3px solid #ff3b30";e.style.outlineOffset="3px"})'
+$BROWSE screenshot "$EV/<surface>-after.png" # the fix working, change outlined
 ```
 
 - The `snapshot -D` diff is the verification — it shows the DOM actually changed

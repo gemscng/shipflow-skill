@@ -119,6 +119,16 @@ data in your context, not the orchestrator's.
    map you pulled tells you), attach at least one evidence item PER feature,
    each label/caption naming what it demonstrates. The reviewer blocks
    multi-feature PRs whose packet shows fewer proofs than touched features.
+   **One claim per image:** a caption may assert only what its own image shows.
+   If the caption needs "and" — or lists surfaces/viewports — split into more
+   labeled pairs. (Anti-pattern: renaiss-os-index#582, one pair whose caption
+   claimed five changes across four surfaces; no single change was locatable.)
+   **Mark the change, don't cover it:** before each after-shot, outline the
+   changed region — `outline: 3px solid #ff3b30; outline-offset: 3px` on the
+   element (via `$BROWSE js '…'`, recipe in `references/browser-testing.md` §4,
+   or the browser-service `screenshot` `highlight` param). The outline renders
+   OUTSIDE the element, so no pixel of the change is covered; never draw
+   opaque overlays, arrows, or boxes across the content.
 
 If it's truly too risky / ambiguous / unreproducible / unverifiable, do **not**
 open a PR — report `blocked` with the reason (the orchestrator will `issue escalate`).
