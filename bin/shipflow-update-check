@@ -38,8 +38,22 @@ if [ -f "$CACHE" ]; then
 fi
 
 REMOTE="$(curl -fsSL --max-time 5 "$REMOTE_URL" 2>/dev/null | _ver || true)"
+if [ -z "$REMOTE" ]; then
+  # Fallback channel (issue #347): the public marketplace manifest — its
+  # metadata.version tracks the plugin in lockstep. A single dead channel
+  # (repo moved/private, raw CDN hiccup) must not read as "up to date":
+  # that exact failure silently stranded installs on 0.15.2 for days.
+  MARKETPLACE_URL="${SHIPFLOW_MARKETPLACE_URL:-https://renaiss-shipflow.zeabur.app/claude-plugin/marketplace.json}"
+  REMOTE="$(curl -fsSL --max-time 5 "$MARKETPLACE_URL" 2>/dev/null | _ver || true)"
+fi
 : > "$CACHE" # default: up to date (empty)
-[ -z "$REMOTE" ] && exit 0
+if [ -z "$REMOTE" ]; then
+  # BOTH channels failed — an unverifiable state is not "latest". Emit an
+  # explicit marker so callers can react; the session-start hook's
+  # UPGRADE_AVAILABLE* match falls through it harmlessly.
+  printf 'UPDATE_CHECK_UNKNOWN %s\n' "$LOCAL" | tee "$CACHE"
+  exit 0
+fi
 
 # Newer published version? (sort -V puts the higher semver last)
 if [ "$LOCAL" != "$REMOTE" ] && \
