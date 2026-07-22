@@ -121,8 +121,7 @@ data in your context, not the orchestrator's.
    multi-feature PRs whose packet shows fewer proofs than touched features.
    **One claim per image:** a caption may assert only what its own image shows.
    If the caption needs "and" — or lists surfaces/viewports — split into more
-   labeled pairs. (Anti-pattern: renaiss-os-index#582, one pair whose caption
-   claimed five changes across four surfaces; no single change was locatable.)
+   labeled pairs.
    **Mark the change, don't cover it:** before each after-shot, outline the
    changed region — `outline: 3px solid #ff3b30; outline-offset: 3px` on the
    element (via `$BROWSE js '…'`, recipe in `references/browser-testing.md` §4,
