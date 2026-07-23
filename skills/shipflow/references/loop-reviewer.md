@@ -181,24 +181,22 @@ substitute "what the diff seems to intend" for the spec.
    fix. External reviewers post a minute or two *after* the PR opens, so if
    none have appeared yet, don't rush an approval — let the next reconcile tick
    catch them.
-0b. **Claude Security diff scan — mandatory on every code diff.** Run the
-   Claude Security plugin's change scan on the PR branch (the `claude-security`
-   plugin command — ask it to scan this PR's diff; docs:
-   code.claude.com/docs/en/claude-security). Treat every finding in
-   `CLAUDE-SECURITY-RESULTS.md` exactly like an external review thread:
+0b. **Security diff scan — mandatory on every code diff.** The automated layer
+   is the model-invocable `security-review` skill: run it in a scratch
+   worktree checked out on the PR branch so the branch diff is what it
+   reviews. Treat every finding exactly like an external review thread:
    **fix-or-refute each before approve** — a real finding of severity high or
    above is `request_changes`; a refuted one gets its reasoning recorded in
-   your review comment. Mechanics: the scan reads COMMITTED changes only (the
-   worker's branch is already pushed, so scan that), and its
-   `CLAUDE-SECURITY-<timestamp>/` results directory self-gitignores — never
-   commit it into the PR. Prereqs on this machine: the
-   `claude-security@claude-plugins-official` plugin installed
-   (`claude plugin install claude-security@claude-plugins-official`,
-   idempotent), `python3` ≥ 3.9.6, dynamic workflows enabled. **Degrade
-   loudly, never silently:** if the plugin or a prereq is missing, your review
-   MUST say the security scan was skipped and why — and only a docs-only diff
-   may proceed without it; a code diff with no scan is `request_changes`
-   (parked) until the prereq is fixed.
+   your review comment, which always carries a scan-verdict line.
+   The deeper **/claude-security multi-agent change-scan is human-invocation
+   only by its own design** (`disable-model-invocation`) — agents cannot
+   drive it, so never park on its absence. Instead your review comment names
+   the interactive command for the owner (open Claude Code in the PR
+   worktree → `/claude-security` → scan changes vs main) and RECOMMENDS it
+   for high-risk diffs (auth/access surfaces, input parsing, new network or
+   exec paths). **Degrade loudly, never silently:** if even security-review
+   is unavailable, say so in the review — docs-only diffs may proceed, a code
+   diff without any scan is `request_changes` until it can run.
 1. **Deviations first.** The packet's *Deviations from brief* section (extracted
    from the PR body) lists where the worker pivoted off-brief. For each: was the
    conservative option taken, is the reason sound, and does the spec still hold?

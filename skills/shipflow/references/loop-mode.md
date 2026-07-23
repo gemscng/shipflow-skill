@@ -230,7 +230,7 @@ PRs-opened-this-run < `cap`, admit ONE issue — each step a fresh subagent:
    Returns `{pr, verified, regressionTest, healthDelta, blocked}`. Unverified/blocked
    → `issue escalate`, no PR.
 4. **Reviewer — PR review** (mandatory). Dispatch the reviewer on the new PR with
-   the brief. It first runs the MANDATORY **Claude Security diff scan** (loop-reviewer.md §0b — findings fix-or-refuted like bot threads; a skipped scan is stated loudly and parks code diffs), then checks **external reviews** (`renaiss-shipflow pr reviews <n>
+   the brief. It first runs the MANDATORY **security diff scan** (loop-reviewer.md §0b — the `security-review` skill on the PR branch, findings fix-or-refuted like bot threads; the deeper /claude-security scan stays a human-run recommendation; a skipped scan is stated loudly and parks code diffs), then checks **external reviews** (`renaiss-shipflow pr reviews <n>
    --json` — unresolved threads incl. bot reviewers), then pulls `features --json` +
    the diff for a **whole-system review** (cross-feature impact, regressions, meets
    the brief), posts the review, and verdicts:

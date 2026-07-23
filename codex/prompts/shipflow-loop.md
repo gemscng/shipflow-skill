@@ -73,7 +73,7 @@ subagent):
    --after <after.png>` (screenshot evidence must be a before+after pair). Returns
    `{pr, verified, blocked}`. Unverified/blocked → `issue escalate`, no PR.
 4. **Reviewer — PR review** (mandatory): dispatch the reviewer on the new PR; it
-   runs the MANDATORY Claude Security diff scan (loop-reviewer.md §0b — findings fix-or-refuted like bot threads; skipped-scan only for docs-only diffs, stated loudly), checks external reviews (`renaiss-shipflow pr reviews <pr> --json` — unresolved
+   runs the MANDATORY security diff scan (security-review skill; /claude-security stays a human-run recommendation) (loop-reviewer.md §0b — findings fix-or-refuted like bot threads; skipped-scan only for docs-only diffs, stated loudly), checks external reviews (`renaiss-shipflow pr reviews <pr> --json` — unresolved
    threads incl. bots like gemini-code-assist), pulls `features --json` + the diff
    for a whole-system review, posts it, then **approve** (only with no unresolved
    threads, brief met, CI green) → `renaiss-shipflow pr approve <pr> --comment "…"`
