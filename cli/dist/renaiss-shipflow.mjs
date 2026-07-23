@@ -3932,7 +3932,7 @@ function registerVersionCommand(program2, cliVersion) {
       server = { error: e instanceof Error ? e.message : String(e) };
     }
     emit(opts, { cli, plugin, server: { url: apiUrl, ...server } }, () => {
-      const serverCell = server.error ? `unreachable (${server.error})` : `${(server.revision || "unknown").slice(0, 12)}${server.dirty ? "+dirty" : ""}${server.buildTime ? ` · built ${server.buildTime}` : ""}`;
+      const serverCell = server.error ? `unreachable (${server.error})` : `${server.version ? `${server.version} · ` : ""}${(server.revision || "unknown").slice(0, 12)}${server.dirty ? "+dirty" : ""}${server.buildTime ? ` · built ${server.buildTime}` : ""}`;
       for (const line of renderTable(["Component", "Version"], [
         ["cli", cli],
         ["plugin/skill", plugin ?? "not installed"],
