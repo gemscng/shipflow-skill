@@ -181,6 +181,24 @@ substitute "what the diff seems to intend" for the spec.
    fix. External reviewers post a minute or two *after* the PR opens, so if
    none have appeared yet, don't rush an approval — let the next reconcile tick
    catch them.
+0b. **Claude Security diff scan — mandatory on every code diff.** Run the
+   Claude Security plugin's change scan on the PR branch (the `claude-security`
+   plugin command — ask it to scan this PR's diff; docs:
+   code.claude.com/docs/en/claude-security). Treat every finding in
+   `CLAUDE-SECURITY-RESULTS.md` exactly like an external review thread:
+   **fix-or-refute each before approve** — a real finding of severity high or
+   above is `request_changes`; a refuted one gets its reasoning recorded in
+   your review comment. Mechanics: the scan reads COMMITTED changes only (the
+   worker's branch is already pushed, so scan that), and its
+   `CLAUDE-SECURITY-<timestamp>/` results directory self-gitignores — never
+   commit it into the PR. Prereqs on this machine: the
+   `claude-security@claude-plugins-official` plugin installed
+   (`claude plugin install claude-security@claude-plugins-official`,
+   idempotent), `python3` ≥ 3.9.6, dynamic workflows enabled. **Degrade
+   loudly, never silently:** if the plugin or a prereq is missing, your review
+   MUST say the security scan was skipped and why — and only a docs-only diff
+   may proceed without it; a code diff with no scan is `request_changes`
+   (parked) until the prereq is fixed.
 1. **Deviations first.** The packet's *Deviations from brief* section (extracted
    from the PR body) lists where the worker pivoted off-brief. For each: was the
    conservative option taken, is the reason sound, and does the spec still hold?
