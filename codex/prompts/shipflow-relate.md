@@ -15,7 +15,10 @@ issue, and otherwise open one:
 3. If none covers it → read `renaiss-shipflow config get auto-issue --json`:
    - `true` → auto-create with `renaiss-shipflow issue create --title "…" --body "…"`, report it, continue.
    - `false` → ask the user first; create only on a yes.
-4. Reference the issue in the PR (`Fixes #N`).
+4. Reference the issue in the PR: `Fixes #N` (or `Closes #N`) when the PR fully
+   resolves it; `Part of #N` — no closing keyword — for a partial slice, so
+   merging leaves the parent open for the rest (same rule as /shipflow-pr;
+   `renaiss-shipflow pr create --partial` emits the Part-of form).
 
 Enable auto mode with `renaiss-shipflow config set auto-issue true`.
 

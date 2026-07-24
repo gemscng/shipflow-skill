@@ -68,8 +68,9 @@ subagent):
    --json`, validates + maps the issue to features, returns an acceptance brief.
    Reject (invalid/dup/needs-human) → `issue escalate` + next.
 3. **Worker — fix**: dispatch the worker with issue + triage + brief → branch, fix,
-   tests + **E2E browser** with before/after screenshots, `pr create --json` (links
-   the issue via `Closes #N`), `issue evidence <n> --pr <pr> --before <before.png>
+   tests + **E2E browser** with before/after screenshots, `pr create --json` (link
+   the issue: `Closes #N` for a full fix; `--partial` → `Part of #N` for a slice —
+   per shipflow-pr.md's PR-body contract), `issue evidence <n> --pr <pr> --before <before.png>
    --after <after.png>` (screenshot evidence must be a before+after pair). Returns
    `{pr, verified, blocked}`. Unverified/blocked → `issue escalate`, no PR.
 4. **Reviewer — PR review** (mandatory): dispatch the reviewer on the new PR; it

@@ -5815,7 +5815,7 @@ function unresolvedThreadsOrBlock(repo, number) {
 }
 function registerPRCommand(program2) {
   const pr = program2.command("pr").description("Pull request actions");
-  pr.command("create").description("Open a PR; prepends ShipFlow context to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--title <title>", "PR title").option("--body <body>", "PR body (added under ShipFlow header)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR)", "warn").option("--json", "Output JSON").action(runAction(async (opts) => {
+  pr.command("create").description("Open a PR; prepends ShipFlow context to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (added under ShipFlow header)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR)", "warn").option("--json", "Output JSON").action(runAction(async (opts) => {
     const ctx = await loadCtx(program2);
     const branch = currentBranch();
     if (!opts.allowSuspiciousEmail) {
@@ -5843,8 +5843,9 @@ function registerPRCommand(program2) {
         console.warn(`⚠️  body lint: ${p}`);
     }
     const issueNumber = opts.issue ? parseInt(opts.issue, 10) : detectIssueFromBranch(branch);
+    const linkMode = opts.partial ? "part-of" : "closes";
     const issueUrl = issueNumber ? `https://github.com/${ctx.project.repoFullName}/issues/${issueNumber}` : undefined;
-    const header = buildShipFlowHeader(ctx.project.projectName, issueNumber, issueUrl);
+    const header = buildShipFlowHeader(ctx.project.projectName, issueNumber, issueUrl, linkMode);
     const body = `${header}
 
 ${opts.body ?? ""}`;
@@ -6131,10 +6132,12 @@ function detectIssueFromBranch(branch) {
   const m = branch.match(/^(?:issue|fix|feat)\/(\d+)/);
   return m ? parseInt(m[1], 10) : undefined;
 }
-function buildShipFlowHeader(project, issueNumber, issueUrl) {
+function buildShipFlowHeader(project, issueNumber, issueUrl, linkMode = "closes") {
   const lines = ["## ShipFlow context", `- Project: ${project}`];
-  if (issueNumber)
-    lines.push(issueUrl ? `- Closes #${issueNumber} — ${issueUrl}` : `- Closes #${issueNumber}`);
+  if (issueNumber) {
+    const ref = linkMode === "part-of" ? `Part of #${issueNumber}` : `Closes #${issueNumber}`;
+    lines.push(issueUrl ? `- ${ref} — ${issueUrl}` : `- ${ref}`);
+  }
   return lines.join(`
 `);
 }

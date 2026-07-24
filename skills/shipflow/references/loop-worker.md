@@ -65,11 +65,13 @@ data in your context, not the orchestrator's.
    #196) rejects a prose-shaped body (≥3 parallel facts but no
    table/checklist/bullets) with exit 2 and creates nothing — restructure the
    body per the Message style contract and re-run; never drop the flag to
-   sneak a body through. **Full fix** → body
-   `Closes #N` — a reference (not a copy) that closes the issue on merge. **Partial
-   slice** (the brief covered only part of the issue) → body `Part of #N` — a plain
-   reference, **no** closing keyword — so merging your slice leaves the parent open for
-   the deferred follow-ups.
+   sneak a body through. **Full fix** → the injected header links
+   `Closes #N` — a reference (not a copy) that closes the issue on merge (the
+   default). **Partial slice** (the brief covered only part of the issue) → pass
+   **`--partial`**: the header then links `Part of #N` — a plain reference, **no**
+   closing keyword — so merging your slice leaves the parent open for the deferred
+   follow-ups. Don't hand-write `Part of #N` in `--body` to override the header —
+   the header still injects its own link; `--partial` is what switches it.
 5b. **Deviations from brief — log them, don't bury them.** An edge case that
    forces an off-brief pivot: pick the conservative option, add it under a
    `### Deviations from brief` section in the PR body — a table the reviewer
@@ -147,8 +149,9 @@ wall) — this, not a stop-hook, is what makes the result trustworthy:
       noted why it was skipped: pure-CSS / no test framework).
 - [ ] The change stayed inside the feature's paths (or you flagged a neighbour touch),
       and **no neighbour page's health score dropped**.
-- [ ] PR opened linking the issue — `Closes #N` for a full fix, `Part of #N` for a
-      partial slice (no closing keyword) — and evidence (with health delta) attached.
+- [ ] PR opened linking the issue — default `Closes #N` for a full fix; pass
+      `--partial` to `pr create` for a slice, which links `Part of #N` (no closing
+      keyword) — and evidence (with health delta) attached.
 - [ ] You only set `blocked: true` after honestly trying to reproduce, start the dev
       server, seed a test DB, and read git history — never on first friction.
 
