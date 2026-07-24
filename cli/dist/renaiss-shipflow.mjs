@@ -3634,8 +3634,38 @@ function ghResolveReviewThread(threadId) {
 }
 
 // src/commands/login.ts
+function formatNoTenantHelp(body) {
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (payload?.error?.code !== "NO_TENANT")
+    return null;
+  const appSlug = payload.appSlug || "renaissshipflow";
+  const installUrl = `https://github.com/apps/${appSlug}/installations/new`;
+  const orgs = Array.isArray(payload.orgs) ? payload.orgs : [];
+  const lines = [
+    "No ShipFlow organization is set up for your GitHub account yet.",
+    "",
+    "ShipFlow runs on a GitHub App you install on an org you belong to. Install it here:",
+    `  ${installUrl}`
+  ];
+  if (orgs.length > 0) {
+    lines.push("", "Your GitHub orgs:");
+    for (const o of orgs) {
+      lines.push(o.installed ? `  ✓ ${o.login} — app installed (retry \`renaiss-shipflow login\` in a moment)` : `  ✗ ${o.login} — app not installed`);
+    }
+  } else {
+    lines.push("", "No organizations were found on your GitHub account — install the app on one to get started.");
+  }
+  lines.push("", "Once the app is installed, run `renaiss-shipflow login` again.");
+  return lines.join(`
+`);
+}
 function registerLoginCommand(program2) {
-  program2.command("login").description("Sign in to ShipFlow (uses gh auth)").option("--no-gh-bootstrap", "Don't auto-run `gh auth login` if gh isn't logged in").action(async (opts) => {
+  program2.command("login").description("Sign in to ShipFlow (uses gh auth)").option("--no-gh-bootstrap", "Don't auto-run `gh auth login` if gh isn't logged in").action(runAction(async (opts) => {
     if (!ghInstalled()) {
       console.error("gh (GitHub CLI) is not installed. See https://cli.github.com/");
       process.exit(1);
@@ -3657,7 +3687,19 @@ function registerLoginCommand(program2) {
     }
     const apiUrl = resolveApiUrl(program2.opts().apiUrl);
     const client = new ShipFlowClient({ baseUrl: apiUrl });
-    const result = await client.exchangeGhToken(ghToken);
+    let result;
+    try {
+      result = await client.exchangeGhToken(ghToken);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        const help = formatNoTenantHelp(err.body);
+        if (help) {
+          console.error(help);
+          process.exit(1);
+        }
+      }
+      throw err;
+    }
     let chosen = result.tenants[0];
     if (result.tenants.length > 1) {
       const idx = await promptSelect("You belong to multiple ShipFlow tenants. Pick one:", result.tenants.map((t) => `${t.tenant.displayName} (${t.tenant.githubOrg})`));
@@ -3691,7 +3733,7 @@ Git identity captured: ${cfg.gitName} <${cfg.gitEmail}> — apply per-repo with 
       console.log(`Tip: you belong to multiple tenants — keep them side by side with profiles, e.g.
 ` + `  renaiss-shipflow --profile ${chosen.tenant.githubOrg} login`);
     }
-  });
+  }));
 }
 
 // src/commands/git-identity.ts
