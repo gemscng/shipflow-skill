@@ -136,9 +136,12 @@ open a PR — report `blocked` with the reason (the orchestrator will `issue esc
 
 ## What a reconcile worker does (one PR)
 Scoped to a single PR + the reason(s) from `inbox`: fix failing CI, or address
-review comments (`references/pr-feedback.md`) and reply, or `renaiss-shipflow pr
-sync <n>` to rebase a moved base. Pull `features --json` when a fix risks touching
-more than the PR's own feature (so you don't regress a neighbour). Push when done.
+review comments (`references/pr-feedback.md`) and reply, or rebase a moved base —
+`renaiss-shipflow pr sync <n>`, and when it conflicts, resolve agentically via
+`--keep-conflicts` + `references/conflict-resolution.md` (resolve by intent, test,
+force-with-lease, comment) instead of escalating. Pull `features --json` when a
+fix risks touching more than the PR's own feature (so you don't regress a
+neighbour). Push when done.
 
 ## Before you return — self-verify
 Your completion contract. Don't return until each holds (or you've genuinely hit a

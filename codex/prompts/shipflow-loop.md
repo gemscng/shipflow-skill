@@ -41,8 +41,23 @@ open PR into a `state`. Act, then re-run A until nothing `needsAttention`:
   it always parks, which is correct). On merge it auto-cleans the branch — remote
   via gh `--delete-branch`, local via a force-prune (detaches HEAD if the loop
   worktree is sitting on it) — so no stale `fix/issue-*` branches pile up.
-- conflict reported → `renaiss-shipflow pr sync <n>` on its branch (rebase); exit 6
-  (unresolved) → escalate.
+- `conflict` → a **worker** resolves it agentically on its branch:
+  `renaiss-shipflow pr sync <n> --keep-conflicts` (exit 6 leaves the rebase
+  mid-flight + lists conflicted files), then the
+  `references/conflict-resolution.md` protocol — resolve by intent, stage only
+  resolved paths (never `git add -A`), `renaiss-shipflow pr conflict-check`
+  (exit 8 = markers/unmerged remain) before each `git rebase --continue`, run
+  the tests, force-with-lease push, comment the resolution on the PR (reviewer
+  gate re-runs). Escalate only on that doc's criteria (incompatible intent,
+  tests stay red past `max-fix-attempts`, or the resolution would discard
+  someone else's pushed work).
+  - **Own PRs by default.** The repo-wide sweep over OTHER authors' conflicted
+    PRs is **opt-in** — `config set conflict-sweep true` — because resolving one
+    means running that branch's code with the operator's credentials. When it is
+    on, the inbox appends only **trusted** heads (`foreign: true`, same-repo,
+    author `OWNER`/`MEMBER`/`COLLABORATOR`, never drafts). Rows marked
+    `humanOnly: true` / `trustedHead: false` (fork or untrusted author) come with
+    `needsAttention: false` — **report them, never check them out.**
 - `stale` → nudge once / escalate if blocked. `ci_pending` / `awaiting_review` →
   park, no action.
 - in-progress issue with a `newComment` → read (`gh issue view <n> --comments`) + act.

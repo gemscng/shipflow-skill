@@ -141,8 +141,17 @@ that one PR and collect its return. Loop A until nothing in-flight `needsAttenti
   with the two remedies as the recommendation (add a workflow that runs on PRs ·
   `config set require-ci false`), then move on. Never leave a PR spinning on a
   blocker that has no path to clearing.
-- conflict → worker runs `renaiss-shipflow pr sync <n>` on the branch (exit 6 =
-  unresolved → escalate).
+- `conflict` → worker resolves it agentically: `renaiss-shipflow pr sync <n>
+  --keep-conflicts` (exit 6 = rebase left mid-flight + conflicted-file list),
+  then `references/conflict-resolution.md` — resolve by intent, stage only
+  resolved paths, `pr conflict-check` (exit 8) before each `rebase --continue`,
+  TEST before any push, force-with-lease, comment the resolution on the PR; the
+  reviewer gate re-runs. Escalate only per that doc's criteria, never on the
+  mere existence of a conflict. Scope is the loop's OWN PRs unless the
+  **opt-in** repo-wide sweep is enabled (`config set conflict-sweep true`,
+  default off) — and even then only **trusted** heads (same-repo,
+  `OWNER`/`MEMBER`/`COLLABORATOR`, no drafts) are actionable; `humanOnly: true`
+  rows are for a human to look at, never for the loop to check out.
 - `stale` → nudge once / escalate if blocked. `ci_pending` / `awaiting_review` →
   **parked, no action** (re-checked next tick; don't busy-wait).
 

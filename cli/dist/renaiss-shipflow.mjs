@@ -2548,6 +2548,12 @@ function resolveRequireReview() {
   const c = loadConfig().requireReview;
   return c === undefined ? true : c;
 }
+function resolveConflictSweep() {
+  const env = process.env.SHIPFLOW_CONFLICT_SWEEP;
+  if (env != null && env !== "")
+    return parseBool(env);
+  return loadConfig().conflictSweep === true;
+}
 function resolveSignoffOwner() {
   const env = process.env.SHIPFLOW_SIGNOFF_OWNER;
   const raw = env != null && env.trim() !== "" ? env : loadConfig().signoffOwner ?? "";
@@ -3509,10 +3515,30 @@ function ghPRMerge(repo, number, mode = "squash", deleteBranch = true) {
   const parsed = JSON.parse(view);
   return { mergedSha: parsed.mergeCommit?.oid ?? "", headBranch: parsed.headRefName ?? "" };
 }
-var PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt";
+var PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner";
 function ghPRListMine(repo, limit = 30) {
   const out = _exec(`gh pr list --repo ${shellQuote(repo)} --author @me --state open --limit ${limit} --json ${PR_FIELDS}`).toString();
   return JSON.parse(out);
+}
+function ghPRAuthorAssociations(repo, limit = 50) {
+  const [owner, name] = repo.split("/");
+  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){" + "pullRequests(states:OPEN,first:$n){nodes{number authorAssociation}}}}";
+  const out = _exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${limit}`).toString();
+  const nodes = JSON.parse(out)?.data?.repository?.pullRequests?.nodes ?? [];
+  return new Map(nodes.filter((n) => typeof n.number === "number").map((n) => [n.number, String(n.authorAssociation ?? "")]));
+}
+function ghPRListAll(repo, limit = 50) {
+  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --state open --limit ${limit} --json ${PR_FIELDS}`).toString();
+  const prs = JSON.parse(out);
+  let assoc;
+  try {
+    assoc = ghPRAuthorAssociations(repo, limit);
+  } catch (e) {
+    console.error(`⚠️  authorAssociation lookup failed (${String(e.message ?? e).split(`
+`)[0]}) — ` + `every foreign head reports as association-unknown and stays untrusted this tick.`);
+    return prs.map((p) => ({ ...p, associationLookupFailed: true }));
+  }
+  return prs.map((p) => ({ ...p, authorAssociation: assoc.get(p.number) }));
 }
 function ghUser() {
   const out = _exec("gh api user").toString();
@@ -4736,7 +4762,11 @@ function classifyPR(pr, me, opts = {}) {
   const ageHours = hoursSince(pr.updatedAt, opts.nowMs);
   const staleHours = opts.staleHours ?? 48;
   let state;
-  if (ciState === "failing")
+  if ((pr.mergeable ?? "").toUpperCase() === "CONFLICTING") {
+    state = "conflict";
+    if (!reasons.includes("merge_conflict"))
+      reasons = [...reasons, "merge_conflict"];
+  } else if (ciState === "failing")
     state = "ci_failing";
   else if (pr.reviewDecision === "CHANGES_REQUESTED")
     state = "changes_requested";
@@ -4796,6 +4826,25 @@ function mergeDecision(pr, me, opts) {
     blockers.push(INTENT_BLOCKER);
   return { policy: opts.policy, wouldMerge: blockers.length === 0, blockers, ...unsatisfiable ? { unsatisfiable: true } : {} };
 }
+var TRUSTED_AUTHOR_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+function headTrust(pr) {
+  if (pr.isCrossRepository !== false)
+    return "fork-head";
+  if (pr.associationLookupFailed)
+    return "association-unknown";
+  if (!TRUSTED_AUTHOR_ASSOCIATIONS.has((pr.authorAssociation ?? "").trim().toUpperCase()))
+    return "untrusted-author";
+  return null;
+}
+function foreignConflictedPRs(mine, all, me, opts = {}) {
+  if (opts.enabled !== true)
+    return [];
+  const mineNums = new Set(mine.map((p) => p.number));
+  return all.filter((p) => !mineNums.has(p.number) && !p.isDraft && (p.mergeable ?? "").toUpperCase() === "CONFLICTING" && (p.author?.login ?? "") !== me).map((pr) => {
+    const distrust = headTrust(pr);
+    return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
+  });
+}
 
 // src/commands/inbox.ts
 function safeUnresolvedThreadCount(fetchThreads) {
@@ -4805,13 +4854,42 @@ function safeUnresolvedThreadCount(fetchThreads) {
     return { count: 0, degraded: true };
   }
 }
+function foreignPrRow(entry, cl) {
+  const { pr, trusted, distrust } = entry;
+  return {
+    number: pr.number,
+    title: pr.title,
+    branch: pr.headRefName,
+    base: pr.baseRefName ?? "",
+    url: pr.url,
+    draft: pr.isDraft,
+    reviewDecision: pr.reviewDecision || "none",
+    unresolvedThreads: 0,
+    closesIssues: (pr.closingIssuesReferences ?? []).map((i) => i.number),
+    state: cl.state,
+    ciState: cl.ciState,
+    approved: cl.approved,
+    ageHours: Math.round(cl.ageHours),
+    needsAttention: trusted && cl.needsAction,
+    reasons: trusted ? cl.reasons : [...cl.reasons, `untrusted_head:${distrust}`],
+    foreign: true,
+    author: pr.author?.login ?? "",
+    trustedHead: trusted,
+    ...trusted ? {} : { distrust, humanOnly: true }
+  };
+}
+function actionableConflicts(prs) {
+  return prs.filter((p) => p.state === "conflict" && !p.humanOnly).length;
+}
 function registerInboxCommand(program2) {
-  program2.command("inbox").description("Reconciler view: open PRs (by state: ci_failing / changes_requested / approved_ready / stale …) and in-progress issues with new comments").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (opts) => {
+  program2.command("inbox").description("Reconciler view: open PRs (by state: conflict / ci_failing / changes_requested / approved_ready / stale …) and in-progress issues with new comments. With the OPT-IN repo-wide conflict sweep (`config set conflict-sweep true`, or --conflict-sweep) it also lists conflicted PRs by other authors — trusted same-repo heads only (issue #393)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Force the repo-wide foreign-PR conflict sweep on for this run (default: the `conflict-sweep` config key, which is off)").option("--json", "Output JSON").action(runAction(async (opts) => {
     const { project } = await loadCtx(program2);
     const repo = opts.repo ?? project.repoFullName;
     const me = ghCurrentLogin();
     const staleHours = resolveStalePrHours();
-    const prs = ghPRListMine(repo).map((pr) => {
+    const sweepEnabled = opts.conflictSweep === true || resolveConflictSweep();
+    const minePrs = ghPRListMine(repo);
+    const prs = minePrs.map((pr) => {
       const { count: unresolvedThreads, degraded: degraded2 } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
       const cl = classifyPR(pr, me, { staleHours, unresolvedThreads });
       return {
@@ -4843,6 +4921,14 @@ function registerInboxCommand(program2) {
         needsAttention: !!reply
       };
     });
+    if (sweepEnabled) {
+      try {
+        for (const entry of foreignConflictedPRs(minePrs, ghPRListAll(repo), me, { enabled: true })) {
+          const cl = classifyPR(entry.pr, me, { staleHours });
+          prs.push(foreignPrRow(entry, cl));
+        }
+      } catch {}
+    }
     const count = (s) => prs.filter((p) => p.state === s).length;
     const degraded = prs.filter((p) => ("degraded" in p) && p.degraded).length;
     const summary = {
@@ -4851,16 +4937,23 @@ function registerInboxCommand(program2) {
       readyToMerge: count("approved_ready"),
       ciFailing: count("ci_failing"),
       changesRequested: count("changes_requested"),
+      conflicts: actionableConflicts(prs),
       stale: count("stale"),
       parked: prs.filter((p) => p.state === "awaiting_review" || p.state === "ci_pending").length,
-      degraded
+      degraded,
+      conflictSweep: sweepEnabled,
+      humanOnlyConflicts: prs.filter((p) => ("humanOnly" in p) && p.humanOnly).length
     };
     emit(opts, { repo, prs, issues, summary }, () => {
       console.log(`\uD83D\uDCE5 Inbox for ${repo}`);
       console.log(`Needs action: ${meter(summary.prsNeedingAttention, prs.length)} PRs · ${meter(summary.issuesNeedingAttention, issues.length)} issues · ✅ ${summary.readyToMerge} ready to merge`);
       if (degraded)
         console.log(`⚠️  ${degraded} PR(s) with partial review-thread data (fetch blipped) — marked "degraded".`);
+      if (summary.humanOnlyConflicts) {
+        console.log(`\uD83D\uDD12 ${summary.humanOnlyConflicts} conflicted PR(s) on an untrusted head (fork / non-collaborator) — reported only, never checked out by the loop.`);
+      }
       const icon = {
+        conflict: "\uD83D\uDD00",
         ci_failing: "\uD83D\uDD34",
         changes_requested: "✏️",
         review_comments: "\uD83D\uDCAC",
@@ -4876,7 +4969,7 @@ function registerInboxCommand(program2) {
           p.state,
           `ci:${p.ciState}`,
           `${p.ageHours}h`,
-          p.title + ("degraded" in p && p.degraded ? " ⚠️ degraded" : "")
+          p.title + ("degraded" in p && p.degraded ? " ⚠️ degraded" : "") + ("humanOnly" in p && p.humanOnly ? ` \uD83D\uDD12 ${p.distrust} — human only` : "")
         ]);
         for (const l of renderTable(["PR", "State", "CI", "Age", "Title"], rows))
           console.log(`  ${l}`);
@@ -5097,6 +5190,12 @@ var SETTINGS = [
     effective: resolveSignoffOwner
   },
   {
+    key: "conflict-sweep",
+    field: "conflictSweep",
+    set: (v, c) => String(c.conflictSweep = parseBool(v)),
+    effective: resolveConflictSweep
+  },
+  {
     key: "loop-worker-model",
     field: "loopWorkerModel",
     set: (v, c) => c.loopWorkerModel = v.trim(),
@@ -5234,7 +5333,8 @@ function registerCapabilityCommand(program2) {
 
 // src/commands/pr.ts
 import { execSync as execSync4 } from "node:child_process";
-import { readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync5 } from "node:fs";
+import { join as join4 } from "node:path";
 import { hostname as hostname3 } from "node:os";
 
 // src/review-contract-data.ts
@@ -5943,7 +6043,7 @@ ${opts.body ?? ""}`;
     }
     emit(opts, { number, merged: true, mergedSha: result.mergedSha, policy, closedIssues: closed }, () => console.log(`✅ Merged PR #${number} (${result.mergedSha}) under policy=${policy}${closed.length ? ` — closes #${closed.join(", #")}` : ""}.`));
   }));
-  pr.command("sync <number>").description("Rebase the PR's branch onto its (moved) base; aborts cleanly on conflict so the loop can escalate. Run on the PR's checked-out branch.").option("--repo <fullname>", "Override target repo").option("--no-push", "Don't force-with-lease push after a clean rebase").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("sync <number>").description("Rebase the PR's branch onto its (moved) base; aborts cleanly on conflict (or leaves it in progress with --keep-conflicts) so the loop can resolve or escalate. Run on the PR's checked-out branch.").option("--repo <fullname>", "Override target repo").option("--no-push", "Don't force-with-lease push after a clean rebase").option("--keep-conflicts", "On conflict, leave the rebase in progress and list the conflicted files instead of aborting — the agentic-resolution entry point (issue #393)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const prView = ghPRView(repo, number);
@@ -5953,9 +6053,14 @@ ${opts.body ?? ""}`;
       console.error(`PR #${number} has no base branch.`);
       process.exit(1);
     }
-    const cur = execSync4("git rev-parse --abbrev-ref HEAD").toString().trim();
-    if (cur !== head) {
-      console.error(`On branch "${cur}" but PR #${number} is "${head}". Check it out first: git checkout ${head}`);
+    const guard = syncEntryGuard({
+      rebase: rebaseInProgress(),
+      currentBranch: execSync4("git rev-parse --abbrev-ref HEAD").toString().trim(),
+      head,
+      number
+    });
+    if (!guard.ok) {
+      console.error(guard.message);
       process.exit(1);
     }
     try {
@@ -5967,14 +6072,46 @@ ${opts.body ?? ""}`;
     try {
       execSync4(`git rebase ${shellQuote(`origin/${base}`)}`, { stdio: "pipe" });
     } catch {
-      try {
-        execSync4("git rebase --abort", { stdio: "ignore" });
-      } catch {}
       conflicted = true;
+      if (!opts.keepConflicts) {
+        try {
+          execSync4("git rebase --abort", { stdio: "ignore" });
+        } catch {}
+      }
     }
     if (conflicted) {
-      emit(opts, { number, rebased: false, conflict: true, base }, () => console.log(`\uD83D\uDD00 PR #${number}: rebase onto ${base} conflicts — aborted. Resolve manually or escalate.`));
+      if (opts.keepConflicts) {
+        const conflictedFiles = gitPaths("git diff --name-only --diff-filter=U").paths;
+        emit(opts, { number, rebased: false, conflict: true, base, keptInProgress: true, conflictedFiles }, () => {
+          console.log(`\uD83D\uDD00 PR #${number}: rebase onto ${base} conflicts — left IN PROGRESS for resolution.`);
+          for (const f of conflictedFiles)
+            console.log(`  [U] ${f}`);
+          for (const l of RESOLUTION_RECIPE)
+            console.log(l);
+        });
+      } else {
+        emit(opts, { number, rebased: false, conflict: true, base }, () => console.log(`\uD83D\uDD00 PR #${number}: rebase onto ${base} conflicts — aborted. Resolve manually or escalate.`));
+      }
       process.exit(6);
+    }
+    const changed = changedPaths(`origin/${base}`);
+    if (!changed.ok) {
+      emit(opts, { number, rebased: true, conflict: false, base, pushed: false, enumerationFailed: [changed.cmd] }, () => {
+        console.error(`⛔ PR #${number}: could not enumerate the files changed against ${base} — refusing to push.`);
+        console.error(`  failed: ${changed.cmd}`);
+        console.error(`The marker gate cannot certify a tree it could not read. Re-check with: renaiss-shipflow pr conflict-check`);
+      });
+      process.exit(8);
+    }
+    const markers = scanConflictMarkers(changed.paths);
+    if (markers.length) {
+      emit(opts, { number, rebased: true, conflict: false, base, pushed: false, conflictMarkers: markers }, () => {
+        console.error(`⛔ PR #${number}: rebase onto ${base} succeeded but ${markers.length} conflict marker(s) remain — refusing to push.`);
+        for (const h of markers.slice(0, 20))
+          console.error(`  ${h.path}:${h.line}: ${h.text.slice(0, 60)}`);
+        console.error(`Remove the markers, re-run the tests, then push. Re-check with: renaiss-shipflow pr conflict-check`);
+      });
+      process.exit(8);
     }
     let pushed = false;
     if (opts.push !== false) {
@@ -5986,6 +6123,36 @@ ${opts.body ?? ""}`;
       pushed = true;
     }
     emit(opts, { number, rebased: true, conflict: false, base, pushed }, () => console.log(`\uD83D\uDD00 PR #${number}: rebased "${head}" onto ${base}${pushed ? " and pushed" : ""}.`));
+  }));
+  pr.command("conflict-check").description("Fail if the working tree still has unmerged paths or leftover conflict markers — the gate to run BEFORE `git rebase --continue` and before any force-with-lease push (exit 8 = not clean). Local only, no network.").option("--base <ref>", "Also scan every file this branch changed against <ref> (e.g. origin/main), not just what's currently modified").option("--json", "Output JSON").action(runAction(async (opts) => {
+    const sources = [
+      gitPaths("git diff --name-only --diff-filter=U"),
+      gitPaths("git diff --name-only HEAD"),
+      ...opts.base ? [gitPaths(`git diff --name-only ${shellQuote(opts.base)}...HEAD`)] : []
+    ];
+    const enumerationFailed = sources.filter((s) => !s.ok).map((s) => s.cmd);
+    const unmerged = sources[0].paths;
+    const paths = Array.from(new Set(sources.flatMap((s) => s.paths)));
+    const markers = scanConflictMarkers(paths);
+    const rebase = rebaseInProgress();
+    const clean = enumerationFailed.length === 0 && unmerged.length === 0 && markers.length === 0;
+    emit(opts, { clean, unmerged, conflictMarkers: markers, rebaseInProgress: rebase, scanned: paths.length, enumerationFailed }, () => {
+      if (clean) {
+        console.log(`✅ No unmerged paths, no conflict markers (${paths.length} file(s) scanned)${rebase ? ` — rebase still in progress, safe to \`git rebase --continue\`` : ""}.`);
+        return;
+      }
+      console.error(`⛔ Not clean — do NOT continue the rebase or push.`);
+      for (const c of enumerationFailed)
+        console.error(`  [E] could not enumerate paths: ${c} — the gate cannot certify a tree it could not read`);
+      for (const f of unmerged)
+        console.error(`  [U] ${f} — still unmerged; resolve it, then: git add -- ${f}`);
+      for (const h of markers.slice(0, 20))
+        console.error(`  [M] ${h.path}:${h.line}: ${h.text.slice(0, 60)}`);
+      if (markers.length > 20)
+        console.error(`  … ${markers.length - 20} more marker line(s)`);
+    });
+    if (!clean)
+      process.exit(8);
   }));
   pr.command("packet <number>").description("Emit the pre-baked review packet for a PR: spec/brief, description, CI, unresolved threads, evidence, and a noise-filtered budgeted diff — everything the loop reviewer needs in one call").option("--repo <fullname>", "Override target repo").option("--json", "Emit the packet as a structured object instead of markdown").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
@@ -6141,10 +6308,101 @@ function buildShipFlowHeader(project, issueNumber, issueUrl, linkMode = "closes"
   return lines.join(`
 `);
 }
+var RESOLUTION_RECIPE = [
+  "Resolve each file, then stage ONLY the paths you resolved: git add -- <file>…",
+  "  (never `git add -A` here — it clears the UNMERGED state that stops git committing conflict markers)",
+  "Gate before continuing: renaiss-shipflow pr conflict-check   # exit 8 = markers/unmerged remain",
+  "Then: git rebase --continue (repeat per commit), run the FULL test suite, gate again, and push --force-with-lease."
+];
+var CONFLICT_MARKER_PATTERN = "^(<{7}|\\|{7}|={7}|>{7})( |$)";
+var MARKER_START = /^<{7}( |$)/;
+var MARKER_END = /^>{7}( |$)/;
+function parseConflictMarkerGrep(out) {
+  const byPath = new Map;
+  const fields = out.split("\x00");
+  let path = fields[0] ?? "";
+  for (let i = 1;i + 1 < fields.length; i += 2) {
+    const line = parseInt(fields[i], 10);
+    const rest = fields[i + 1];
+    const nl = rest.indexOf(`
+`);
+    const text = nl === -1 ? rest : rest.slice(0, nl);
+    if (Number.isFinite(line)) {
+      const list = byPath.get(path) ?? [];
+      list.push({ path, line, text });
+      byPath.set(path, list);
+    }
+    path = nl === -1 ? "" : rest.slice(nl + 1);
+  }
+  const hits = [];
+  for (const list of byPath.values()) {
+    const hasStart = list.some((h) => MARKER_START.test(h.text));
+    const hasEnd = list.some((h) => MARKER_END.test(h.text));
+    if (hasStart || hasEnd)
+      hits.push(...list);
+  }
+  return hits;
+}
+function gitPaths(cmd) {
+  try {
+    const out = execSync4(`${cmd} -z`, { stdio: ["ignore", "pipe", "ignore"] }).toString();
+    return { paths: out.split("\x00").filter(Boolean), ok: true, cmd };
+  } catch {
+    return { paths: [], ok: false, cmd };
+  }
+}
+function changedPaths(baseRef) {
+  return gitPaths(`git diff --name-only ${shellQuote(baseRef)}...HEAD`);
+}
+function scanConflictMarkers(paths) {
+  if (!paths.length)
+    return [];
+  const pathspec = paths.map(shellQuote).join(" ");
+  let out;
+  try {
+    out = execSync4(`git --literal-pathspecs grep -z -I -n -E ${shellQuote(CONFLICT_MARKER_PATTERN)} -- ${pathspec}`, {
+      stdio: ["ignore", "pipe", "ignore"]
+    }).toString();
+  } catch (e) {
+    if (e.status === 1)
+      return [];
+    throw new Error(`conflict-marker scan failed (git grep): ${e.message}`);
+  }
+  return parseConflictMarkerGrep(out);
+}
+function rebaseInProgress() {
+  let gitDir;
+  try {
+    gitDir = execSync4("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  } catch {
+    return null;
+  }
+  if (existsSync3(join4(gitDir, "rebase-merge")))
+    return "rebase-merge";
+  if (existsSync3(join4(gitDir, "rebase-apply")))
+    return "rebase-apply";
+  return null;
+}
+function syncEntryGuard(i) {
+  const checkout = `git checkout ${shellQuote(i.head)}`;
+  if (i.rebase) {
+    return { ok: false, message: `A rebase (${i.rebase}) is already in progress in this worktree — PR #${i.number} can't sync until it is cleared.
+` + `This is what an abandoned \`pr sync --keep-conflicts\` leaves behind: HEAD is detached mid-rebase.
+` + `Discard it: git rebase --abort   (or finish it: resolve, git add -- <file>…, renaiss-shipflow pr conflict-check, git rebase --continue)` };
+  }
+  if (i.currentBranch === "HEAD") {
+    return { ok: false, message: `HEAD is detached in this worktree, so PR #${i.number} ("${i.head}") is not checked out.
+` + `Re-attach first: ${checkout}` };
+  }
+  if (i.currentBranch !== i.head) {
+    return { ok: false, message: `On branch "${i.currentBranch}" but PR #${i.number} is "${i.head}". Check it out first: ${checkout}` };
+  }
+  return { ok: true };
+}
 
 // src/commands/test.ts
-import { existsSync as existsSync3, readFileSync as readFileSync6 } from "node:fs";
-import { join as join4 } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync6 } from "node:fs";
+import { join as join5 } from "node:path";
 function registerTestCommand(program2) {
   program2.command("test").description("Run the project's local test command (auto-detected)").option("--json", "Emit a machine-readable summary line (runner + exit code); test output still streams").allowUnknownOption().action((opts) => {
     const root = getCwdRepoRoot();
@@ -6189,32 +6447,32 @@ function runRunner(runner, root) {
 }
 function hasTestScript(root) {
   try {
-    const pkg = JSON.parse(readFileSync6(join4(root, "package.json"), "utf8"));
+    const pkg = JSON.parse(readFileSync6(join5(root, "package.json"), "utf8"));
     return typeof pkg?.scripts?.test === "string" && pkg.scripts.test.trim() !== "";
   } catch {
     return false;
   }
 }
 function detectRunner(root) {
-  if (existsSync3(join4(root, "package.json"))) {
+  if (existsSync4(join5(root, "package.json"))) {
     const bunArgs = hasTestScript(root) ? ["run", "test"] : ["test"];
-    if (existsSync3(join4(root, "bun.lockb")))
+    if (existsSync4(join5(root, "bun.lockb")))
       return { cmd: "bun", args: bunArgs, source: "bun.lockb" };
-    if (existsSync3(join4(root, "bun.lock")))
+    if (existsSync4(join5(root, "bun.lock")))
       return { cmd: "bun", args: bunArgs, source: "bun.lock" };
-    if (existsSync3(join4(root, "pnpm-lock.yaml")))
+    if (existsSync4(join5(root, "pnpm-lock.yaml")))
       return { cmd: "pnpm", args: ["test"], source: "pnpm-lock.yaml" };
-    if (existsSync3(join4(root, "yarn.lock")))
+    if (existsSync4(join5(root, "yarn.lock")))
       return { cmd: "yarn", args: ["test"], source: "yarn.lock" };
     return { cmd: "npm", args: ["test"], source: "package.json" };
   }
-  if (existsSync3(join4(root, "go.mod")))
+  if (existsSync4(join5(root, "go.mod")))
     return { cmd: "go", args: ["test", "./..."], source: "go.mod" };
-  if (existsSync3(join4(root, "Cargo.toml")))
+  if (existsSync4(join5(root, "Cargo.toml")))
     return { cmd: "cargo", args: ["test"], source: "Cargo.toml" };
-  if (existsSync3(join4(root, "pyproject.toml")))
+  if (existsSync4(join5(root, "pyproject.toml")))
     return { cmd: "pytest", args: [], source: "pyproject.toml" };
-  if (existsSync3(join4(root, "pytest.ini")))
+  if (existsSync4(join5(root, "pytest.ini")))
     return { cmd: "pytest", args: [], source: "pytest.ini" };
   return null;
 }

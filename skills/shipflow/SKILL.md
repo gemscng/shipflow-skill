@@ -75,7 +75,9 @@ requests to the same CLI calls.
 | "resolve the review threads I fixed" | `renaiss-shipflow pr resolve 87 --thread <id>` |
 | "approve PR 87" (reviewer verdict) | `renaiss-shipflow pr approve 87 --comment "..."` (refuses while threads are open) |
 | "auto-merge if ready" (loop) | `renaiss-shipflow pr automerge 87 --json` (self-gates on `merge-policy`) |
-| "rebase PR 87 onto its base" / "fix the conflict" | `renaiss-shipflow pr sync 87` (on the PR's branch) |
+| "rebase PR 87 onto its base" | `renaiss-shipflow pr sync 87` (on the PR's branch; aborts cleanly on conflict) |
+| "fix the conflict" / "resolve the merge conflict" | `renaiss-shipflow pr sync 87 --keep-conflicts` then follow `references/conflict-resolution.md` (resolve by intent → `pr conflict-check` → test → force-with-lease) |
+| "did I leave conflict markers?" (before `rebase --continue` / any push) | `renaiss-shipflow pr conflict-check` (exit 8 = unmerged paths or markers remain) |
 | "merge PR 87" (explicit, human-confirmed) | `renaiss-shipflow pr merge 87` (squash by default; deletes the **remote** branch) — then clean up **local** leftovers: if in a worktree, run `git worktree remove <its-worktree>`; otherwise switch to the default branch first, then `git branch -D <its-branch>` (use `-D`: a squash merge leaves the branch looking "unmerged") |
 | "set the loop's merge/CI/WIP policy" | `renaiss-shipflow config set merge-policy auto-on-green` (see `config list`) |
 | "run tests" | `renaiss-shipflow test` |
@@ -165,7 +167,8 @@ Loop references: `references/loop-mode.md` (full playbook), `loop-worker.md` /
 `loop-reviewer.md` (subagent role contracts), `browser-testing.md` (E2E via the
 **gstack headed browser** — `bin/shipflow-browser --ensure` resolves + heals it),
 `bug-taxonomy.md` (severity × category + QA checklist), `qa-report.md` (health score
-+ baseline), `pr-feedback.md` (resolving review threads).
++ baseline), `pr-feedback.md` (resolving review threads), `conflict-resolution.md`
+(agentic merge-conflict protocol + the opt-in, trusted-heads-only repo-wide sweep).
 
 ## First run
 
