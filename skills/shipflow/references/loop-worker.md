@@ -74,7 +74,8 @@ data in your context, not the orchestrator's.
    the header still injects its own link; `--partial` is what switches it.
 5b. **Deviations from brief — log them, don't bury them.** An edge case that
    forces an off-brief pivot: pick the conservative option, add it under a
-   `### Deviations from brief` section in the PR body — a table the reviewer
+   **Deviations from brief** heading in the PR body (any heading level — the
+   parser normalizes level, case and decoration) — a table the reviewer
    judges row by row: `| Deviation | Why | Risk |` (one row each, cells ≤10
    words) — and keep going. The review packet extracts this section
    and the reviewer verifies every entry — a deviation that only lives in a

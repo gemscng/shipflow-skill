@@ -5586,13 +5586,83 @@ function assessEvidenceCoverage(touched, comments) {
     warning: `⚠️ ${touched.length} features touched, ${evidenceItems} evidence item(s) — ` + `need ≥1 proof per feature on a multi-feature PR; treat each unproven feature ` + `as an unresolved thread (request_changes) unless every touched feature maps ` + `to a proof.`
   };
 }
-function extractDeviations(prBody) {
-  const m = /^###\s*Deviations from brief\s*$/im.exec(prBody);
+var DEVIATIONS_HEADING_ALIASES = [
+  "deviations from brief",
+  "deviations from the brief",
+  "deviations"
+];
+var HEADING_TEXT = /^ {0,3}(#{1,6})\s+(.*)$/;
+function headingLevel(line) {
+  const m = HEADING_TEXT.exec(line);
+  return m ? m[1].length : null;
+}
+function normalizeHeading(s) {
+  return s.toLowerCase().replace(/\s+/g, " ").replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "").trim();
+}
+var HEADING_ANNOTATION_SPLIT = /\s+[—–\-/&]\s+|:\s+|\s+and\s+|\s+\(/;
+function isDeviationsHeading(line) {
+  const m = HEADING_TEXT.exec(line);
   if (!m)
-    return "";
-  const rest = prBody.slice(m.index + m[0].length);
-  const end = rest.search(/^#{1,3}\s/m);
-  return (end >= 0 ? rest.slice(0, end) : rest).trim();
+    return false;
+  const norm = normalizeHeading(m[2]);
+  if (DEVIATIONS_HEADING_ALIASES.includes(norm))
+    return true;
+  const head = normalizeHeading(norm.split(HEADING_ANNOTATION_SPLIT)[0] ?? "");
+  return DEVIATIONS_HEADING_ALIASES.includes(head);
+}
+function extractDeviations(prBody) {
+  return findDeviationsSection(prBody.split(`
+`))?.content ?? "";
+}
+function findDeviationsSection(lines) {
+  for (let start = 0;start < lines.length; start++) {
+    if (!isDeviationsHeading(lines[start]))
+      continue;
+    const openLevel = headingLevel(lines[start]) ?? 6;
+    const section = [];
+    let structured = false;
+    let end = lines.length;
+    for (let i = start + 1;i < lines.length; i++) {
+      const level = headingLevel(lines[i]);
+      if (level !== null) {
+        if (level <= openLevel) {
+          end = i;
+          break;
+        }
+        const empty = section.join("").trim() === "";
+        if (empty && openLevel >= 2)
+          structured = true;
+        else if (!structured) {
+          end = i;
+          break;
+        }
+      }
+      section.push(lines[i]);
+    }
+    const content = section.join(`
+`).trim();
+    if (content)
+      return { start, end, content };
+  }
+  return null;
+}
+function findNearMissDeviationHeadings(prBody) {
+  const lines = prBody.split(`
+`);
+  const parsed = findDeviationsSection(lines);
+  const out = [];
+  for (let i = 0;i < lines.length; i++) {
+    if (parsed && i >= parsed.start && i < parsed.end)
+      continue;
+    if (isDeviationsHeading(lines[i]))
+      continue;
+    const m = HEADING_TEXT.exec(lines[i]);
+    if (!m)
+      continue;
+    if (normalizeHeading(m[2]).includes("deviation"))
+      out.push(lines[i].trim());
+  }
+  return out;
 }
 var INTERPRETATION_NOTE_CALLOUT = /^[^\p{L}\n]*interpretation note/imu;
 function hasInterpretationSignal(prBody) {
@@ -5643,6 +5713,14 @@ function buildReviewPacket(input) {
 ## Deviations from brief`);
     b.push(deviations);
     b.push("_Verify each deviation: conservative? justified? does the spec still hold?_");
+  }
+  const nearMisses = findNearMissDeviationHeadings(pr.body ?? "");
+  if (nearMisses.length) {
+    b.push(`
+## Deviation-like headings (not parsed)`);
+    for (const h of nearMisses.slice(0, 5))
+      b.push(`- \`${h}\``);
+    b.push("_Display only — these did NOT feed the intent gate and block nothing. " + "If one is a real deviation log, ask the author to retitle it " + `(\`${DEVIATIONS_HEADING_ALIASES[0]}\`, any heading level)._`);
   }
   b.push(`
 ## CI`);
