@@ -144,7 +144,8 @@ that one PR and collect its return. Loop A until nothing in-flight `needsAttenti
 - `conflict` → worker resolves it agentically: `renaiss-shipflow pr sync <n>
   --keep-conflicts` (exit 6 = rebase left mid-flight + conflicted-file list),
   then `references/conflict-resolution.md` — resolve by intent, stage only
-  resolved paths, `pr conflict-check` (exit 8) before each `rebase --continue`,
+  resolved paths, `pr conflict-check --base origin/<base>` (exit 8) before each
+  `rebase --continue`,
   TEST before any push, force-with-lease, comment the resolution on the PR; the
   reviewer gate re-runs. Escalate only per that doc's criteria, never on the
   mere existence of a conflict. Scope is the loop's OWN PRs unless the

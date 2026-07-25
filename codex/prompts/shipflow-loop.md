@@ -45,8 +45,9 @@ open PR into a `state`. Act, then re-run A until nothing `needsAttention`:
   `renaiss-shipflow pr sync <n> --keep-conflicts` (exit 6 leaves the rebase
   mid-flight + lists conflicted files), then the
   `references/conflict-resolution.md` protocol — resolve by intent, stage only
-  resolved paths (never `git add -A`), `renaiss-shipflow pr conflict-check`
-  (exit 8 = markers/unmerged remain) before each `git rebase --continue`, run
+  resolved paths (never `git add -A`), `renaiss-shipflow pr conflict-check
+  --base origin/<base>` (exit 8 = markers/unmerged remain) before each
+  `git rebase --continue`, run
   the tests, force-with-lease push, comment the resolution on the PR (reviewer
   gate re-runs). Escalate only on that doc's criteria (incompatible intent,
   tests stay red past `max-fix-attempts`, or the resolution would discard

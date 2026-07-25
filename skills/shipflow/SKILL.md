@@ -76,8 +76,8 @@ requests to the same CLI calls.
 | "approve PR 87" (reviewer verdict) | `renaiss-shipflow pr approve 87 --comment "..."` (refuses while threads are open) |
 | "auto-merge if ready" (loop) | `renaiss-shipflow pr automerge 87 --json` (self-gates on `merge-policy`) |
 | "rebase PR 87 onto its base" | `renaiss-shipflow pr sync 87` (on the PR's branch; aborts cleanly on conflict) |
-| "fix the conflict" / "resolve the merge conflict" | `renaiss-shipflow pr sync 87 --keep-conflicts` then follow `references/conflict-resolution.md` (resolve by intent → `pr conflict-check` → test → force-with-lease) |
-| "did I leave conflict markers?" (before `rebase --continue` / any push) | `renaiss-shipflow pr conflict-check` (exit 8 = unmerged paths or markers remain) |
+| "fix the conflict" / "resolve the merge conflict" | `renaiss-shipflow pr sync 87 --keep-conflicts` then follow `references/conflict-resolution.md` (resolve by intent → `pr conflict-check --base origin/<base>` → test → force-with-lease) |
+| "did I leave conflict markers?" (before `rebase --continue` / any push) | `renaiss-shipflow pr conflict-check --base origin/<base>` (exit 8 = unmerged paths or markers remain) — always name the base: once `rebase --continue` has **committed** the markers, a base-less check has zero files to scan and exits 0 |
 | "merge PR 87" (explicit, human-confirmed) | `renaiss-shipflow pr merge 87` (squash by default; deletes the **remote** branch) — then clean up **local** leftovers: if in a worktree, run `git worktree remove <its-worktree>`; otherwise switch to the default branch first, then `git branch -D <its-branch>` (use `-D`: a squash merge leaves the branch looking "unmerged") |
 | "set the loop's merge/CI/WIP policy" | `renaiss-shipflow config set merge-policy auto-on-green` (see `config list`) |
 | "run tests" | `renaiss-shipflow test` |

@@ -6135,7 +6135,9 @@ ${opts.body ?? ""}`;
       rebase: rebaseInProgress(),
       currentBranch: execSync4("git rev-parse --abbrev-ref HEAD").toString().trim(),
       head,
-      number
+      number,
+      base: rebaseOnto() ?? `origin/${base}`,
+      root: printedRoot()
     });
     if (!guard.ok) {
       console.error(guard.message);
@@ -6164,7 +6166,7 @@ ${opts.body ?? ""}`;
           console.log(`\uD83D\uDD00 PR #${number}: rebase onto ${base} conflicts — left IN PROGRESS for resolution.`);
           for (const f of conflictedFiles)
             console.log(`  [U] ${f}`);
-          for (const l of RESOLUTION_RECIPE)
+          for (const l of resolutionRecipe(`origin/${base}`, printedRoot()))
             console.log(l);
         });
       } else {
@@ -6177,7 +6179,7 @@ ${opts.body ?? ""}`;
       emit(opts, { number, rebased: true, conflict: false, base, pushed: false, enumerationFailed: [changed.cmd] }, () => {
         console.error(`⛔ PR #${number}: could not enumerate the files changed against ${base} — refusing to push.`);
         console.error(`  failed: ${changed.cmd}`);
-        console.error(`The marker gate cannot certify a tree it could not read. Re-check with: renaiss-shipflow pr conflict-check`);
+        console.error(`The marker gate cannot certify a tree it could not read. Re-check with: ${recheckCommand(`origin/${base}`)}`);
       });
       process.exit(8);
     }
@@ -6187,7 +6189,7 @@ ${opts.body ?? ""}`;
         console.error(`⛔ PR #${number}: rebase onto ${base} succeeded but ${markers.length} conflict marker(s) remain — refusing to push.`);
         for (const h of markers.slice(0, 20))
           console.error(`  ${h.path}:${h.line}: ${h.text.slice(0, 60)}`);
-        console.error(`Remove the markers, re-run the tests, then push. Re-check with: renaiss-shipflow pr conflict-check`);
+        console.error(`Remove the markers, re-run the tests, then push. Re-check with: ${recheckCommand(`origin/${base}`)}`);
       });
       process.exit(8);
     }
@@ -6202,28 +6204,56 @@ ${opts.body ?? ""}`;
     }
     emit(opts, { number, rebased: true, conflict: false, base, pushed }, () => console.log(`\uD83D\uDD00 PR #${number}: rebased "${head}" onto ${base}${pushed ? " and pushed" : ""}.`));
   }));
-  pr.command("conflict-check").description("Fail if the working tree still has unmerged paths or leftover conflict markers — the gate to run BEFORE `git rebase --continue` and before any force-with-lease push (exit 8 = not clean). Local only, no network.").option("--base <ref>", "Also scan every file this branch changed against <ref> (e.g. origin/main), not just what's currently modified").option("--json", "Output JSON").action(runAction(async (opts) => {
+  pr.command("conflict-check").description("Fail if the working tree still has unmerged paths or leftover conflict markers — the gate to run BEFORE `git rebase --continue` and before any force-with-lease push (exit 8 = not clean). Local only, no network.").option("--base <ref>", "Also scan every file this branch changed against <ref> (e.g. origin/main) — additive, never a replacement. Omitted, the base is resolved automatically: the in-flight rebase's `onto`, else origin/HEAD, else the repo default branch. Every ref actually scanned is listed in the JSON `bases`").option("--json", "Output JSON").action(runAction(async (opts) => {
+    const resolved = resolveScanBase({
+      onto: rebaseOnto(),
+      originHead: originHeadRef(),
+      defaultBranch: defaultBranchRef(),
+      explicit: opts.base
+    });
+    const baseRefs = Array.from(new Set([resolved?.base, opts.base].filter((b) => !!b)));
     const sources = [
       gitPaths("git diff --name-only --diff-filter=U"),
       gitPaths("git diff --name-only HEAD"),
-      ...opts.base ? [gitPaths(`git diff --name-only ${shellQuote(opts.base)}...HEAD`)] : []
+      ...baseRefs.map((b) => gitPaths(`git diff --name-only ${shellQuote(b)}...HEAD`))
     ];
     const enumerationFailed = sources.filter((s) => !s.ok).map((s) => s.cmd);
     const unmerged = sources[0].paths;
     const paths = Array.from(new Set(sources.flatMap((s) => s.paths)));
     const markers = scanConflictMarkers(paths);
     const rebase = rebaseInProgress();
-    const clean = enumerationFailed.length === 0 && unmerged.length === 0 && markers.length === 0;
-    emit(opts, { clean, unmerged, conflictMarkers: markers, rebaseInProgress: rebase, scanned: paths.length, enumerationFailed }, () => {
+    const indeterminate = !resolved && paths.length === 0;
+    const clean = !indeterminate && enumerationFailed.length === 0 && unmerged.length === 0 && markers.length === 0;
+    const alsoScanned = baseRefs.filter((b) => b !== resolved?.base);
+    const via = resolved ? ` vs ${resolved.base} (${resolved.source})${alsoScanned.length ? ` + ${alsoScanned.join(", ")}` : ""}` : "";
+    emit(opts, {
+      clean,
+      indeterminate,
+      unmerged,
+      conflictMarkers: markers,
+      rebaseInProgress: rebase,
+      base: resolved?.base ?? null,
+      baseSource: resolved?.source ?? null,
+      bases: baseRefs,
+      scanned: paths.length,
+      enumerationFailed
+    }, () => {
       if (clean) {
-        console.log(`✅ No unmerged paths, no conflict markers (${paths.length} file(s) scanned)${rebase ? ` — rebase still in progress, safe to \`git rebase --continue\`` : ""}.`);
+        console.log(`✅ No unmerged paths, no conflict markers (${paths.length} file(s) scanned${via})${rebase ? ` — rebase still in progress, safe to \`git rebase --continue\`` : ""}.`);
         return;
       }
       console.error(`⛔ Not clean — do NOT continue the rebase or push.`);
+      if (via)
+        console.error(`  scanned ${paths.length} file(s)${via}`);
+      if (indeterminate) {
+        console.error(`  [?] indeterminate: no base ref could be resolved and 0 file(s) were scanned — the gate proved nothing.`);
+        console.error(`      Name one explicitly: ${recheckCommand("origin/<base>")}`);
+      }
+      const root = unmerged.length ? printedRoot() : null;
       for (const c of enumerationFailed)
         console.error(`  [E] could not enumerate paths: ${c} — the gate cannot certify a tree it could not read`);
       for (const f of unmerged)
-        console.error(`  [U] ${f} — still unmerged; resolve it, then: git add -- ${f}`);
+        console.error(`  [U] ${f} — still unmerged; resolve it, then: ${anchoredGit(root, `add -- ${shellQuote(f)}`)}`);
       for (const h of markers.slice(0, 20))
         console.error(`  [M] ${h.path}:${h.line}: ${h.text.slice(0, 60)}`);
       if (markers.length > 20)
@@ -6386,31 +6416,58 @@ function buildShipFlowHeader(project, issueNumber, issueUrl, linkMode = "closes"
   return lines.join(`
 `);
 }
-var RESOLUTION_RECIPE = [
-  "Resolve each file, then stage ONLY the paths you resolved: git add -- <file>…",
-  "  (never `git add -A` here — it clears the UNMERGED state that stops git committing conflict markers)",
-  "Gate before continuing: renaiss-shipflow pr conflict-check   # exit 8 = markers/unmerged remain",
-  "Then: git rebase --continue (repeat per commit), run the FULL test suite, gate again, and push --force-with-lease."
-];
+function resolutionRecipe(baseRef, root = null) {
+  return [
+    `Resolve each file, then stage ONLY the paths you resolved: ${anchoredGit(root, "add -- <file>…")}`,
+    "  (never `git add -A` here — it clears the UNMERGED state that stops git committing conflict markers)",
+    `Gate before continuing: ${recheckCommand(baseRef)}   # exit 8 = markers/unmerged remain`,
+    "Then: git rebase --continue (repeat per commit), run the FULL test suite, gate again, and push --force-with-lease."
+  ];
+}
+function recheckCommand(baseRef) {
+  return `renaiss-shipflow pr conflict-check --base ${baseRef}`;
+}
+function anchoredGit(root, args) {
+  return root ? `git -C ${shellQuote(root)} ${args}` : `git ${args}`;
+}
+function printedRoot() {
+  try {
+    return repoToplevel();
+  } catch {
+    return null;
+  }
+}
 var CONFLICT_MARKER_PATTERN = "^(<{7}|\\|{7}|={7}|>{7})( |$)";
 var MARKER_START = /^<{7}( |$)/;
 var MARKER_END = /^>{7}( |$)/;
-function parseConflictMarkerGrep(out) {
+function parseConflictMarkerRecords(out) {
   const byPath = new Map;
-  const fields = out.split("\x00");
-  let path = fields[0] ?? "";
-  for (let i = 1;i + 1 < fields.length; i += 2) {
-    const line = parseInt(fields[i], 10);
-    const rest = fields[i + 1];
-    const nl = rest.indexOf(`
-`);
-    const text = nl === -1 ? rest : rest.slice(0, nl);
+  const paths = [];
+  let i = 0;
+  while (i < out.length) {
+    const pathEnd = out.indexOf("\x00", i);
+    if (pathEnd === -1)
+      break;
+    const path = out.slice(i, pathEnd);
+    const lineEnd = out.indexOf("\x00", pathEnd + 1);
+    if (lineEnd === -1)
+      break;
+    const line = parseInt(out.slice(pathEnd + 1, lineEnd), 10);
+    const nl = out.indexOf(`
+`, lineEnd + 1);
+    const text = nl === -1 ? out.slice(lineEnd + 1) : out.slice(lineEnd + 1, nl);
     if (Number.isFinite(line)) {
-      const list = byPath.get(path) ?? [];
+      let list = byPath.get(path);
+      if (!list) {
+        list = [];
+        byPath.set(path, list);
+        paths.push(path);
+      }
       list.push({ path, line, text });
-      byPath.set(path, list);
     }
-    path = nl === -1 ? "" : rest.slice(nl + 1);
+    if (nl === -1)
+      break;
+    i = nl + 1;
   }
   const hits = [];
   for (const list of byPath.values()) {
@@ -6419,11 +6476,11 @@ function parseConflictMarkerGrep(out) {
     if (hasStart || hasEnd)
       hits.push(...list);
   }
-  return hits;
+  return { hits, paths };
 }
 function gitPaths(cmd) {
   try {
-    const out = execSync4(`${cmd} -z`, { stdio: ["ignore", "pipe", "ignore"] }).toString();
+    const out = execSync4(`${cmd} -z`, { cwd: repoToplevel(), stdio: ["ignore", "pipe", "ignore"] }).toString();
     return { paths: out.split("\x00").filter(Boolean), ok: true, cmd };
   } catch {
     return { paths: [], ok: false, cmd };
@@ -6432,21 +6489,67 @@ function gitPaths(cmd) {
 function changedPaths(baseRef) {
   return gitPaths(`git diff --name-only ${shellQuote(baseRef)}...HEAD`);
 }
-function scanConflictMarkers(paths) {
-  if (!paths.length)
-    return [];
-  const pathspec = paths.map(shellQuote).join(" ");
-  let out;
+function repoToplevel() {
+  let root;
   try {
-    out = execSync4(`git --literal-pathspecs grep -z -I -n -E ${shellQuote(CONFLICT_MARKER_PATTERN)} -- ${pathspec}`, {
-      stdio: ["ignore", "pipe", "ignore"]
-    }).toString();
+    root = execSync4("git rev-parse --show-toplevel", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  } catch (e) {
+    throw new Error(`conflict-marker scan failed (git rev-parse --show-toplevel): ${e.message}`);
+  }
+  if (!root)
+    throw new Error("conflict-marker scan failed: git reported no worktree toplevel (bare repo?)");
+  return root;
+}
+var PATHSPEC_CHUNK_FILES = 1000;
+var PATHSPEC_CHUNK_BYTES = 1e5;
+function chunkPathspecs(paths, maxFiles = PATHSPEC_CHUNK_FILES, maxBytes = PATHSPEC_CHUNK_BYTES) {
+  const chunks = [];
+  let current = [];
+  let bytes = 0;
+  for (const p of paths) {
+    const cost2 = Buffer.byteLength(shellQuote(p)) + 1;
+    if (current.length && (current.length >= maxFiles || bytes + cost2 > maxBytes)) {
+      chunks.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(p);
+    bytes += cost2;
+  }
+  if (current.length)
+    chunks.push(current);
+  return chunks;
+}
+function grepConflictMarkers(root, mode, chunk) {
+  const pathspec = chunk.map(shellQuote).join(" ");
+  const cmd = `git --literal-pathspecs grep --text -z ${mode} -E ${shellQuote(CONFLICT_MARKER_PATTERN)} -- ${pathspec}`;
+  try {
+    return execSync4(cmd, { cwd: root, stdio: ["ignore", "pipe", "ignore"] }).toString();
   } catch (e) {
     if (e.status === 1)
-      return [];
+      return "";
     throw new Error(`conflict-marker scan failed (git grep): ${e.message}`);
   }
-  return parseConflictMarkerGrep(out);
+}
+function scanConflictMarkers(paths, budget) {
+  if (!paths.length)
+    return [];
+  const root = repoToplevel();
+  const hits = [];
+  for (const chunk of chunkPathspecs(paths, budget?.maxFiles, budget?.maxBytes)) {
+    const matched = grepConflictMarkers(root, "-l", chunk).split("\x00").filter(Boolean);
+    const parsed = parseConflictMarkerRecords(grepConflictMarkers(root, "-n", chunk));
+    const missed = unrecoveredMatches(matched, parsed.paths);
+    if (missed.length) {
+      throw new Error(`conflict-marker scan failed: git grep matched ${missed.length} file(s) whose marker lines the parse could not recover ` + `(${missed.slice(0, 5).map((p) => JSON.stringify(p)).join(", ")}${missed.length > 5 ? ", …" : ""}). ` + `The gate cannot certify a tree it could not fully read — inspect those files by hand.`);
+    }
+    hits.push(...parsed.hits);
+  }
+  return hits;
+}
+function unrecoveredMatches(matched, recovered) {
+  const seen = new Set(recovered);
+  return matched.filter((p) => !seen.has(p));
 }
 function rebaseInProgress() {
   let gitDir;
@@ -6461,12 +6564,59 @@ function rebaseInProgress() {
     return "rebase-apply";
   return null;
 }
+function refExists(ref) {
+  try {
+    execSync4(`git rev-parse --verify --quiet ${shellQuote(`${ref}^{commit}`)}`, { stdio: ["ignore", "ignore", "ignore"] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function rebaseOnto() {
+  const state = rebaseInProgress();
+  if (!state)
+    return null;
+  try {
+    const gitDir = execSync4("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    const onto = readFileSync5(join4(gitDir, state, "onto"), "utf8").trim();
+    return onto && refExists(onto) ? onto : null;
+  } catch {
+    return null;
+  }
+}
+function originHeadRef() {
+  try {
+    const ref = execSync4("git symbolic-ref --short refs/remotes/origin/HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    return ref && refExists(ref) ? ref : null;
+  } catch {
+    return null;
+  }
+}
+function defaultBranchRef() {
+  for (const candidate of ["origin/main", "origin/master"]) {
+    if (refExists(candidate))
+      return candidate;
+  }
+  return null;
+}
+function resolveScanBase(i) {
+  if (i.onto)
+    return { base: i.onto, source: "rebase-onto" };
+  if (i.originHead)
+    return { base: i.originHead, source: "origin-head" };
+  if (i.defaultBranch)
+    return { base: i.defaultBranch, source: "default-branch" };
+  if (i.explicit)
+    return { base: i.explicit, source: "explicit" };
+  return null;
+}
 function syncEntryGuard(i) {
   const checkout = `git checkout ${shellQuote(i.head)}`;
   if (i.rebase) {
+    const stage = anchoredGit(i.root ?? null, "add -- <file>…");
     return { ok: false, message: `A rebase (${i.rebase}) is already in progress in this worktree — PR #${i.number} can't sync until it is cleared.
 ` + `This is what an abandoned \`pr sync --keep-conflicts\` leaves behind: HEAD is detached mid-rebase.
-` + `Discard it: git rebase --abort   (or finish it: resolve, git add -- <file>…, renaiss-shipflow pr conflict-check, git rebase --continue)` };
+` + `Discard it: git rebase --abort   (or finish it: resolve, ${stage}, ${recheckCommand(i.base || "origin/<base>")}, git rebase --continue)` };
   }
   if (i.currentBranch === "HEAD") {
     return { ok: false, message: `HEAD is detached in this worktree, so PR #${i.number} ("${i.head}") is not checked out.

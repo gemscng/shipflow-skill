@@ -25,13 +25,24 @@ finishing 579/579 green.
 3. **Stage only what you resolved, then gate on markers**:
    `git add -- <file>…` — **never `git add -A` here.** The UNMERGED index state
    is the only thing making git refuse to commit a file that still contains
-   `<<<<<<<`, and `add -A` clears exactly that. Then, before every
-   `git rebase --continue`:
+   `<<<<<<<`, and `add -A` clears exactly that. The paths the gate prints are
+   **repo-root-relative**, so from a subdirectory use the anchored form
+   `git -C <repo-root> add -- <file>…` — which is exactly what `pr sync
+   --keep-conflicts` and `pr conflict-check` now print for you. Then, before
+   every `git rebase --continue`:
 
    ```bash
-   renaiss-shipflow pr conflict-check      # exit 8 = unmerged paths or markers remain
-   git rebase --continue                   # only on exit 0; repeat per commit
+   renaiss-shipflow pr conflict-check --base origin/<base>   # exit 8 = unmerged paths or markers remain
+   git rebase --continue                                     # only on exit 0; repeat per commit
    ```
+
+   Pass `--base` (the same form as step 5 — it's what `pr sync --keep-conflicts`
+   prints for you). Once a `git rebase --continue` has **committed** markers,
+   nothing is unmerged and nothing differs from HEAD, so a base-less check has
+   zero files to scan; the base is what makes it look at the branch's own
+   changes. The gate now resolves one itself (the rebase's `onto`, else
+   `origin/HEAD`) and reports `indeterminate` — exit 8, never a clean 0 — if it
+   can resolve none and scanned nothing (issue #412).
 
    Never `--skip` a commit — a skipped commit silently drops the PR's own work.
 4. **Mechanical resolution is NOT done — run the tests.** The conflicts git
