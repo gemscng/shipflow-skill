@@ -59,6 +59,15 @@ open PR into a `state`. Act, then re-run A until nothing `needsAttention`:
     author `OWNER`/`MEMBER`/`COLLABORATOR`, never drafts). Rows marked
     `humanOnly: true` / `trustedHead: false` (fork or untrusted author) come with
     `needsAttention: false` — **report them, never check them out.**
+- `awaiting_reporter` → **park — the reporter must confirm; re-checked next tick.**
+  The PR carries `needs-reporter-review` (issue #190): a worker's interpretation is
+  unconfirmed, no policy will merge it, and only the reporter — or a maintainer
+  removing the label — can clear it. **It outranks `conflict`** and everything else:
+  every route below it dispatches a worker to *act on the PR*, and that can destroy
+  the gate, because the label is self-clearing (#411) — a loop comment strips it,
+  and the `conflict` route *requires* commenting the resolution on the PR. The
+  conflict is still reported (`reasons` carries both `needs-reporter-review` and
+  `merge_conflict`); only the dispatch waits.
 - `stale` → nudge once / escalate if blocked. `ci_pending` / `awaiting_review` →
   park, no action.
 - in-progress issue with a `newComment` → read (`gh issue view <n> --comments`) + act.

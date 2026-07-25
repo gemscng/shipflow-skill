@@ -4693,6 +4693,7 @@ async function readStdin() {
 var FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
 var PENDING = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"]);
 var APPROVAL_LABELS = new Set([SHIPFLOW_CONTRACT.labels.names.shipflowApproved, "approved", "✅ approved"]);
+var REPORTER_REVIEW_REASON = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
 function ciStateOf(checks) {
   if (!checks || checks.length === 0)
     return "none";
@@ -4761,8 +4762,14 @@ function classifyPR(pr, me, opts = {}) {
   const approved = isApproved(pr);
   const ageHours = hoursSince(pr.updatedAt, opts.nowMs);
   const staleHours = opts.staleHours ?? 48;
+  const conflicting = (pr.mergeable ?? "").toUpperCase() === "CONFLICTING";
   let state;
-  if ((pr.mergeable ?? "").toUpperCase() === "CONFLICTING") {
+  if (opts.intentBlocked) {
+    state = "awaiting_reporter";
+    reasons = [...reasons, REPORTER_REVIEW_REASON];
+    if (conflicting && !reasons.includes("merge_conflict"))
+      reasons = [...reasons, "merge_conflict"];
+  } else if (conflicting) {
     state = "conflict";
     if (!reasons.includes("merge_conflict"))
       reasons = [...reasons, "merge_conflict"];
@@ -4780,7 +4787,9 @@ function classifyPR(pr, me, opts = {}) {
     state = "stale";
   else
     state = "awaiting_review";
-  const needsAction = state !== "ci_pending" && state !== "awaiting_review";
+  const needsAction = state !== "ci_pending" && state !== "awaiting_review" && state !== "awaiting_reporter";
+  if (needsAction && reasons.length === 0)
+    reasons = [state];
   return { number: pr.number, state, ciState, approved, ageHours, reasons, needsAction };
 }
 var INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation";
@@ -4891,7 +4900,8 @@ function registerInboxCommand(program2) {
     const minePrs = ghPRListMine(repo);
     const prs = minePrs.map((pr) => {
       const { count: unresolvedThreads, degraded: degraded2 } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
-      const cl = classifyPR(pr, me, { staleHours, unresolvedThreads });
+      const intentBlocked = (pr.labels ?? []).some((l) => l.name === SHIPFLOW_CONTRACT.labels.names.needsReporterReview);
+      const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked });
       return {
         number: pr.number,
         title: pr.title,
@@ -4939,7 +4949,7 @@ function registerInboxCommand(program2) {
       changesRequested: count("changes_requested"),
       conflicts: actionableConflicts(prs),
       stale: count("stale"),
-      parked: prs.filter((p) => p.state === "awaiting_review" || p.state === "ci_pending").length,
+      parked: prs.filter((p) => p.state === "awaiting_review" || p.state === "ci_pending" || p.state === "awaiting_reporter").length,
       degraded,
       conflictSweep: sweepEnabled,
       humanOnlyConflicts: prs.filter((p) => ("humanOnly" in p) && p.humanOnly).length
@@ -4953,6 +4963,7 @@ function registerInboxCommand(program2) {
         console.log(`\uD83D\uDD12 ${summary.humanOnlyConflicts} conflicted PR(s) on an untrusted head (fork / non-collaborator) — reported only, never checked out by the loop.`);
       }
       const icon = {
+        awaiting_reporter: "\uD83D\uDE4B",
         conflict: "\uD83D\uDD00",
         ci_failing: "\uD83D\uDD34",
         changes_requested: "✏️",

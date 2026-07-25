@@ -153,6 +153,20 @@ that one PR and collect its return. Loop A until nothing in-flight `needsAttenti
   default off) — and even then only **trusted** heads (same-repo,
   `OWNER`/`MEMBER`/`COLLABORATOR`, no drafts) are actionable; `humanOnly: true`
   rows are for a human to look at, never for the loop to check out.
+- `awaiting_reporter` → **park — the reporter must confirm; re-checked next tick.**
+  The PR carries `needs-reporter-review`: a worker's interpretation/deviation is
+  unconfirmed (issue #190), so no policy will merge it and only the reporter (or a
+  maintainer removing the label) can clear it. **It outranks `conflict`** — and
+  every other state — because each route below it tells a worker to *act on the
+  PR*, and acting can destroy the gate: the label is self-clearing (issue #411),
+  the loop's own comment strips it, and the `conflict` route *requires* commenting
+  the resolution on the PR. So dispatching an intent-gated conflicted PR to a
+  conflict worker risks the loop clearing the very gate holding it. The conflict is
+  still reported — `reasons` carries **both** `needs-reporter-review` and
+  `merge_conflict` — only the dispatch is withheld until the reporter replies.
+  (This reverses issue #393's "conflict outranks everything" for this one
+  intersection: #393's rationale was signal *staleness*, orthogonal to *may the
+  loop act at all*.)
 - `stale` → nudge once / escalate if blocked. `ci_pending` / `awaiting_review` →
   **parked, no action** (re-checked next tick; don't busy-wait).
 
@@ -302,8 +316,17 @@ else `SHIPFLOW_LOOP_CAP`, else **5**.
 
 ## Reconcile playbook (inbox `state` → action)
 
+Ladder, highest first: `awaiting_reporter` › `conflict` › `ci_failing` ›
+`changes_requested` › `review_comments` › `ci_pending` › `approved_ready` ›
+`stale` › `awaiting_review`. `awaiting_reporter` tops it — above `conflict` —
+because every route below it dispatches a worker to *act on the PR*, and the
+`needs-reporter-review` label is self-clearing (#411): a loop comment strips it,
+and the `conflict` route requires commenting on the PR. Both reasons are still
+reported, so nothing is hidden — only the dispatch waits.
+
 | `state` | What it means | Action |
 |---|---|---|
+| `awaiting_reporter` | approved + green, interpretation unconfirmed (`needs-reporter-review`) | park — the reporter must confirm; re-checked next tick |
 | `ci_failing` | a check is red | fix on branch, push; escalate after `max-fix-attempts` |
 | `changes_requested` | reviewer wants changes | pr-feedback → fix → push → reply |
 | `review_comments` | unaddressed comments | pr-feedback (may already be handled) → reply |
