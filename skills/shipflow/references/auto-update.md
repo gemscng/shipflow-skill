@@ -51,27 +51,49 @@ freshly-installed version can't take effect in the current session — no comman
 - **Immediately** — the user runs **`/reload-plugins`** (a manual command; the
   assistant cannot self-type it).
 
-Most behavior needs **no** reload anyway: the `renaiss-shipflow` **CLI auto-tracks
-the newest cached version**. The launcher (`bin/renaiss-shipflow`) resolves the
-**newest** installed plugin's bundled CLI at run time, and the preamble re-points
-its PATH symlink to the newest version every run — so once the SessionStart hook
-installs a new version to the cache, CLI behavior (commands, inbox, config, bug
-fixes) updates **live this session**, no reload. A reload is only for **new/changed
-skill files** — added slash commands, edited loop steps, reference docs.
+A reload is only for **new/changed skill files** — added slash commands, edited
+loop steps, reference docs. **The CLI is a different story, and it depends on
+which channel PATH resolves** (issue #435):
 
-(Historical note: before this, the launcher ran its co-located CLI and the preamble
-only symlinked when none existed — so the symlink stranded on the first version
-forever, and the CLI never updated even as the plugin did. Fixed: launcher +
-preamble now always resolve/point to the newest cached version.)
+| Channel (`version --json` → `channel`) | What runs | Auto-tracks the plugin cache? |
+|---|---|---|
+| `plugin-launcher` | `bin/renaiss-shipflow` → the **newest** cached plugin's bundled CLI (the preamble re-points its PATH symlink each run) | **yes** — a cache install goes live this session |
+| `npm-global` | `~/.../lib/node_modules/@renaiss-shipflow/cli` — installed from npm, **shadows the launcher on PATH** | **NO** — it tracks nothing; only `npm i -g` moves it |
+| `unknown` | a dev checkout / something else | no |
+
+⚠️ **The old claim that "the CLI auto-tracks the newest cached version" is only
+true on `plugin-launcher`.** When an npm-global install wins PATH — the common
+case on a dev machine — updating the plugin cache changes **nothing** about the
+binary the loop shells out to, and the two silently diverge. Measured on one
+machine: plugin 0.27.5 loaded, 0.27.10 cached, CLI **0.28.2** running. Nothing
+reconciles those three, and `bin/shipflow-update-check` compares only the plugin
+against the marketplace manifest — never the npm CLI — and runs at SessionStart,
+so it cannot fire mid-loop.
+
+**Check it, don't assume it:** `renaiss-shipflow version --json` reports
+`channel`, `registry` (npm's `latest` dist-tag — the reference, never the working
+tree) and `drift` ∈ `current`/`stale`/`ahead`/`unknown`, plus a
+channel-appropriate `remediation.command`. `version --check` exits **9** when the
+running binary is behind. A long `/shipflow-loop` runs this after every merge and
+at each tick start (`loop-mode.md` §0) — a stale CLI reports *fewer* blockers, so
+it biases the loop toward merging what should park.
+
+(Historical note: before the launcher fix, it ran its co-located CLI and the
+preamble only symlinked when none existed — so the symlink stranded on the first
+version forever. Fixed for the launcher path; it never applied to an npm-global
+install, which is the gap above.)
 
 ## Long-running sessions (e.g. an open `/shipflow-loop`)
 
 A long loop session never restarts, so it keeps the **skill files** it loaded at
-start — but its **CLI auto-updates** (above). If a bug fix is in the CLI (most are:
-commands, signals, mappings), it's already live. If it's in a skill/loop doc,
-periodically run **`/reload-plugins`** (or restart) to pick it up. When the update
-check shows a new version mid-loop, surface a one-line nudge:
-`⬆️ ShipFlow vX live (CLI auto-updated); /reload-plugins to also refresh skill docs.`
+start. Its CLI updates live **only on the `plugin-launcher` channel** (table
+above) — on `npm-global` the running binary is frozen until someone runs
+`npm i -g`, which is why the loop re-checks `version --json` after every merge
+and at each tick start and upgrades itself (`loop-mode.md` §0). If a bug fix is
+in a skill/loop doc, periodically run **`/reload-plugins`** (or restart) to pick
+it up. When the update check shows a new version mid-loop, surface a one-line
+nudge — and say which half moved:
+`⬆️ ShipFlow vX cached; CLI drift <drift> (channel <channel>); /reload-plugins to refresh skill docs.`
 
 If `claude plugin update` is unavailable or errors, tell the user to run
 `/shipflow-update` (or `claude plugin update shipflow@renaissshipflow`) manually,

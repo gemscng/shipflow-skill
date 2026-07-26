@@ -2054,7 +2054,7 @@ var require_commander = __commonJS((exports) => {
 });
 
 // src/index.ts
-import { createRequire as createRequire2 } from "node:module";
+import { createRequire as createRequire3 } from "node:module";
 
 // ../../node_modules/commander/esm.mjs
 var import__ = __toESM(require_commander(), 1);
@@ -2573,6 +2573,12 @@ function resolveLoopWorkerModel() {
   if (env)
     return env;
   return loadConfig().loopWorkerModel?.trim() || undefined;
+}
+function resolveCliDriftPollSeconds() {
+  const env = process.env.SHIPFLOW_CLI_DRIFT_POLL_SECONDS;
+  if (env != null && env !== "")
+    return parseIntOr(env, 180);
+  return parseIntOr(loadConfig().cliDriftPollSeconds, 180);
 }
 function resolveApiUrl(flagUrl) {
   return flagUrl || process.env.SHIPFLOW_API_URL || loadConfig().apiUrl || "http://localhost:8080";
@@ -4191,14 +4197,211 @@ function registerStatusCommand(program2) {
 }
 
 // src/commands/version.ts
-import { readdirSync as readdirSync2, readFileSync as readFileSync2 } from "node:fs";
-import { join as join2 } from "node:path";
+import { readdirSync as readdirSync3, readFileSync as readFileSync2 } from "node:fs";
+import { join as join3 } from "node:path";
+import { homedir as homedir3 } from "node:os";
+
+// src/cli-drift.ts
+import { createRequire as createRequire2 } from "node:module";
+import { existsSync as existsSync2, readdirSync as readdirSync2, realpathSync as realpathSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-function installedPluginVersion(cacheBase = join2(homedir2(), ".claude", "plugins", "cache", "renaissshipflow", "shipflow")) {
+import { join as join2 } from "node:path";
+import { fileURLToPath } from "node:url";
+var CLI_PACKAGE = "@renaiss-shipflow/cli";
+var DEFAULT_REGISTRY = "https://registry.npmjs.org";
+var REGISTRY_TIMEOUT_MS = 8000;
+var DRIFT_STALE_EXIT_CODE = 9;
+function parseSemver(v) {
+  if (typeof v !== "string")
+    return null;
+  const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(v.trim());
+  if (!m)
+    return null;
+  return { core: [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)], prerelease: m[4] ?? null };
+}
+function comparePrerelease(a, b) {
+  const fa = a.split("."), fb = b.split(".");
+  for (let i = 0;i < Math.max(fa.length, fb.length); i++) {
+    const x = fa[i], y = fb[i];
+    if (x === undefined)
+      return -1;
+    if (y === undefined)
+      return 1;
+    if (x === y)
+      continue;
+    const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y);
+    if (nx && ny)
+      return Number(x) < Number(y) ? -1 : 1;
+    if (nx !== ny)
+      return nx ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
+}
+function compareSemver(a, b) {
+  const pa = parseSemver(a);
+  const pb = parseSemver(b);
+  if (!pa || !pb)
+    return 0;
+  for (let i = 0;i < 3; i++) {
+    if (pa.core[i] !== pb.core[i])
+      return pa.core[i] < pb.core[i] ? -1 : 1;
+  }
+  if (pa.prerelease && !pb.prerelease)
+    return -1;
+  if (!pa.prerelease && pb.prerelease)
+    return 1;
+  if (pa.prerelease && pb.prerelease)
+    return comparePrerelease(pa.prerelease, pb.prerelease);
+  return 0;
+}
+function classifyDrift(installed, registryLatest) {
+  if (!parseSemver(installed) || !parseSemver(registryLatest))
+    return "unknown";
+  const cmp = compareSemver(installed, registryLatest);
+  return cmp === 0 ? "current" : cmp < 0 ? "stale" : "ahead";
+}
+var LAUNCHER_CACHE_SEGMENT = "/.shipflow/cli/";
+function detectChannel(realBinPath, opts = {}) {
+  if (!realBinPath)
+    return "unknown";
+  const p = realBinPath.replace(/\\/g, "/");
+  if (p.includes("/.claude/plugins/cache/"))
+    return "plugin-launcher";
+  const custom = opts.stateDir ? `${opts.stateDir.replace(/\\/g, "/").replace(/\/+$/, "")}/cli/` : null;
+  if (p.includes(LAUNCHER_CACHE_SEGMENT) || custom && p.includes(custom))
+    return "launcher-cache";
+  if (p.includes("/node_modules/@renaiss-shipflow/cli/"))
+    return "npm-global";
+  return "unknown";
+}
+var channelCache;
+function resolveCliChannel() {
+  if (channelCache !== undefined)
+    return channelCache;
+  let real = null;
+  for (const candidate of [process.argv[1], fileURLToPath(import.meta.url)]) {
+    if (!candidate)
+      continue;
+    try {
+      real = realpathSync2(candidate);
+      break;
+    } catch {}
+  }
+  channelCache = detectChannel(real, { stateDir: process.env.SHIPFLOW_STATE_DIR ?? null });
+  return channelCache;
+}
+var PLUGIN_CACHE_BASE = join2(homedir2(), ".claude", "plugins", "cache", "renaissshipflow", "shipflow");
+function resolveLauncherUpdater(cacheBase = PLUGIN_CACHE_BASE) {
   try {
-    const versions = readdirSync2(cacheBase).map((dir) => {
+    const dirs = readdirSync2(cacheBase).filter((d) => /^\d/.test(d)).sort(compareSemver);
+    for (let i = dirs.length - 1;i >= 0; i--) {
+      const p = join2(cacheBase, dirs[i], "bin", "shipflow-cli-update");
+      if (existsSync2(p))
+        return p;
+    }
+  } catch {}
+  return null;
+}
+var require_ = createRequire2(import.meta.url);
+function cliVersion() {
+  try {
+    return require_("../package.json").version;
+  } catch {
+    return "unknown";
+  }
+}
+function cliProvenance() {
+  return { version: cliVersion(), channel: resolveCliChannel() };
+}
+function withProvenance(payload) {
+  return { ...payload, cli: cliProvenance() };
+}
+var SAFE_VERSION_SPEC = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+function safeVersionSpec(v) {
+  if (typeof v !== "string")
+    return null;
+  const t = v.trim();
+  return SAFE_VERSION_SPEC.test(t) ? t : null;
+}
+function shellQuote2(s) {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+function displayVersion(v) {
+  return safeVersionSpec(v) ?? JSON.stringify(v.length > 40 ? `${v.slice(0, 40)}…` : v);
+}
+function remediationCommand(channel, target, updaterPath = null) {
+  if (!target)
+    return null;
+  if (channel === "plugin-launcher")
+    return "claude plugin update shipflow@renaissshipflow";
+  if (channel === "launcher-cache")
+    return updaterPath ? `${shellQuote2(updaterPath)} --force` : null;
+  if (channel !== "npm-global")
+    return null;
+  const version = safeVersionSpec(target);
+  return version ? `npm i -g ${CLI_PACKAGE}@${version}` : null;
+}
+function buildRemediation(drift, channel, target, pollWindowSeconds, updaterPath = null) {
+  const needed = drift === "stale";
+  const command = needed ? remediationCommand(channel, target, updaterPath) : null;
+  const note = !needed ? "no upgrade needed" : command ? "run the command, then RE-READ `renaiss-shipflow --version` — npm exits 0 on the no-op path" : channel === "launcher-cache" ? "launcher-managed copy under the ShipFlow state dir, but no plugin-cached `bin/shipflow-cli-update` was found — reinstall the plugin; `npm i -g` would NOT fix this binary" : channel === "unknown" ? "channel unknown (dev checkout?) — upgrade by hand, do not assume npm -g owns this binary" : `registry returned no usable version (${target ? displayVersion(target) : "none"}) — refusing to build a command from it; upgrade by hand`;
+  return { needed, channel, command, pollWindowSeconds, note };
+}
+function driftExitCode(drift) {
+  return drift === "stale" ? DRIFT_STALE_EXIT_CODE : 0;
+}
+function registryDistTagsUrl(pkg, registry, nonce) {
+  return `${registry.replace(/\/+$/, "")}/-/package/${encodeURIComponent(pkg)}/dist-tags?_cb=${encodeURIComponent(nonce)}`;
+}
+async function fetchRegistryLatest(opts = {}) {
+  const pkg = opts.pkg ?? CLI_PACKAGE;
+  const registry = opts.registry ?? process.env.SHIPFLOW_NPM_REGISTRY ?? DEFAULT_REGISTRY;
+  const timeoutMs = opts.timeoutMs ?? REGISTRY_TIMEOUT_MS;
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const nonce = opts.nonce ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    const res = await fetchImpl(registryDistTagsUrl(pkg, registry, nonce), {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { "cache-control": "no-cache", pragma: "no-cache", accept: "application/json" }
+    });
+    if (!res.ok)
+      return { package: pkg, latest: null, error: `HTTP ${res.status}` };
+    const tags = await res.json();
+    const latest = typeof tags?.latest === "string" ? tags.latest : null;
+    return { package: pkg, latest, error: latest ? null : "registry returned no `latest` dist-tag" };
+  } catch (e) {
+    return { package: pkg, latest: null, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+function driftWarnings(input) {
+  const { cli, plugin, registryLatest, registryError, drift, channel, updaterPath = null } = input;
+  const out = [];
+  if (plugin && plugin !== cli) {
+    out.push(`plugin ${plugin} ≠ cli ${cli} — they are lockstep-versioned, so one lags; run /shipflow-update.`);
+  }
+  if (drift === "stale" && registryLatest) {
+    const cmd = remediationCommand(channel, registryLatest, updaterPath);
+    out.push(`cli ${cli} is BEHIND npm latest ${displayVersion(registryLatest)} (channel: ${channel}) — stale verdicts under-report blockers; ` + (cmd ? `upgrade: ${cmd}, then re-read --version.` : `no automatic remediation for channel ${channel} — upgrade by hand; do NOT assume npm -g owns this binary.`));
+  }
+  if (registryLatest && plugin && compareSemver(plugin, registryLatest) < 0) {
+    out.push(`plugin ${plugin} is behind npm latest ${displayVersion(registryLatest)} — run /shipflow-update (skill docs lag the CLI).`);
+  }
+  if (drift === "ahead" && registryLatest) {
+    out.push(`cli ${cli} is AHEAD of npm latest ${displayVersion(registryLatest)} — unpublished build (local/dev checkout or a publish still in flight).`);
+  }
+  if (drift === "unknown") {
+    out.push(`drift UNKNOWN — registry probe failed (${registryError ?? "unparseable version"}); treat merge verdicts as unverified.`);
+  }
+  return out;
+}
+
+// src/commands/version.ts
+function installedPluginVersion(cacheBase = join3(homedir3(), ".claude", "plugins", "cache", "renaissshipflow", "shipflow")) {
+  try {
+    const versions = readdirSync3(cacheBase).map((dir) => {
       try {
-        const j = JSON.parse(readFileSync2(join2(cacheBase, dir, ".claude-plugin", "plugin.json"), "utf8"));
+        const j = JSON.parse(readFileSync2(join3(cacheBase, dir, ".claude-plugin", "plugin.json"), "utf8"));
         return j.version || dir;
       } catch {
         return dir;
@@ -4211,30 +4414,42 @@ function installedPluginVersion(cacheBase = join2(homedir2(), ".claude", "plugin
     return null;
   }
 }
-function registerVersionCommand(program2, cliVersion) {
-  program2.command("version").description("Show ShipFlow component versions: CLI, installed plugin/skill, and the server build").option("--api-url <url>", "Override the server URL for the build probe").option("--json", "Output JSON").action(runAction(async (opts) => {
-    const cli = cliVersion;
+async function probeServer(apiUrl) {
+  try {
+    const res = await fetch(`${apiUrl}/api/v1/version`, { signal: AbortSignal.timeout(8000) });
+    return res.ok ? await res.json() : { error: `HTTP ${res.status}` };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+function registerVersionCommand(program2, cliVersion2) {
+  program2.command("version").description("Show ShipFlow component versions: CLI, installed plugin/skill, the server build, and CLI drift vs the npm registry's latest").option("--api-url <url>", "Override the server URL for the build probe").option("--check", `Exit ${driftExitCode("stale")} when the installed CLI is BEHIND the registry (0 otherwise) — the loop's drift gate`).option("--json", "Output JSON").action(runAction(async (opts) => {
+    const cli = cliVersion2;
     const plugin = installedPluginVersion();
     const apiUrl = resolveApiUrl(opts.apiUrl);
-    let server;
-    try {
-      const res = await fetch(`${apiUrl}/api/v1/version`, { signal: AbortSignal.timeout(8000) });
-      server = res.ok ? await res.json() : { error: `HTTP ${res.status}` };
-    } catch (e) {
-      server = { error: e instanceof Error ? e.message : String(e) };
-    }
-    emit(opts, { cli, plugin, server: { url: apiUrl, ...server } }, () => {
+    const [server, registry] = await Promise.all([probeServer(apiUrl), fetchRegistryLatest()]);
+    const drift = classifyDrift(cli, registry.latest);
+    const channel = resolveCliChannel();
+    const updaterPath = channel === "launcher-cache" ? resolveLauncherUpdater() : null;
+    const remediation = buildRemediation(drift, channel, registry.latest, resolveCliDriftPollSeconds(), updaterPath);
+    const warnings = driftWarnings({ cli, plugin, registryLatest: registry.latest, registryError: registry.error, drift, channel, updaterPath });
+    emit(opts, { cli, plugin, server: { url: apiUrl, ...server }, registry, drift, channel, remediation, warnings }, () => {
       const serverCell = server.error ? `unreachable (${server.error})` : `${server.version ? `${server.version} · ` : ""}${(server.revision || "unknown").slice(0, 12)}${server.dirty ? "+dirty" : ""}${server.buildTime ? ` · built ${server.buildTime}` : ""}`;
+      const driftIcon = { current: "✅", stale: "⛔", ahead: "\uD83E\uDDEA", unknown: "❔" };
       for (const line of renderTable(["Component", "Version"], [
-        ["cli", cli],
+        ["cli", `${cli} (${channel})`],
         ["plugin/skill", plugin ?? "not installed"],
-        [`server (${apiUrl})`, serverCell]
+        [`server (${apiUrl})`, serverCell],
+        ["npm latest", registry.latest ? `${registry.latest} — drift ${driftIcon[drift]} ${drift}` : `unreachable (${registry.error}) — drift ❔ unknown`]
       ]))
         console.log(line);
-      if (plugin && plugin !== cli) {
-        console.log(`⚠️  plugin ${plugin} ≠ cli ${cli} — they are lockstep-versioned, so one lags; run /shipflow-update.`);
-      }
+      for (const w of warnings)
+        console.log(`⚠️  ${w}`);
+      if (remediation.needed && remediation.command)
+        console.log(`→ ${remediation.command}`);
     });
+    if (opts.check)
+      process.exit(driftExitCode(drift));
   }));
 }
 
@@ -5012,7 +5227,7 @@ function registerInboxCommand(program2) {
       conflictSweep: sweepEnabled,
       humanOnlyConflicts: prs.filter((p) => ("humanOnly" in p) && p.humanOnly).length
     };
-    emit(opts, { repo, prs, issues, summary }, () => {
+    emit(opts, withProvenance({ repo, prs, issues, summary }), () => {
       console.log(`\uD83D\uDCE5 Inbox for ${repo}`);
       console.log(`Needs action: ${meter(summary.prsNeedingAttention, prs.length)} PRs · ${meter(summary.issuesNeedingAttention, issues.length)} issues · ✅ ${summary.readyToMerge} ready to merge`);
       if (degraded)
@@ -5095,8 +5310,8 @@ ${cat}`);
 }
 
 // src/priorities.ts
-import { existsSync as existsSync2, readFileSync as readFileSync4 } from "node:fs";
-import { join as join3 } from "node:path";
+import { existsSync as existsSync3, readFileSync as readFileSync4 } from "node:fs";
+import { join as join4 } from "node:path";
 var PRIORITIES_DOC_RELPATH = "docs/PRIORITIES.md";
 function tableCells(line) {
   const t = line.trim();
@@ -5145,8 +5360,8 @@ function repoRoot() {
   }
 }
 function loadPrioritiesDoc(root = repoRoot()) {
-  const path = join3(root, PRIORITIES_DOC_RELPATH);
-  if (!existsSync2(path))
+  const path = join4(root, PRIORITIES_DOC_RELPATH);
+  if (!existsSync3(path))
     return { found: false, path, classes: [] };
   const classes = parseWorkClasses(readFileSync4(path, "utf8"));
   if (!classes.length) {
@@ -5269,6 +5484,12 @@ var SETTINGS = [
     field: "loopWorkerModel",
     set: (v, c) => c.loopWorkerModel = v.trim(),
     effective: resolveLoopWorkerModel
+  },
+  {
+    key: "cli-drift-poll-seconds",
+    field: "cliDriftPollSeconds",
+    set: (v, c) => String(c.cliDriftPollSeconds = parseIntOr(v, 180)),
+    effective: resolveCliDriftPollSeconds
   }
 ];
 var byKey = new Map(SETTINGS.map((s) => [s.key, s]));
@@ -5402,8 +5623,8 @@ function registerCapabilityCommand(program2) {
 
 // src/commands/pr.ts
 import { execSync as execSync4 } from "node:child_process";
-import { existsSync as existsSync3, readFileSync as readFileSync5 } from "node:fs";
-import { join as join4 } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync5 } from "node:fs";
+import { join as join5 } from "node:path";
 import { hostname as hostname3 } from "node:os";
 
 // src/review-contract-data.ts
@@ -6390,7 +6611,7 @@ ${opts.body ?? ""}`;
       }));
     } catch {}
     if (opts.json) {
-      console.log(JSON.stringify(buildReviewPacketData({ pr: prView, threads, diff, issue, features }), null, 2));
+      console.log(JSON.stringify(withProvenance(buildReviewPacketData({ pr: prView, threads, diff, issue, features })), null, 2));
       return;
     }
     console.log(buildReviewPacket({ pr: prView, threads, diff, issue, features }));
@@ -6452,7 +6673,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
       reviewers: [...new Set(threads.map((t) => t.author).filter(Boolean))],
       threads: unresolved.map((t) => ({ id: t.id, author: t.author, path: t.path, line: t.line, body: t.body }))
     };
-    emit(opts, out, () => {
+    emit(opts, withProvenance(out), () => {
       if (!unresolved.length) {
         console.log(`✅ PR #${number}: no unresolved review threads.`);
         return;
@@ -6655,9 +6876,9 @@ function rebaseInProgress() {
   } catch {
     return null;
   }
-  if (existsSync3(join4(gitDir, "rebase-merge")))
+  if (existsSync4(join5(gitDir, "rebase-merge")))
     return "rebase-merge";
-  if (existsSync3(join4(gitDir, "rebase-apply")))
+  if (existsSync4(join5(gitDir, "rebase-apply")))
     return "rebase-apply";
   return null;
 }
@@ -6675,7 +6896,7 @@ function rebaseOnto() {
     return null;
   try {
     const gitDir = execSync4("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
-    const onto = readFileSync5(join4(gitDir, state, "onto"), "utf8").trim();
+    const onto = readFileSync5(join5(gitDir, state, "onto"), "utf8").trim();
     return onto && refExists(onto) ? onto : null;
   } catch {
     return null;
@@ -6726,8 +6947,8 @@ function syncEntryGuard(i) {
 }
 
 // src/commands/test.ts
-import { existsSync as existsSync4, readFileSync as readFileSync6 } from "node:fs";
-import { join as join5 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync6 } from "node:fs";
+import { join as join6 } from "node:path";
 function registerTestCommand(program2) {
   program2.command("test").description("Run the project's local test command (auto-detected)").option("--json", "Emit a machine-readable summary line (runner + exit code); test output still streams").allowUnknownOption().action((opts) => {
     const root = getCwdRepoRoot();
@@ -6772,32 +6993,32 @@ function runRunner(runner, root) {
 }
 function hasTestScript(root) {
   try {
-    const pkg = JSON.parse(readFileSync6(join5(root, "package.json"), "utf8"));
+    const pkg = JSON.parse(readFileSync6(join6(root, "package.json"), "utf8"));
     return typeof pkg?.scripts?.test === "string" && pkg.scripts.test.trim() !== "";
   } catch {
     return false;
   }
 }
 function detectRunner(root) {
-  if (existsSync4(join5(root, "package.json"))) {
+  if (existsSync5(join6(root, "package.json"))) {
     const bunArgs = hasTestScript(root) ? ["run", "test"] : ["test"];
-    if (existsSync4(join5(root, "bun.lockb")))
+    if (existsSync5(join6(root, "bun.lockb")))
       return { cmd: "bun", args: bunArgs, source: "bun.lockb" };
-    if (existsSync4(join5(root, "bun.lock")))
+    if (existsSync5(join6(root, "bun.lock")))
       return { cmd: "bun", args: bunArgs, source: "bun.lock" };
-    if (existsSync4(join5(root, "pnpm-lock.yaml")))
+    if (existsSync5(join6(root, "pnpm-lock.yaml")))
       return { cmd: "pnpm", args: ["test"], source: "pnpm-lock.yaml" };
-    if (existsSync4(join5(root, "yarn.lock")))
+    if (existsSync5(join6(root, "yarn.lock")))
       return { cmd: "yarn", args: ["test"], source: "yarn.lock" };
     return { cmd: "npm", args: ["test"], source: "package.json" };
   }
-  if (existsSync4(join5(root, "go.mod")))
+  if (existsSync5(join6(root, "go.mod")))
     return { cmd: "go", args: ["test", "./..."], source: "go.mod" };
-  if (existsSync4(join5(root, "Cargo.toml")))
+  if (existsSync5(join6(root, "Cargo.toml")))
     return { cmd: "cargo", args: ["test"], source: "Cargo.toml" };
-  if (existsSync4(join5(root, "pyproject.toml")))
+  if (existsSync5(join6(root, "pyproject.toml")))
     return { cmd: "pytest", args: [], source: "pyproject.toml" };
-  if (existsSync4(join5(root, "pytest.ini")))
+  if (existsSync5(join6(root, "pytest.ini")))
     return { cmd: "pytest", args: [], source: "pytest.ini" };
   return null;
 }
@@ -7026,7 +7247,7 @@ function registerProfilesCommand(program2) {
 }
 
 // src/index.ts
-var pkg = createRequire2(import.meta.url)("../package.json");
+var pkg = createRequire3(import.meta.url)("../package.json");
 var program2 = new Command;
 program2.name("renaiss-shipflow").description("CLI for RenaissShipFlow - AI-powered project management automation").version(pkg.version).option("--api-url <url>", "RenaissShipFlow API base URL").option("--org <org>", 'Organization slug (default: "default")', "default").option("--profile <name>", "Config profile — isolated credentials per tenant (also SHIPFLOW_PROFILE)");
 program2.hook("preAction", () => {

@@ -24,7 +24,7 @@ Roles section.
 1. **Setup** — one reusable worktree
 2. **Policies** — the knobs (`merge-policy`, `require-ci`, `max-fix-attempts`, `wip-limit`, `stale-pr-hours`, `bug-hunt`, `require-review`)
 3. **Roles** — orchestrator · reviewer · worker subagents
-4. **The cycle** — A reconcile in-flight · B admit new work · C bug sweep · D repeat/stop
+4. **The cycle** — 0 CLI drift check · A reconcile in-flight · B admit new work · C bug sweep · D repeat/stop
 5. **Reconcile playbook** — inbox `state` → action
 6. **Guardrails**
 
@@ -79,6 +79,7 @@ Read them with `renaiss-shipflow config list`; set with `config set <key> <v>`
 | `bug-hunt` | `true` | when the queue is empty, run a test+QA sweep and file issues for bugs found (Phase C) |
 | `bug-hunt-cap` | `5` | max NEW issues the bug sweep may file per run |
 | `require-review` | `true` | route every issue (intake) and PR (pre-merge) through the reviewer subagent first |
+| `cli-drift-poll-seconds` | `180` | how long the post-merge CLI drift check waits for npm to publish before continuing degraded (§0) |
 
 The real merge guard is the repo's **GitHub branch protection** — even `auto-on-green`
 can't merge what GitHub blocks. Approval = a GitHub review approval **or** the
@@ -115,11 +116,138 @@ your context.
 
 ## The cycle — each tick
 
+### 0. CLI drift check — POST-MERGE (primary) · TICK-START (backstop)
+
+Every verdict this loop reaches — inbox `state`, `pr ready`, `pr automerge` —
+comes from whatever `renaiss-shipflow` PATH resolves, and **drift is
+directional**: an older CLI knows about fewer blockers, so it reports *fewer*
+reasons to park and biases toward merging what should hold. A binary twelve
+versions behind classified a `CONFLICTING` PR as `approved_ready`,
+`readyToMerge: 1` — and the loop had created that drift itself, by merging its
+own fix (issue #435).
+
+**Neither trigger alone suffices — run both:**
+
+| Trigger | Catches | Misses on its own |
+|---|---|---|
+| **post-merge** (primary) | the version your own merge just published | drift a fresh session inherited |
+| **tick-start** (backstop) | drift from before this session | a whole tick on the binary the merge obsoleted |
+
+**Procedure** — `renaiss-shipflow version --json` → read `drift`
+(`current`/`stale`/`ahead`/`unknown`), `registry.latest`, `channel`,
+`remediation`. (`version --check` is the same probe as an exit code: **9** =
+stale, 0 = anything else, for a scripted gate — but a binary predating the gate
+rejects the flag entirely, which is step 1's `legacy-stale` case, not a pass.)
+
+1. **Tick start** — probe **once**, no poll (nothing is publishing). Then read
+   the answer's SHAPE before its content:
+
+   | Probe answer | Means | Do |
+   |---|---|---|
+   | `drift` key present, not `stale` | gate ran, binary is fine | continue immediately |
+   | `drift` key present, `stale` | gate ran, binary is behind | step 3 |
+   | **no `drift` key** in `version --json` | gate **could not run** | **legacy-stale** → 1a |
+   | **`version --check` exits 1** / `unknown option` | gate **could not run** | **legacy-stale** → 1a |
+
+   **A missing gate is not a passing gate.** The drift gate ships *inside* the
+   binary it polices, so on the day it lands the binary on PATH is the previous
+   release. Measured on the live 0.28.2: `version --json` → `{cli, plugin,
+   server}` with **no `drift` key**; `version --check` → **exit 1**, `error:
+   unknown option '--check'`. Read as "not stale → continue", the exact stale
+   binary this gate exists to repair green-lights itself and is never upgraded.
+   Exit **1** is never a gate verdict — the gate exits only **9** or **0**.
+
+1a. **Legacy-stale bootstrap** — the gate can't tell you, so read both sides
+   yourself and remediate before anything else this tick:
+
+   ```bash
+   INSTALLED=$(renaiss-shipflow --version 2>/dev/null | tr -d '[:space:]')
+   LATEST=$(curl -fsSL --max-time 8 -H 'cache-control: no-cache' \
+     "https://registry.npmjs.org/-/package/@renaiss-shipflow%2Fcli/dist-tags?_cb=$(date +%s)" \
+     | sed 's/.*"latest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+   REAL=$(readlink -f "$(command -v renaiss-shipflow)" 2>/dev/null \
+          || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$(command -v renaiss-shipflow)")
+   PLUGIN_DIR=$(ls -d ~/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/null | sort -V | tail -1)
+   echo "installed=$INSTALLED latest=$LATEST realpath=$REAL plugin_dir=$PLUGIN_DIR"
+   ```
+
+   `$LATEST` empty (offline) → warn once, **continue degraded** — never halt.
+   `$INSTALLED` older than `$LATEST` (compare with `sort -V`, not string
+   equality) → remediate via the step-3 channel table using `$REAL`, then
+   re-read `--version` (step 4). After a verified upgrade the new binary answers
+   `version --json` with a `drift` key and every later tick uses the normal path.
+2. **After each merge that could publish a CLI** — **poll** until
+   `drift: "stale"` appears or the window closes.
+
+   **Scope the poll first: did this merge touch `apps/renaissshipflow-cli/**`?**
+
+   ```bash
+   gh pr view <n> --json files --jq '[.files[].path | select(startswith("apps/renaissshipflow-cli/"))] | length'
+   ```
+
+   `0` → **skip the poll entirely** and continue. A merge that publishes no CLI
+   can never make your binary stale, so the window buys nothing — and it is
+   charged per merge: every server-only ShipFlow change, and **every merge in
+   every other repo the loop runs against**, would otherwise stall ~3 minutes.
+   The tick-start probe (step 1) still catches anything this skips.
+
+   Non-zero → poll. Publishing lags a merge by **~62s** (measured: #441 merged
+   05:19:07Z, npm had 0.28.2 at 05:20:08Z), so the registry legitimately still
+   shows the old version right after your merge. Probe every ~15s up to
+   `remediation.pollWindowSeconds` (`config get cli-drift-poll-seconds`,
+   default 180, env `SHIPFLOW_CLI_DRIFT_POLL_SECONDS`). Window closes with no
+   stale reading → continue; the next tick-start catches it.
+3. **On `stale` — run `remediation.command` verbatim.** It **branches on
+   `channel`**, and a remediation that runs cleanly against the wrong channel
+   fixes nothing (this bug recurring inside its own fix):
+
+   | `channel` | realpath contains | command |
+   |---|---|---|
+   | `plugin-launcher` | `/.claude/plugins/cache/` | `claude plugin update shipflow@renaissshipflow` |
+   | `launcher-cache` | `/.shipflow/cli/` | `"$PLUGIN_DIR/bin/shipflow-cli-update" --force` |
+   | `npm-global` | `/node_modules/@renaiss-shipflow/cli/` | `npm i -g @renaiss-shipflow/cli@<registry.latest>` — an **exact** version |
+   | `unknown` | anything else | none — banner, then continue (a dev checkout; a human decides) |
+
+   **Match the rows top-down — the order is the fix.** `launcher-cache` is the
+   npm copy `bin/shipflow-cli-update` fetches into
+   `~/.shipflow/cli/<version>/node_modules/@renaiss-shipflow/cli/` for
+   `bin/renaiss-shipflow` to pick up (issue #307). It **contains the
+   `npm-global` substring**, so matching `npm-global` first sends `npm i -g`
+   into a prefix the launcher never scans: exit 0, nothing fixed, running binary
+   exactly as stale. `renaiss-shipflow version --json` already applies this
+   order — prefer its `channel` + `remediation.command` over hand-matching, and
+   hand-match only on the legacy path (1a), where the binary can't tell you.
+
+   **Never a bare `@latest`.** npm 10.9.2 sets `preferOnline` for `npm view`
+   but not for `npm install`, which serves dist-tags from a cache for up to
+   300s — so once a losing install cached the old tag, every later `@latest`
+   install stayed stale. An exact-version spec is not a tag lookup and refetches.
+4. **Verify by the version STRING, never by the exit code.** Re-read
+   `renaiss-shipflow --version` and compare it to the reading you took before.
+   `npm i -g …@latest` was reproduced printing `changed 12 packages in 2s` on
+   **exit 0** with the version unchanged. Same string = the upgrade did not
+   happen, whatever npm said.
+5. **Continue either way — NEVER halt the tick.** Verified upgrade → carry on.
+   Unverified → print a loud one-line banner naming installed vs registry
+   (`⛔ CLI DRIFT: installed 0.27.10 · registry 0.28.2 · channel npm-global —
+   verdicts may under-report blockers`) and **CONTINUE DEGRADED**. A
+   refuse-on-gap gate would deadlock the loop after *every merge it performs*,
+   because the publish lag is guaranteed. Auto-upgrade → verify → warn; never
+   refuse.
+
+`drift: "unknown"` (offline, registry blip) is **not** stale: warn once and
+continue — an offline loop degrades, it doesn't stop.
+
+**Provenance:** `inbox`, `pr packet` and `pr reviews` each stamp
+`cli: {version, channel}` into their `--json` envelope, so any verdict in the
+transcript can be traced back to the binary that produced it after the fact.
+
 ### A. Reconcile in-flight work — dispatch a worker per item
 
-Run `renaiss-shipflow inbox --json` (compact — this is all *you* read). For each PR
-whose `state` needs action, **dispatch a worker subagent** (Task tool) scoped to
-that one PR and collect its return. Loop A until nothing in-flight `needsAttention`:
+Run the **tick-start drift probe** (§0, one call), then `renaiss-shipflow inbox
+--json` (compact — this is all *you* read). For each PR whose `state` needs
+action, **dispatch a worker subagent** (Task tool) scoped to that one PR and
+collect its return. Loop A until nothing in-flight `needsAttention`:
 
 - `ci_failing` → worker fixes the failing checks (`gh pr checks <n>`) on the branch
   and pushes. Track attempts across ticks; after `max-fix-attempts` still red →
@@ -134,6 +262,10 @@ that one PR and collect its return. Loop A until nothing in-flight `needsAttenti
   approval allow **and no review thread is unresolved**; parks on `manual`). The
   unresolved-thread block is a hard gate — an approved PR with an open bot comment
   will not merge.
+  **On a merge that actually lands, run the POST-MERGE drift check (§0) before
+  the next dispatch** — merging a ShipFlow PR publishes a new CLI, and every
+  later verdict this tick would otherwise come from the binary that merge just
+  obsoleted. That is exactly how all four measured occurrences were created.
   **`"unsatisfiable": true` in the automerge JSON = ESCALATE, do not re-poll**
   (issue #305). It means a blocker can never clear by waiting — today: `require-ci`
   is on but the repo has NO CI configured. Re-running the same tick can only give
