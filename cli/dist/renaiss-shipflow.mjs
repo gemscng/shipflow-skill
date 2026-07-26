@@ -2944,7 +2944,28 @@ function getCwdRemote() {
     return null;
   }
 }
+function cwdRepoFullName() {
+  const r = getCwdRemote();
+  return r ? `${r.owner}/${r.repo}` : null;
+}
 async function resolveProject(client, creds) {
+  const r = await resolveProjectDegradable(client, creds);
+  if (!r.project)
+    throw new Error(r.cause ?? "ShipFlow project resolution failed");
+  return r.project;
+}
+var SHIPFLOW_API_DEP = "shipflow-api";
+function noAnswerStatus(status) {
+  return status >= 500 || status === 408 || status === 429;
+}
+function isDependencyUnavailable(e) {
+  return e instanceof ApiError ? noAnswerStatus(e.status) : true;
+}
+function flattenCause(e, max = 300) {
+  const one = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+}
+async function resolveProjectDegradable(client, creds) {
   const root = getCwdRepoRoot();
   if (!root) {
     throw new Error("Not in a git repository.");
@@ -2956,9 +2977,24 @@ async function resolveProject(client, creds) {
   const repoFullName = `${remote.owner}/${remote.repo}`;
   const cacheKey = projectCacheKeyForRepoPath(resolve(root));
   const cache = loadProjectCache();
-  if (cache[cacheKey])
-    return { ...cache[cacheKey], repoFullName };
-  const lookup = await client.getRepoByFullName(creds.org, remote.owner, remote.repo);
+  if (cache[cacheKey]) {
+    return { repoFullName, project: { ...cache[cacheKey], repoFullName }, degraded: [], warning: null };
+  }
+  let lookup;
+  try {
+    lookup = await client.getRepoByFullName(creds.org, remote.owner, remote.repo);
+  } catch (e) {
+    if (!isDependencyUnavailable(e))
+      throw e;
+    const cause = flattenCause(e);
+    return {
+      repoFullName,
+      project: null,
+      degraded: [SHIPFLOW_API_DEP],
+      warning: degradedProjectWarning(repoFullName, cause),
+      cause
+    };
+  }
   if (!lookup.projects || lookup.projects.length === 0) {
     throw new Error(`Repo ${repoFullName} is not in any ShipFlow project. Run \`renaiss-shipflow init\`.`);
   }
@@ -2975,7 +3011,13 @@ async function resolveProject(client, creds) {
   };
   cache[cacheKey] = entry;
   saveProjectCache(cache);
-  return { ...entry, repoFullName };
+  return { repoFullName, project: { ...entry, repoFullName }, degraded: [], warning: null };
+}
+function degradedProjectWarning(repoFullName, cause) {
+  return `⚠️ WARNING ${SHIPFLOW_API_DEP} unavailable — ShipFlow project resolution NOT performed; ` + `repo ${repoFullName} read from the git remote, project-scoped steps (feature map, ShipFlow signals) skipped: ${cause}`;
+}
+function featureMapSkippedWarning(cause) {
+  return `⚠️ WARNING ${SHIPFLOW_API_DEP} feature map unavailable — per-feature evidence coverage NOT checked; ` + `packet omits the coverage lines: ${cause}`;
 }
 
 // src/commands/helpers.ts
@@ -3007,6 +3049,41 @@ async function loadCtx(program2) {
   const { auth, creds, client } = loadJwtCtx(program2);
   const project = await resolveProject(client, creds);
   return { auth, creds, client, project };
+}
+function repoOverrideBypassesProject(repoOverride, cwdRepo) {
+  const target = repoOverride?.trim();
+  if (!target)
+    return false;
+  return target.toLowerCase() !== (cwdRepo ?? "").toLowerCase();
+}
+async function loadGhCtx(program2, repoOverride) {
+  const { auth, creds, client } = loadJwtCtx(program2);
+  if (repoOverrideBypassesProject(repoOverride, cwdRepoFullName())) {
+    return {
+      auth,
+      creds,
+      client,
+      project: { repoFullName: repoOverride.trim(), projectId: null, projectName: null },
+      degraded: []
+    };
+  }
+  const r = await resolveProjectDegradable(client, creds);
+  if (r.warning)
+    console.warn(r.warning);
+  return {
+    auth,
+    creds,
+    client,
+    project: {
+      repoFullName: r.repoFullName,
+      projectId: r.project?.projectId ?? null,
+      projectName: r.project?.projectName ?? null
+    },
+    degraded: r.degraded
+  };
+}
+function degradedField(ctx) {
+  return ctx.degraded.length ? { degraded: ctx.degraded } : {};
 }
 async function signalBestEffort(ctx, refKind, n, action, body, label) {
   try {
@@ -6496,8 +6573,6 @@ function unresolvedThreadsOrBlock(repo, number) {
 function registerPRCommand(program2) {
   const pr = program2.command("pr").description("Pull request actions");
   pr.command("create").description("Open a PR; prepends ShipFlow context to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (added under ShipFlow header)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR)", "warn").option("--json", "Output JSON").action(runAction(async (opts) => {
-    const ctx = await loadCtx(program2);
-    const branch = currentBranch();
     if (!opts.allowSuspiciousEmail) {
       const bad = findSuspiciousEmails(branchAuthorEmails(), hostname3());
       if (bad.length) {
@@ -6522,6 +6597,8 @@ function registerPRCommand(program2) {
       for (const p of lintProblems)
         console.warn(`⚠️  body lint: ${p}`);
     }
+    const ctx = await loadCtx(program2);
+    const branch = currentBranch();
     const issueNumber = opts.issue ? parseInt(opts.issue, 10) : detectIssueFromBranch(branch);
     const linkMode = opts.partial ? "part-of" : "closes";
     const issueUrl = issueNumber ? `https://github.com/${ctx.project.repoFullName}/issues/${issueNumber}` : undefined;
@@ -6766,7 +6843,7 @@ ${opts.body ?? ""}`;
       process.exit(8);
   }));
   pr.command("packet <number>").description("Emit the pre-baked review packet for a PR: spec/brief, description, CI, unresolved threads, evidence, and a noise-filtered budgeted diff — everything the loop reviewer needs in one call").option("--repo <fullname>", "Override target repo").option("--json", "Emit the packet as a structured object instead of markdown").action(runAction(async (numberStr, opts) => {
-    const ctx = await loadCtx(program2);
+    const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const prView = ghPRView(repo, number);
     let threads = [];
@@ -6783,25 +6860,38 @@ ${opts.body ?? ""}`;
       } catch {}
     }
     let features;
-    try {
-      const fm = await ctx.client.getFeatureMapping(ctx.creds.org, ctx.project.projectId);
-      features = Object.entries(fm.features ?? {}).map(([key, f]) => ({
-        key,
-        name: f.name || key,
-        paths: f.paths ?? [],
-        layer: f.layer || undefined,
-        description: f.description || undefined,
-        testPriority: f.test_priority || undefined
-      }));
-    } catch {}
+    const degraded = [...ctx.degraded];
+    let skipCause = ctx.project.projectId ? null : "no ShipFlow project resolved for the target repo";
+    if (ctx.project.projectId) {
+      try {
+        const fm = await ctx.client.getFeatureMapping(ctx.creds.org, ctx.project.projectId);
+        features = Object.entries(fm.features ?? {}).map(([key, f]) => ({
+          key,
+          name: f.name || key,
+          paths: f.paths ?? [],
+          layer: f.layer || undefined,
+          description: f.description || undefined,
+          testPriority: f.test_priority || undefined
+        }));
+      } catch (e) {
+        if (isDependencyUnavailable(e))
+          degraded.push(SHIPFLOW_API_DEP);
+        skipCause = flattenCause(e);
+      }
+    }
+    if (skipCause && !ctx.degraded.length)
+      console.warn(featureMapSkippedWarning(skipCause));
     if (opts.json) {
-      console.log(JSON.stringify(withProvenance(buildReviewPacketData({ pr: prView, threads, diff, issue, features })), null, 2));
+      console.log(JSON.stringify({
+        ...withProvenance(buildReviewPacketData({ pr: prView, threads, diff, issue, features })),
+        ...degradedField({ degraded })
+      }, null, 2));
       return;
     }
     console.log(buildReviewPacket({ pr: prView, threads, diff, issue, features }));
   }));
   pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", "1-2 sentence verdict summary").option("--verdict <v>", "approve | comment | request_changes | reject", "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...]}); '-' or omitted reads stdin").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
-    const ctx = await loadCtx(program2);
+    const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const rawFindings = opts.findings && opts.findings !== "-" ? readFileSync5(opts.findings, "utf8") : opts.findings === "-" ? await readStdin2() : "";
     let parsed;
@@ -6818,10 +6908,10 @@ ${opts.body ?? ""}`;
     ghCreateReview(repo, number, payload);
     const inlineCount = payload.comments.length;
     const foldedCount = findings.length - inlineCount;
-    emit(opts, { number, verdict, inline: inlineCount, folded: foldedCount }, () => console.log(`Posted ${verdict} review on #${number}: ${inlineCount} inline finding(s) on the diff${foldedCount ? `, ${foldedCount} folded into the body` : ""}.`));
+    emit(opts, { number, verdict, inline: inlineCount, folded: foldedCount, ...degradedField(ctx) }, () => console.log(`Posted ${verdict} review on #${number}: ${inlineCount} inline finding(s) on the diff${foldedCount ? `, ${foldedCount} folded into the body` : ""}.`));
   }));
   pr.command("approve <number>").description("Record the loop reviewer's approval: adds the shipflow-approved label (the automerge approval source) + an optional comment").option("--comment <text>", "Reviewer summary to post on the PR").option("--repo <fullname>", "Override target repo").option("--force", "Approve even with unresolved review threads (not recommended)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
-    const ctx = await loadCtx(program2);
+    const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const unresolved = ghReviewThreads(repo, number).filter((t) => !t.isResolved);
     if (unresolved.length && !opts.force) {
@@ -6829,7 +6919,7 @@ ${opts.body ?? ""}`;
 `)[0].slice(0, 80)]);
       const list = renderTable(["Reviewer", "Location", "Comment"], rows).map((l) => `  ${l}`).join(`
 `);
-      emit(opts, { number, approved: false, unresolvedThreads: unresolved.length }, () => console.error(`⛔ Not approving PR #${number}: ${unresolved.length} unresolved review thread(s):
+      emit(opts, { number, approved: false, unresolvedThreads: unresolved.length, ...degradedField(ctx) }, () => console.error(`⛔ Not approving PR #${number}: ${unresolved.length} unresolved review thread(s):
 ${list}
 Address + resolve them (pr resolve), then approve (or --force).`));
       process.exit(7);
@@ -6840,10 +6930,10 @@ Address + resolve them (pr resolve), then approve (or --force).`));
     if (opts.comment) {
       execSync4(`gh pr comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(stampLoopReview(opts.comment))}`, { stdio: "ignore" });
     }
-    emit(opts, { number, approved: true, label: APPROVED_LABEL }, () => console.log(`✅ PR #${number} approved — labelled "${APPROVED_LABEL}" (automerge can proceed under an auto-* policy).`));
+    emit(opts, { number, approved: true, label: APPROVED_LABEL, ...degradedField(ctx) }, () => console.log(`✅ PR #${number} approved — labelled "${APPROVED_LABEL}" (automerge can proceed under an auto-* policy).`));
   }));
   pr.command("reviews <number>").description("External review state: unresolved review threads (incl. bot reviewers) the loop must fix before approving").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
-    const ctx = await loadCtx(program2);
+    const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const me = ghCurrentLogin();
     const threads = ghReviewThreads(repo, number);
@@ -6855,7 +6945,8 @@ Address + resolve them (pr resolve), then approve (or --force).`));
       unresolvedThreads: unresolved.length,
       externalUnresolved: externalUnresolved.length,
       reviewers: [...new Set(threads.map((t) => t.author).filter(Boolean))],
-      threads: unresolved.map((t) => ({ id: t.id, author: t.author, path: t.path, line: t.line, body: t.body }))
+      threads: unresolved.map((t) => ({ id: t.id, author: t.author, path: t.path, line: t.line, body: t.body })),
+      ...degradedField(ctx)
     };
     emit(opts, withProvenance(out), () => {
       if (!unresolved.length) {
@@ -6870,13 +6961,13 @@ Address + resolve them (pr resolve), then approve (or --force).`));
     }, { pretty: true });
   }));
   pr.command("resolve <number>").description("Resolve review threads the loop has addressed (all unresolved, or specific --thread ids)").option("--thread <id...>", "Specific thread node-id(s) to resolve (default: all unresolved)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
-    const ctx = await loadCtx(program2);
+    const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const unresolved = ghReviewThreads(repo, number).filter((t) => !t.isResolved);
     const targets = opts.thread?.length ? unresolved.filter((t) => opts.thread.includes(t.id)) : unresolved;
     for (const t of targets)
       ghResolveReviewThread(t.id);
-    emit(opts, { number, resolved: targets.length }, () => console.log(`\uD83E\uDDF5 Resolved ${targets.length} review thread(s) on PR #${number}.`));
+    emit(opts, { number, resolved: targets.length, ...degradedField(ctx) }, () => console.log(`\uD83E\uDDF5 Resolved ${targets.length} review thread(s) on PR #${number}.`));
   }));
 }
 function branchAuthorEmails() {
