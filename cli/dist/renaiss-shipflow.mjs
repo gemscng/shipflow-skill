@@ -2177,16 +2177,25 @@ var SHIPFLOW_CONTRACT = {
     }
   },
   markers: {
-    $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. Do NOT change these matching semantics — only the literals are single-sourced.",
+    $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. MATCHING SEMANTICS (issue #411 changed these deliberately — the note above used to read `Do NOT change these matching semantics`): `commentIsLoopMachinery` no longer denylists three specific markers, it matches `markerPrefix` — ANY `<!-- shipflow:` token — because a denylist of known shapes guarding an unbounded set of free-form agent prose fails OPEN on every new shape the loop invents (measured on PRs #401 and #405, which cleared a merge blocker nobody confirmed). `markerPrefix` is the OPEN token every ShipFlow marker starts with; a comment carrying any of them is machinery and can never stand in for a human decision. `loopReview` stamps the loop reviewer's verdict comment (CLI review-contract.ts renderFindingBody + `pr approve --comment`) — it was a CLI-local const the server could not see, which is exactly how #405 cleared its own gate. `intentGateCleared` is the OPEN token on the server's attributable audit comment posted on EVERY `needs-reporter-review` removal, rendered as `<!-- shipflow:intent-gate-cleared by=<login> -->`; the CLI's intent gate reads it as the clearance artifact instead of trusting the bare `unlabeled` timeline event (see the `intentGate` section) — and reads it ANCHORED (own line, `by=<login> -->` shape) and ONLY from a bot/trusted-association author, because a bare Contains over every comment let anyone who can quote the literal disarm the gate permanently. `intentGateHint` stamps the server's one-time nudge posted when a human reply on a gated thread misses the release grammar; its presence is also how the nudge stays one-time (fail-stuck was previously invisible — the miss path only logged). Only the literals are single-sourced — each consumer still owns its own matching semantics.",
     triaged: "<!-- shipflow:triaged -->",
     loop: "<!-- shipflow:loop -->",
+    loopReview: "<!-- shipflow:loop-review -->",
     interpretationNote: "<!-- shipflow:interpretation -->",
+    markerPrefix: "<!-- shipflow:",
+    intentGateCleared: "<!-- shipflow:intent-gate-cleared",
     escalationBannerEmoji: "\uD83D\uDEA7",
     escalationBannerHeading: "\uD83D\uDEA7 **Needs a human**",
     verificationManifestHeading: "Verification manifest",
     verificationComment: "<!-- shipflow:verification -->",
     precedentContext: "<!-- shipflow:precedent-context",
-    precedentApplied: "<!-- shipflow:precedent-applied"
+    precedentApplied: "<!-- shipflow:precedent-applied",
+    intentGateHint: "<!-- shipflow:intent-gate-hint -->"
+  },
+  intentGate: {
+    $comment: "The release rule for the #190 intent gate (`needs-reporter-review`), single-sourced so the server's matcher, the CLI's ping comment and the skill docs cannot drift (issue #411 — the doc promised a rule the code did not implement). POLARITY: the label is a merge blocker held until a human CONFIRMS, so this is an AUTHORIZATION control, not a sentiment classifier. THE RULE: the quote-stripped body must reduce to EXACTLY ONE meaningful line — blank lines and pure-decoration lines (a `---` rule) are scaffolding, but a fenced block and everything in it COUNT as content — and that line, with leading/trailing markdown decoration and punctuation trimmed, must EQUAL one of `confirmationTokens` (case-insensitive, emoji skin-tone/variation modifiers normalised away). Nothing else clears the gate: the token is the WHOLE reply, or it does not confirm. WHY THE WHOLE BODY (PR #441, third review pass): whole-line equality judged `block[0]` and ignored everything after it, so a bare token on line 1 confirmed whatever followed. Measured through the real handler, all of `Confirmed`+`But scope it to the CLI only`, `\uD83D\uDC4D`+`not this implementation though`, `yes`+`Actually no, revert it`, `LGTM`+`hold the merge, this is wrong`, `confirmed`+`- but only the CLI half` CLEARED, and so did the blank-line forms `confirmed`+`Actually no, revert it` and `Yes`+`Actually no, revert it`. Every one is #411's exact harm: a merge on a reading the reporter had just narrowed. A SINGLE newline was enough, and that settles the scoping question — the rule ALREADY refuses extra words on the token's own line (`Confirmed — ship it` is armed), so accepting arbitrary text one newline later is incoherent: the same act, the same ambiguity, the opposite answer. Drawing the boundary at the line or at the paragraph only moves the hole down; this defect has now appeared at three granularities. Requiring the whole body is NOT the denylist the veto list was — it never inspects what follows, it refuses when anything follows. THE PRICE: `confirmed` plus a thank-you parks too. Accepted — commentary goes in a separate comment, costing one extra reply, never a wrong merge. A pasted fenced block counts as content here (unlike in the `N: answer` block parser, which skips fences whole so a fence's inner line can never be promoted to the judged line): `/confirm` over a fenced `no` was measured clearing, and a token with an attachment is not a token alone. WHY AN EXACT TOKEN AND NOT A GRAMMAR (PR #441, second review pass): the previous design matched an affirmative OPENING WORD and then vetoed a list of negations and contrastives found later in the paragraph. That is a denylist of known shapes guarding an unbounded set of free-form natural language — the exact anti-pattern this issue exists to close, re-earned inside its own fix. Negation-after-affirmative has no finite enumeration: `Confirmed the bug still repros`, `Yes, change the copy first` and `ok 1 - test passed` all survived a 27-word veto list, and each one FAILED OPEN — it merged a reading nobody confirmed. An exact token has the correct failure polarity for EVERY input, not merely for the inputs somebody remembered to enumerate: anything that is not the token leaves the gate armed, which one more reply fixes. Tokens must be unambiguous ALONE, as a whole line — that is what excludes `ok`, `sure`, `agreed`, `correct` and every bare imperative (`ship`, `merge`, `approve`, `proceed`), which read as consent or as an instruction depending on the sentence they open. The `N: answer` reply protocol also releases the gate, but it is held to the SAME stands-alone invariant as the token path (PR #441, fourth review pass): the decision block must BE the whole quote-stripped reply (no meaningful line outside it, a pasted fence included), EVERY line of that block must itself be a decision line, EVERY answer must be a `confirmationTokens` entry, and an escalation banner must actually be outstanding on the thread. Both positional checks are load-bearing and neither alone suffices — measured by ablation, the length test alone leaves `1: yes` + NEWLINE + `Actually no, revert it` clearing (same paragraph, so the counts match) and the per-line test alone leaves `1: yes` + BLANK LINE + `revert it` clearing (a later paragraph the block never reached). Reading the answers had fixed WHAT the block said but not WHERE it stopped, so this door stayed fail-OPEN at both granularities after the token path had closed both — and the escalation-outstanding guard does not mitigate it, because answering `N:` is exactly what a reporter does on an escalated thread — a content-agnostic `^\\\\d+:` match let `1: no, redo it` clear the blocker it was rejecting, and a pasted stack-trace line `10: undefined is not a function` do it by accident. FAIL-STUCK IS THE PRICE, and it is paid deliberately in two places, BOTH of which must state that the token is the whole reply or a reporter cannot discover it: `releaseHint` is the exact sentence the CLI puts on the PR when it APPLIES the label, and the server posts a one-time `intentGateHint` nudge naming the tokens whenever a human reply misses — including when the commenter's `author_association` is untrusted, which was the one branch that failed stuck in silence. Both render the token list FROM `confirmationTokens`, never from a hand-written copy, so neither can drift from the matcher — preserve that. Removing the label by hand stays the human override. Do NOT re-add a free-text grammar here to make it friendlier — narrowing the openers is safe, widening them is how this control dies.",
+    confirmationTokens: ["/confirm", "confirmed", "approved", "yes", "lgtm", "sgtm", "ship it", "\uD83D\uDC4D", "+1"],
+    releaseHint: "Reply with ONLY `confirmed` and nothing else (`/confirm`, `approved`, `yes`, `LGTM`, `sgtm`, `ship it`, `+1` and \uD83D\uDC4D also work). That one line must be the whole reply — extra words on it (`yes but …`), a second line, or a following paragraph are each read as a correction and leave this gate ON, by design. Send any commentary as a separate comment."
   },
   readability: {
     $comment: "Deterministic message-readability cap shared across GitHub surfaces: any single line that renders UNFOLDED over this many words is dense prose, not a scannable point — its detail belongs in a folded section. Enforced by the server's readability.VisibleLineWordCap (PR review + triage rendering) and the CLI's ACTION_LINE_WORD_LIMIT (loop escalation lint). ~20-word sentences plus room for a code reference.",
@@ -3411,6 +3420,197 @@ function shellQuote(s) {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+// src/pr-state.ts
+var FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
+var PENDING = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"]);
+var APPROVAL_LABELS = new Set([SHIPFLOW_CONTRACT.labels.names.shipflowApproved, "approved", "✅ approved"]);
+var REPORTER_REVIEW_REASON = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
+function ciStateOf(checks) {
+  if (!checks || checks.length === 0)
+    return "none";
+  let failing = false;
+  let pending = false;
+  let passing = false;
+  for (const c of checks) {
+    const concl = (c.conclusion ?? "").toUpperCase();
+    const status = (c.status ?? "").toUpperCase();
+    const state = (c.state ?? "").toUpperCase();
+    if (FAILING.has(concl) || FAILING.has(state)) {
+      failing = true;
+    } else if (status && status !== "COMPLETED" || PENDING.has(state)) {
+      pending = true;
+    } else if (concl === "SUCCESS" || concl === "NEUTRAL" || concl === "SKIPPED" || state === "SUCCESS") {
+      passing = true;
+    }
+  }
+  if (failing)
+    return "failing";
+  if (pending)
+    return "pending";
+  if (passing)
+    return "passing";
+  return "none";
+}
+function prAttentionReasons(pr, me) {
+  const reasons = [];
+  if (pr.reviewDecision === "CHANGES_REQUESTED")
+    reasons.push("changes_requested");
+  const failing = (pr.statusCheckRollup ?? []).some((c) => FAILING.has((c.conclusion ?? "").toUpperCase()) || FAILING.has((c.state ?? "").toUpperCase()));
+  if (failing)
+    reasons.push("ci_failing");
+  const fromOthers = (a) => !!a.author && a.author.login !== me;
+  const reviewFeedback = (pr.reviews ?? []).filter((r) => fromOthers(r) && (r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED"));
+  const otherComments = (pr.comments ?? []).filter(fromOthers);
+  if (reviewFeedback.length || otherComments.length)
+    reasons.push("review_comments");
+  return reasons;
+}
+function issueNeedsReply(comments, me) {
+  if (!comments?.length)
+    return null;
+  const last = comments[comments.length - 1];
+  return last.author && last.author.login !== me ? last : null;
+}
+function isApproved(pr) {
+  if (pr.reviewDecision === "APPROVED")
+    return true;
+  return (pr.labels ?? []).some((l) => APPROVAL_LABELS.has(l.name.trim().toLowerCase()));
+}
+function hoursSince(iso, nowMs = Date.now()) {
+  if (!iso)
+    return 0;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t))
+    return 0;
+  return Math.max(0, (nowMs - t) / 3600000);
+}
+function classifyPR(pr, me, opts = {}) {
+  let reasons = prAttentionReasons(pr, me);
+  if (opts.unresolvedThreads === 0) {
+    reasons = reasons.filter((r) => r !== "review_comments");
+  }
+  const ciState = ciStateOf(pr.statusCheckRollup);
+  const approved = isApproved(pr);
+  const ageHours = hoursSince(pr.updatedAt, opts.nowMs);
+  const staleHours = opts.staleHours ?? 48;
+  const conflicting = (pr.mergeable ?? "").toUpperCase() === "CONFLICTING";
+  let state;
+  if (opts.intentBlocked) {
+    state = "awaiting_reporter";
+    reasons = [...reasons, REPORTER_REVIEW_REASON];
+    if (conflicting && !reasons.includes("merge_conflict"))
+      reasons = [...reasons, "merge_conflict"];
+  } else if (conflicting) {
+    state = "conflict";
+    if (!reasons.includes("merge_conflict"))
+      reasons = [...reasons, "merge_conflict"];
+  } else if (ciState === "failing")
+    state = "ci_failing";
+  else if (pr.reviewDecision === "CHANGES_REQUESTED")
+    state = "changes_requested";
+  else if (reasons.includes("review_comments"))
+    state = "review_comments";
+  else if (ciState === "pending")
+    state = "ci_pending";
+  else if (approved)
+    state = "approved_ready";
+  else if (ageHours >= staleHours)
+    state = "stale";
+  else
+    state = "awaiting_review";
+  const needsAction = state !== "ci_pending" && state !== "awaiting_review" && state !== "awaiting_reporter";
+  if (needsAction && reasons.length === 0)
+    reasons = [state];
+  return { number: pr.number, state, ciState, approved, ageHours, reasons, needsAction };
+}
+var INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation";
+function intentGate(i) {
+  const blocked = i.hasLabel || i.signal && !i.everCleared;
+  const applyLabel = i.signal && !i.hasLabel && !i.everCleared;
+  return { blocked, applyLabel };
+}
+var INTENT_GATE_AUDIT_MARKER = SHIPFLOW_CONTRACT.markers.intentGateCleared;
+var INTENT_GATE_AUDIT_LINE = new RegExp(`^${INTENT_GATE_AUDIT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} by=\\S+ -->$`);
+function lastMeaningfulLine(body) {
+  const lines = body.split(`
+`);
+  for (let i = lines.length - 1;i >= 0; i--) {
+    const t = lines[i].trim();
+    if (t !== "")
+      return t;
+  }
+  return "";
+}
+function isIntentGateAuditComment(c) {
+  if (!INTENT_GATE_AUDIT_LINE.test(lastMeaningfulLine(c.body)))
+    return false;
+  const login = (c.authorLogin ?? "").trim();
+  if (login.endsWith("[bot]"))
+    return true;
+  return TRUSTED_AUTHOR_ASSOCIATIONS.has((c.authorAssociation ?? "").trim().toUpperCase());
+}
+function intentGateEverCleared(e) {
+  if (e.auditComments > 0)
+    return true;
+  return e.removals.some((r) => r.actorKnown && !r.actorIsBot);
+}
+var NO_CI_GRACE_HOURS = 0.25;
+function mergeDecision(pr, me, opts) {
+  const cl = classifyPR(pr, me, { staleHours: opts.staleHours, nowMs: opts.nowMs });
+  const blockers = [];
+  if (opts.policy === "manual")
+    blockers.push("merge-policy is manual (human merge required)");
+  if (cl.ciState === "failing")
+    blockers.push("CI is failing");
+  if (cl.ciState === "pending")
+    blockers.push("CI still running");
+  let unsatisfiable = false;
+  if (opts.requireCi && cl.ciState === "none") {
+    const zeroCheckAgeH = hoursSince(pr.createdAt, opts.nowMs);
+    const noCiComing = pr.createdAt != null && zeroCheckAgeH >= NO_CI_GRACE_HOURS;
+    if (opts.policy !== "manual" && noCiComing) {
+      unsatisfiable = true;
+      blockers.push("require-ci is on but no CI has reported and none is coming — add a workflow that runs on PRs, or run: renaiss-shipflow config set require-ci false");
+    } else {
+      blockers.push("no CI checks to confirm (set require-ci=false to allow)");
+    }
+  }
+  if (pr.reviewDecision === "CHANGES_REQUESTED")
+    blockers.push("changes requested");
+  if ((opts.unresolvedThreads ?? 0) > 0)
+    blockers.push(`${opts.unresolvedThreads} unresolved review thread(s) — address + resolve them first`);
+  if ((pr.mergeable ?? "").toUpperCase() === "CONFLICTING")
+    blockers.push("merge conflict with base (run: pr sync)");
+  if (opts.policy === "auto-on-green" && !cl.approved) {
+    blockers.push("not approved (needs a GitHub review approval or a shipflow-approved label)");
+  }
+  if (opts.policy === "auto-timeout" && !cl.approved && cl.ageHours < opts.staleHours) {
+    blockers.push(`awaiting approval or the ${opts.staleHours}h timeout (age ${Math.round(cl.ageHours)}h)`);
+  }
+  if (opts.intentBlocked)
+    blockers.push(INTENT_BLOCKER);
+  return { policy: opts.policy, wouldMerge: blockers.length === 0, blockers, ...unsatisfiable ? { unsatisfiable: true } : {} };
+}
+var TRUSTED_AUTHOR_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+function headTrust(pr) {
+  if (pr.isCrossRepository !== false)
+    return "fork-head";
+  if (pr.associationLookupFailed)
+    return "association-unknown";
+  if (!TRUSTED_AUTHOR_ASSOCIATIONS.has((pr.authorAssociation ?? "").trim().toUpperCase()))
+    return "untrusted-author";
+  return null;
+}
+function foreignConflictedPRs(mine, all, me, opts = {}) {
+  if (opts.enabled !== true)
+    return [];
+  const mineNums = new Set(mine.map((p) => p.number));
+  return all.filter((p) => !mineNums.has(p.number) && !p.isDraft && (p.mergeable ?? "").toUpperCase() === "CONFLICTING" && (p.author?.login ?? "") !== me).map((pr) => {
+    const distrust = headTrust(pr);
+    return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
+  });
+}
+
 // src/gh.ts
 var FIELDS = "number,title,body,state,labels,assignees,url,createdAt";
 function ghInstalled() {
@@ -3603,16 +3803,34 @@ function ghIssueRemoveLabel(repo, number, label) {
 function ghIssueComment(repo, number, body) {
   _exec(`gh issue comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(body)}`, { stdio: "ignore" });
 }
-function ghLabelEverRemoved(repo, number, label) {
+function ghLabelRemovals(repo, number, label) {
   try {
     const [owner, name] = repo.split("/");
     const path = `repos/${owner}/${name}/issues/${number}/timeline`;
-    const out = _exec(`gh api ${shellQuote(path)} --paginate -q ${shellQuote('.[] | select(.event=="unlabeled") | .label.name')}`).toString();
+    const q = '.[] | select(.event=="unlabeled") | [.label.name, (.actor.login // ""), (.actor.type // "")] | @tsv';
+    const out = _exec(`gh api ${shellQuote(path)} --paginate -q ${shellQuote(q)}`).toString();
     return out.split(`
-`).map((s) => s.trim()).filter(Boolean).includes(label);
+`).map((l) => l.split("\t")).filter((c) => c[0] === label).map((c) => {
+      const actor = (c[1] ?? "").trim();
+      const type = (c[2] ?? "").trim().toLowerCase();
+      return { actor, actorIsBot: type === "bot" || actor.endsWith("[bot]"), actorKnown: actor !== "" };
+    });
   } catch {
-    return false;
+    return [];
   }
+}
+function ghIntentGateAuditCount(repo, number) {
+  try {
+    return ghIssueComments(repo, number).filter((c) => isIntentGateAuditComment({ body: c.body, authorLogin: c.authorLogin, authorAssociation: c.authorAssociation })).length;
+  } catch {
+    return 0;
+  }
+}
+function ghIntentGateClearance(repo, number, label) {
+  return {
+    auditComments: ghIntentGateAuditCount(repo, number),
+    removals: ghLabelRemovals(repo, number, label)
+  };
 }
 function ghIssueAuthor(repo, number) {
   try {
@@ -3625,7 +3843,13 @@ function ghIssueAuthor(repo, number) {
 function ghIssueComments(repo, number) {
   const out = _exec(`gh issue view ${number} --repo ${shellQuote(repo)} --json comments`).toString();
   const nodes = JSON.parse(out)?.comments ?? [];
-  return nodes.map((c) => ({ id: String(c.id ?? ""), body: String(c.body ?? ""), viewerDidAuthor: !!c.viewerDidAuthor }));
+  return nodes.map((c) => ({
+    id: String(c.id ?? ""),
+    body: String(c.body ?? ""),
+    viewerDidAuthor: !!c.viewerDidAuthor,
+    authorLogin: String(c.author?.login ?? ""),
+    authorAssociation: String(c.authorAssociation ?? "")
+  }));
 }
 function ghUpdateIssueComment(commentId, body) {
   const m = "mutation($id:ID!,$b:String!){updateIssueComment(input:{id:$id,body:$b}){issueComment{id}}}";
@@ -4689,172 +4913,6 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf-8");
 }
 
-// src/pr-state.ts
-var FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
-var PENDING = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"]);
-var APPROVAL_LABELS = new Set([SHIPFLOW_CONTRACT.labels.names.shipflowApproved, "approved", "✅ approved"]);
-var REPORTER_REVIEW_REASON = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
-function ciStateOf(checks) {
-  if (!checks || checks.length === 0)
-    return "none";
-  let failing = false;
-  let pending = false;
-  let passing = false;
-  for (const c of checks) {
-    const concl = (c.conclusion ?? "").toUpperCase();
-    const status = (c.status ?? "").toUpperCase();
-    const state = (c.state ?? "").toUpperCase();
-    if (FAILING.has(concl) || FAILING.has(state)) {
-      failing = true;
-    } else if (status && status !== "COMPLETED" || PENDING.has(state)) {
-      pending = true;
-    } else if (concl === "SUCCESS" || concl === "NEUTRAL" || concl === "SKIPPED" || state === "SUCCESS") {
-      passing = true;
-    }
-  }
-  if (failing)
-    return "failing";
-  if (pending)
-    return "pending";
-  if (passing)
-    return "passing";
-  return "none";
-}
-function prAttentionReasons(pr, me) {
-  const reasons = [];
-  if (pr.reviewDecision === "CHANGES_REQUESTED")
-    reasons.push("changes_requested");
-  const failing = (pr.statusCheckRollup ?? []).some((c) => FAILING.has((c.conclusion ?? "").toUpperCase()) || FAILING.has((c.state ?? "").toUpperCase()));
-  if (failing)
-    reasons.push("ci_failing");
-  const fromOthers = (a) => !!a.author && a.author.login !== me;
-  const reviewFeedback = (pr.reviews ?? []).filter((r) => fromOthers(r) && (r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED"));
-  const otherComments = (pr.comments ?? []).filter(fromOthers);
-  if (reviewFeedback.length || otherComments.length)
-    reasons.push("review_comments");
-  return reasons;
-}
-function issueNeedsReply(comments, me) {
-  if (!comments?.length)
-    return null;
-  const last = comments[comments.length - 1];
-  return last.author && last.author.login !== me ? last : null;
-}
-function isApproved(pr) {
-  if (pr.reviewDecision === "APPROVED")
-    return true;
-  return (pr.labels ?? []).some((l) => APPROVAL_LABELS.has(l.name.trim().toLowerCase()));
-}
-function hoursSince(iso, nowMs = Date.now()) {
-  if (!iso)
-    return 0;
-  const t = Date.parse(iso);
-  if (Number.isNaN(t))
-    return 0;
-  return Math.max(0, (nowMs - t) / 3600000);
-}
-function classifyPR(pr, me, opts = {}) {
-  let reasons = prAttentionReasons(pr, me);
-  if (opts.unresolvedThreads === 0) {
-    reasons = reasons.filter((r) => r !== "review_comments");
-  }
-  const ciState = ciStateOf(pr.statusCheckRollup);
-  const approved = isApproved(pr);
-  const ageHours = hoursSince(pr.updatedAt, opts.nowMs);
-  const staleHours = opts.staleHours ?? 48;
-  const conflicting = (pr.mergeable ?? "").toUpperCase() === "CONFLICTING";
-  let state;
-  if (opts.intentBlocked) {
-    state = "awaiting_reporter";
-    reasons = [...reasons, REPORTER_REVIEW_REASON];
-    if (conflicting && !reasons.includes("merge_conflict"))
-      reasons = [...reasons, "merge_conflict"];
-  } else if (conflicting) {
-    state = "conflict";
-    if (!reasons.includes("merge_conflict"))
-      reasons = [...reasons, "merge_conflict"];
-  } else if (ciState === "failing")
-    state = "ci_failing";
-  else if (pr.reviewDecision === "CHANGES_REQUESTED")
-    state = "changes_requested";
-  else if (reasons.includes("review_comments"))
-    state = "review_comments";
-  else if (ciState === "pending")
-    state = "ci_pending";
-  else if (approved)
-    state = "approved_ready";
-  else if (ageHours >= staleHours)
-    state = "stale";
-  else
-    state = "awaiting_review";
-  const needsAction = state !== "ci_pending" && state !== "awaiting_review" && state !== "awaiting_reporter";
-  if (needsAction && reasons.length === 0)
-    reasons = [state];
-  return { number: pr.number, state, ciState, approved, ageHours, reasons, needsAction };
-}
-var INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation";
-function intentGate(i) {
-  const blocked = i.hasLabel || i.signal && !i.everCleared;
-  const applyLabel = i.signal && !i.hasLabel && !i.everCleared;
-  return { blocked, applyLabel };
-}
-var NO_CI_GRACE_HOURS = 0.25;
-function mergeDecision(pr, me, opts) {
-  const cl = classifyPR(pr, me, { staleHours: opts.staleHours, nowMs: opts.nowMs });
-  const blockers = [];
-  if (opts.policy === "manual")
-    blockers.push("merge-policy is manual (human merge required)");
-  if (cl.ciState === "failing")
-    blockers.push("CI is failing");
-  if (cl.ciState === "pending")
-    blockers.push("CI still running");
-  let unsatisfiable = false;
-  if (opts.requireCi && cl.ciState === "none") {
-    const zeroCheckAgeH = hoursSince(pr.createdAt, opts.nowMs);
-    const noCiComing = pr.createdAt != null && zeroCheckAgeH >= NO_CI_GRACE_HOURS;
-    if (opts.policy !== "manual" && noCiComing) {
-      unsatisfiable = true;
-      blockers.push("require-ci is on but no CI has reported and none is coming — add a workflow that runs on PRs, or run: renaiss-shipflow config set require-ci false");
-    } else {
-      blockers.push("no CI checks to confirm (set require-ci=false to allow)");
-    }
-  }
-  if (pr.reviewDecision === "CHANGES_REQUESTED")
-    blockers.push("changes requested");
-  if ((opts.unresolvedThreads ?? 0) > 0)
-    blockers.push(`${opts.unresolvedThreads} unresolved review thread(s) — address + resolve them first`);
-  if ((pr.mergeable ?? "").toUpperCase() === "CONFLICTING")
-    blockers.push("merge conflict with base (run: pr sync)");
-  if (opts.policy === "auto-on-green" && !cl.approved) {
-    blockers.push("not approved (needs a GitHub review approval or a shipflow-approved label)");
-  }
-  if (opts.policy === "auto-timeout" && !cl.approved && cl.ageHours < opts.staleHours) {
-    blockers.push(`awaiting approval or the ${opts.staleHours}h timeout (age ${Math.round(cl.ageHours)}h)`);
-  }
-  if (opts.intentBlocked)
-    blockers.push(INTENT_BLOCKER);
-  return { policy: opts.policy, wouldMerge: blockers.length === 0, blockers, ...unsatisfiable ? { unsatisfiable: true } : {} };
-}
-var TRUSTED_AUTHOR_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-function headTrust(pr) {
-  if (pr.isCrossRepository !== false)
-    return "fork-head";
-  if (pr.associationLookupFailed)
-    return "association-unknown";
-  if (!TRUSTED_AUTHOR_ASSOCIATIONS.has((pr.authorAssociation ?? "").trim().toUpperCase()))
-    return "untrusted-author";
-  return null;
-}
-function foreignConflictedPRs(mine, all, me, opts = {}) {
-  if (opts.enabled !== true)
-    return [];
-  const mineNums = new Set(mine.map((p) => p.number));
-  return all.filter((p) => !mineNums.has(p.number) && !p.isDraft && (p.mergeable ?? "").toUpperCase() === "CONFLICTING" && (p.author?.login ?? "") !== me).map((pr) => {
-    const distrust = headTrust(pr);
-    return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
-  });
-}
-
 // src/commands/inbox.ts
 function safeUnresolvedThreadCount(fetchThreads) {
   try {
@@ -5887,7 +5945,7 @@ function verdictHeader(verdict) {
       return "**\uD83D\uDCAC ShipFlow review — comments**";
   }
 }
-var REVIEW_MARKER = "<!-- shipflow:loop-review -->";
+var REVIEW_MARKER = SHIPFLOW_CONTRACT.markers.loopReview;
 function renderFindingBody(f) {
   let b = `${severityBadge(f.severity)}${effortTag(f.effort)} ${f.issue}`;
   if (f.why?.trim())
@@ -5992,8 +6050,35 @@ var REPORTER_REVIEW_LABEL = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
 function evalIntentGate(repo, number, prView) {
   const hasLabel = (prView.labels ?? []).some((l) => l.name === REPORTER_REVIEW_LABEL);
   const signal = hasInterpretationSignal(prView.body ?? "");
-  const everCleared = signal && !hasLabel ? ghLabelEverRemoved(repo, number, REPORTER_REVIEW_LABEL) : false;
+  const everCleared = signal && !hasLabel ? intentGateEverCleared(ghIntentGateClearance(repo, number, REPORTER_REVIEW_LABEL)) : false;
   return intentGate({ signal, hasLabel, everCleared });
+}
+function stampLoopReview(body) {
+  const marker = SHIPFLOW_CONTRACT.markers.loopReview;
+  return body.includes(marker) ? body : `${body.replace(/\s+$/, "")}
+
+${marker}`;
+}
+function renderIntentGateNotice() {
+  const tokens = SHIPFLOW_CONTRACT.intentGate.confirmationTokens.map((t) => `\`${t}\``).join(", ");
+  return [
+    `⏸️ **Merge blocked — awaiting the reporter's confirmation** (\`${REPORTER_REVIEW_LABEL}\`)`,
+    "",
+    "This PR's body carries an interpretation or deviation nobody has confirmed, so ShipFlow will not auto-merge it.",
+    "",
+    "| To do this | Reply with |",
+    "| --- | --- |",
+    `| **Release the gate** | a reply that is ONLY one of: ${tokens} — and nothing else |`,
+    "| **Correct the reading** | anything else — the gate STAYS on and the loop reworks the PR |",
+    "| **Approve with a caveat** | also leaves the gate ON: `yes but …` is a correction, not consent |",
+    "| **Say thanks / add a note** | send it as a SEPARATE comment — a token with anything under it does not release |",
+    `| **Override by hand** | (no reply) remove the \`${REPORTER_REVIEW_LABEL}\` label |`,
+    "",
+    `${SHIPFLOW_CONTRACT.intentGate.releaseHint}`,
+    "",
+    SHIPFLOW_CONTRACT.markers.loop
+  ].join(`
+`);
 }
 function unresolvedThreadsOrBlock(repo, number) {
   try {
@@ -6109,6 +6194,7 @@ ${opts.body ?? ""}`;
         try {
           ghEnsureLabel(repo, REPORTER_REVIEW_LABEL, labelColorFor(REPORTER_REVIEW_LABEL), "An unconfirmed worker interpretation/deviation awaiting the issue reporter's confirmation");
           ghIssueAddLabels(repo, number, [REPORTER_REVIEW_LABEL]);
+          ghIssueComment(repo, number, renderIntentGateNotice());
         } catch (e) {
           console.warn(`needs-reporter-review label failed (will retry next attempt): ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -6347,7 +6433,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
     ghIssueAddLabels(repo, number, [APPROVED_LABEL]);
     ghIssueRemoveLabel(repo, number, NEEDS_HUMAN_LABEL);
     if (opts.comment) {
-      execSync4(`gh pr comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(opts.comment)}`, { stdio: "ignore" });
+      execSync4(`gh pr comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(stampLoopReview(opts.comment))}`, { stdio: "ignore" });
     }
     emit(opts, { number, approved: true, label: APPROVED_LABEL }, () => console.log(`✅ PR #${number} approved — labelled "${APPROVED_LABEL}" (automerge can proceed under an auto-* policy).`));
   }));

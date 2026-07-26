@@ -319,10 +319,13 @@ else `SHIPFLOW_LOOP_CAP`, else **5**.
 Ladder, highest first: `awaiting_reporter` › `conflict` › `ci_failing` ›
 `changes_requested` › `review_comments` › `ci_pending` › `approved_ready` ›
 `stale` › `awaiting_review`. `awaiting_reporter` tops it — above `conflict` —
-because every route below it dispatches a worker to *act on the PR*, and the
-`needs-reporter-review` label is self-clearing (#411): a loop comment strips it,
-and the `conflict` route requires commenting on the PR. Both reasons are still
-reported, so nothing is hidden — only the dispatch waits.
+because every route below it dispatches a worker to *act on the PR*, and an
+interpretation nobody has confirmed must not be reworked, rebased or merged
+until the human answers. (The original reason was mechanical: the label was
+**self-clearing** — a loop comment stripped it, and the `conflict` route
+requires commenting on the PR. #411 closed that hole; the ordering stays for the
+reason under it.) Both reasons are still reported, so nothing is hidden — only
+the dispatch waits.
 
 | `state` | What it means | Action |
 |---|---|---|
@@ -424,11 +427,47 @@ reported, so nothing is hidden — only the dispatch waits.
   `--update` edits it in place instead of stacking a new banner.
 - **Mark loop comments on escalated issues.** The server auto-clears
   `needs-human` when a *human* replies (it recognizes loop machinery by the 🚧
-  banner and `<!-- shipflow` markers, not by author — the loop comments under
-  the operator's account). So any comment the loop posts on a `needs-human`
+  banner and **any** `<!-- shipflow:` marker, not by author — the loop comments
+  under the operator's account). So any comment the loop posts on a `needs-human`
   issue *without* resolving it (progress notes, slice links) MUST end with
   `<!-- shipflow:loop -->`, or the comment itself will un-park the issue.
   `issue escalate` output needs no marker — the 🚧 banner already exempts it.
+  Markers are matched by **prefix**, not by a list (issue #411): a comment
+  carrying `<!-- shipflow:loop-review -->`, `<!-- shipflow:precedent-applied …`
+  or any future marker is machinery too.
+- 🔴 **`needs-reporter-review` is the opposite polarity — it does NOT clear on
+  any reply.** It is the #190 intent gate: a merge blocker held until a human
+  confirms a worker's reading. The server clears it **only** on an explicit
+  affirmative and **ignores unknown prose** (issue #411 — a plain loop comment
+  used to strip it in seconds, and PR #405 merged with the gate machine-cleared
+  and the reporter never consulted). Two rules follow:
+
+  | On a `needs-reporter-review` PR | Rule |
+  | --- | --- |
+  | **Any comment the loop posts** | MUST carry a `<!-- shipflow:` marker — `pr approve --comment` and `pr post-review` stamp `<!-- shipflow:loop-review -->` for you; a hand-written `gh pr comment` does not |
+  | **Releasing the gate** | only the reporter, with a reply that is ONLY `confirmed` / `/confirm` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / `+1` / 👍 and nothing else — never the loop |
+  | **Correcting the reading** | leaves the gate ON, by design: rework the PR |
+  | **A QUALIFIED yes** | also leaves it ON — `yes but change the copy first` is a correction, not consent |
+  | **Prose that reads as consent** | also leaves it ON — even `Confirmed — ship it`, because it is not the token |
+  | **A token with ANYTHING under it** | also leaves it ON — one newline or one blank line, a correction or a thank-you |
+  | **Human override** | remove the label in the GitHub UI |
+
+  It is an **exact token that is the whole reply**, not a grammar: markdown
+  decoration and trailing punctuation are stripped (`**Confirmed**`, `- lgtm`,
+  `Confirmed.` all work), but a token embedded in a sentence never decides, and
+  neither does one with anything after it — including a pasted fenced block.
+  The rule already refused extra words on the token's own line, so
+  accepting them one newline later would be the same act with the opposite
+  answer. That is deliberate — an affirmative opener plus a negation list is a
+  denylist guarding unbounded natural language, which fails OPEN on the first
+  phrasing nobody enumerated; this refuses when anything follows without ever
+  inspecting it. A reply that misses gets **one** nudge on the PR naming every
+  token and pointing commentary at a separate comment.
+
+  The loop **never** clears this gate on the reporter's behalf. Every removal
+  the server performs posts an attributable audit comment naming the actor and
+  quoting their line — if the label vanished and no such comment exists, treat
+  it as a bug, not a confirmation.
 - Reconcile (A) acts only on **your own** PRs and claimed issues. Don't touch
   others' PRs/issues unless asked.
 - Because blocked/escalated issues keep their claim and carry `needs-human`,

@@ -300,6 +300,24 @@ substitute "what the diff seems to intend" for the spec.
 approval is unavailable on own PRs — `pr approve` / the `shipflow-approved` label is
 the approval channel, and the verdict is consumed in-loop by the orchestrator.)
 
+### 🔴 Reviewing a PR labelled `needs-reporter-review` (issue #411)
+
+That label is the #190 **intent gate** — a merge blocker under every policy,
+held until the *human reporter* confirms the worker's reading. Your review runs
+*under* it, and your comments land on the same thread the server watches.
+
+| Rule | Detail |
+| --- | --- |
+| **Every comment you post carries a marker** | `pr post-review` and `pr approve --comment` stamp `<!-- shipflow:loop-review -->`. Post a bare `gh pr comment` and you post as a *human* |
+| **You never release the gate** | only the reporter does, with a reply that is ONLY `confirmed` / `/confirm` / `approved` / `yes` / `lgtm` / `ship it` / `+1` / 👍 and nothing else. Exact token, whole reply — prose that reads as consent (`Confirmed — ship it`), or a token with a correction or a thank-you after it, does not clear it |
+| **Approving does not clear it** | `shipflow-approved` + a cleared intent gate are separate conditions; approve normally and let the PR park |
+| **A vanished label with no audit comment is a BUG** | every server-side removal posts `✅ needs-reporter-review cleared` naming the actor. No comment, no confirmation — say so in your verdict |
+
+Before #411 the server cleared this gate on *any* comment it didn't recognise as
+machinery — so a review comment stripped the very blocker it was reviewing
+under, and PR #405 merged with the reporter never consulted. Unknown prose is
+now ignored; don't work around that by clearing the label yourself.
+
 ## Before you `approve` — self-verify
 Your completion contract. Never return `approve` unless **all** hold:
 - [ ] `renaiss-shipflow pr reviews <n>` shows **zero unresolved threads** (external
