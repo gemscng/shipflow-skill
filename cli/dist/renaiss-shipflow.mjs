@@ -2177,7 +2177,7 @@ var SHIPFLOW_CONTRACT = {
     }
   },
   markers: {
-    $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. MATCHING SEMANTICS (issue #411 changed these deliberately — the note above used to read `Do NOT change these matching semantics`): `commentIsLoopMachinery` no longer denylists three specific markers, it matches `markerPrefix` — ANY `<!-- shipflow:` token — because a denylist of known shapes guarding an unbounded set of free-form agent prose fails OPEN on every new shape the loop invents (measured on PRs #401 and #405, which cleared a merge blocker nobody confirmed). `markerPrefix` is the OPEN token every ShipFlow marker starts with; a comment carrying any of them is machinery and can never stand in for a human decision. `loopReview` stamps the loop reviewer's verdict comment (CLI review-contract.ts renderFindingBody + `pr approve --comment`) — it was a CLI-local const the server could not see, which is exactly how #405 cleared its own gate. `intentGateCleared` is the OPEN token on the server's attributable audit comment posted on EVERY `needs-reporter-review` removal, rendered as `<!-- shipflow:intent-gate-cleared by=<login> -->`; the CLI's intent gate reads it as the clearance artifact instead of trusting the bare `unlabeled` timeline event (see the `intentGate` section) — and reads it ANCHORED (own line, `by=<login> -->` shape) and ONLY from a bot/trusted-association author, because a bare Contains over every comment let anyone who can quote the literal disarm the gate permanently. `intentGateHint` stamps the server's one-time nudge posted when a human reply on a gated thread misses the release grammar; its presence is also how the nudge stays one-time (fail-stuck was previously invisible — the miss path only logged). Only the literals are single-sourced — each consumer still owns its own matching semantics.",
+    $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. MATCHING SEMANTICS (issue #411 changed these deliberately — the note above used to read `Do NOT change these matching semantics`): `commentIsLoopMachinery` no longer denylists three specific markers, it matches `markerPrefix` — ANY `<!-- shipflow:` token — because a denylist of known shapes guarding an unbounded set of free-form agent prose fails OPEN on every new shape the loop invents (measured on PRs #401 and #405, which cleared a merge blocker nobody confirmed). `markerPrefix` is the OPEN token every ShipFlow marker starts with; a comment carrying any of them is machinery and can never stand in for a human decision. `loopReview` stamps the loop reviewer's verdict comment (CLI review-contract.ts renderFindingBody + `pr approve --comment`) — it was a CLI-local const the server could not see, which is exactly how #405 cleared its own gate. `intentGateCleared` is the OPEN token on the server's attributable audit comment posted on EVERY `needs-reporter-review` removal, rendered as `<!-- shipflow:intent-gate-cleared by=<login> -->`; the CLI's intent gate reads it as the clearance artifact instead of trusting the bare `unlabeled` timeline event (see the `intentGate` section) — and reads it ANCHORED (own line, `by=<login> -->` shape) and ONLY from a bot/trusted-association author, because a bare Contains over every comment let anyone who can quote the literal disarm the gate permanently. `intentGateHint` stamps the server's one-time nudge posted when a human reply on a gated thread misses the release grammar; its presence is also how the nudge stays one-time (fail-stuck was previously invisible — the miss path only logged). `reworkFrom` is the OPEN-TOKEN a rework worker stamps on the comment it posts after acting on a reporter's CORRECTION of an intent-gated PR (issue #442), rendered as `<!-- shipflow:rework-from id=<comment-id> -->` — the `id=` attribute convention mirrors `precedentApplied`'s `pid=`. The CLI's `reporterCorrectionOn` reads the id back so suppression is EXACT (that comment has been answered) rather than timestamp-ordered, and counts the markers to enforce the rework ceiling; the server needs no accessor because `markerPrefix` already makes any comment carrying it machinery. It is the anti-self-loop backstop: without it a loop comment on a gated PR reads as a fresh reporter correction and the loop reworks in response to itself. Only the literals are single-sourced — each consumer still owns its own matching semantics.",
     triaged: "<!-- shipflow:triaged -->",
     loop: "<!-- shipflow:loop -->",
     loopReview: "<!-- shipflow:loop-review -->",
@@ -2190,7 +2190,8 @@ var SHIPFLOW_CONTRACT = {
     verificationComment: "<!-- shipflow:verification -->",
     precedentContext: "<!-- shipflow:precedent-context",
     precedentApplied: "<!-- shipflow:precedent-applied",
-    intentGateHint: "<!-- shipflow:intent-gate-hint -->"
+    intentGateHint: "<!-- shipflow:intent-gate-hint -->",
+    reworkFrom: "<!-- shipflow:rework-from"
   },
   intentGate: {
     $comment: "The release rule for the #190 intent gate (`needs-reporter-review`), single-sourced so the server's matcher, the CLI's ping comment and the skill docs cannot drift (issue #411 — the doc promised a rule the code did not implement). POLARITY: the label is a merge blocker held until a human CONFIRMS, so this is an AUTHORIZATION control, not a sentiment classifier. THE RULE: the quote-stripped body must reduce to EXACTLY ONE meaningful line — blank lines and pure-decoration lines (a `---` rule) are scaffolding, but a fenced block and everything in it COUNT as content — and that line, with leading/trailing markdown decoration and punctuation trimmed, must EQUAL one of `confirmationTokens` (case-insensitive, emoji skin-tone/variation modifiers normalised away). Nothing else clears the gate: the token is the WHOLE reply, or it does not confirm. WHY THE WHOLE BODY (PR #441, third review pass): whole-line equality judged `block[0]` and ignored everything after it, so a bare token on line 1 confirmed whatever followed. Measured through the real handler, all of `Confirmed`+`But scope it to the CLI only`, `\uD83D\uDC4D`+`not this implementation though`, `yes`+`Actually no, revert it`, `LGTM`+`hold the merge, this is wrong`, `confirmed`+`- but only the CLI half` CLEARED, and so did the blank-line forms `confirmed`+`Actually no, revert it` and `Yes`+`Actually no, revert it`. Every one is #411's exact harm: a merge on a reading the reporter had just narrowed. A SINGLE newline was enough, and that settles the scoping question — the rule ALREADY refuses extra words on the token's own line (`Confirmed — ship it` is armed), so accepting arbitrary text one newline later is incoherent: the same act, the same ambiguity, the opposite answer. Drawing the boundary at the line or at the paragraph only moves the hole down; this defect has now appeared at three granularities. Requiring the whole body is NOT the denylist the veto list was — it never inspects what follows, it refuses when anything follows. THE PRICE: `confirmed` plus a thank-you parks too. Accepted — commentary goes in a separate comment, costing one extra reply, never a wrong merge. A pasted fenced block counts as content here (unlike in the `N: answer` block parser, which skips fences whole so a fence's inner line can never be promoted to the judged line): `/confirm` over a fenced `no` was measured clearing, and a token with an attachment is not a token alone. WHY AN EXACT TOKEN AND NOT A GRAMMAR (PR #441, second review pass): the previous design matched an affirmative OPENING WORD and then vetoed a list of negations and contrastives found later in the paragraph. That is a denylist of known shapes guarding an unbounded set of free-form natural language — the exact anti-pattern this issue exists to close, re-earned inside its own fix. Negation-after-affirmative has no finite enumeration: `Confirmed the bug still repros`, `Yes, change the copy first` and `ok 1 - test passed` all survived a 27-word veto list, and each one FAILED OPEN — it merged a reading nobody confirmed. An exact token has the correct failure polarity for EVERY input, not merely for the inputs somebody remembered to enumerate: anything that is not the token leaves the gate armed, which one more reply fixes. Tokens must be unambiguous ALONE, as a whole line — that is what excludes `ok`, `sure`, `agreed`, `correct` and every bare imperative (`ship`, `merge`, `approve`, `proceed`), which read as consent or as an instruction depending on the sentence they open. The `N: answer` reply protocol also releases the gate, but it is held to the SAME stands-alone invariant as the token path (PR #441, fourth review pass): the decision block must BE the whole quote-stripped reply (no meaningful line outside it, a pasted fence included), EVERY line of that block must itself be a decision line, EVERY answer must be a `confirmationTokens` entry, and an escalation banner must actually be outstanding on the thread. Both positional checks are load-bearing and neither alone suffices — measured by ablation, the length test alone leaves `1: yes` + NEWLINE + `Actually no, revert it` clearing (same paragraph, so the counts match) and the per-line test alone leaves `1: yes` + BLANK LINE + `revert it` clearing (a later paragraph the block never reached). Reading the answers had fixed WHAT the block said but not WHERE it stopped, so this door stayed fail-OPEN at both granularities after the token path had closed both — and the escalation-outstanding guard does not mitigate it, because answering `N:` is exactly what a reporter does on an escalated thread — a content-agnostic `^\\\\d+:` match let `1: no, redo it` clear the blocker it was rejecting, and a pasted stack-trace line `10: undefined is not a function` do it by accident. FAIL-STUCK IS THE PRICE, and it is paid deliberately in two places, BOTH of which must state that the token is the whole reply or a reporter cannot discover it: `releaseHint` is the exact sentence the CLI puts on the PR when it APPLIES the label, and the server posts a one-time `intentGateHint` nudge naming the tokens whenever a human reply misses — including when the commenter's `author_association` is untrusted, which was the one branch that failed stuck in silence. Both render the token list FROM `confirmationTokens`, never from a hand-written copy, so neither can drift from the matcher — preserve that. Removing the label by hand stays the human override. Do NOT re-add a free-text grammar here to make it friendlier — narrowing the openers is safe, widening them is how this control dies.",
@@ -3431,6 +3432,13 @@ var FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "
 var PENDING = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"]);
 var APPROVAL_LABELS = new Set([SHIPFLOW_CONTRACT.labels.names.shipflowApproved, "approved", "✅ approved"]);
 var REPORTER_REVIEW_REASON = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
+var REPORTER_CORRECTION_REASON = "reporter_correction";
+var REWORK_CEILING_REASON = "rework_ceiling";
+var CORRECTION_UNREADABLE_REASON = "correction_unreadable";
+var ESCALATE_ONCE_REASONS = [REWORK_CEILING_REASON, CORRECTION_UNREADABLE_REASON];
+function owesEscalation(cl) {
+  return cl.reasons.some((r) => ESCALATE_ONCE_REASONS.includes(r));
+}
 function ciStateOf(checks) {
   if (!checks || checks.length === 0)
     return "none";
@@ -3502,8 +3510,20 @@ function classifyPR(pr, me, opts = {}) {
   const conflicting = (pr.mergeable ?? "").toUpperCase() === "CONFLICTING";
   let state;
   if (opts.intentBlocked) {
-    state = "awaiting_reporter";
-    reasons = [...reasons, REPORTER_REVIEW_REASON];
+    const correction = reporterCorrectionOn(pr);
+    const spent = reworkAttemptsOn(pr).length;
+    const ceiling = opts.maxReworks ?? DEFAULT_MAX_REWORKS;
+    if (correction && spent < ceiling) {
+      state = "reporter_corrected";
+      reasons = [...reasons, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON];
+    } else {
+      state = "awaiting_reporter";
+      reasons = [...reasons, REPORTER_REVIEW_REASON];
+      if (correction)
+        reasons = [...reasons, REWORK_CEILING_REASON];
+      else if (correctionTrailUnreadable(pr))
+        reasons = [...reasons, CORRECTION_UNREADABLE_REASON];
+    }
     if (conflicting && !reasons.includes("merge_conflict"))
       reasons = [...reasons, "merge_conflict"];
   } else if (conflicting) {
@@ -3559,6 +3579,140 @@ function intentGateEverCleared(e) {
   if (e.auditComments > 0)
     return true;
   return e.removals.some((r) => r.actorKnown && !r.actorIsBot);
+}
+var REWORK_FROM_MARKER = SHIPFLOW_CONTRACT.markers.reworkFrom;
+var DEFAULT_MAX_REWORKS = 3;
+var REWORK_FROM_RE = new RegExp(`${REWORK_FROM_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+id=(\\S+?)\\s*-->`, "g");
+function reworkAttemptsOn(pr) {
+  const ids = [];
+  const seen = new Set;
+  for (const c of pr.comments ?? []) {
+    if (!commentAuthorCouldBeLoop(c))
+      continue;
+    for (const m of stripQuotedLines(c.body).matchAll(REWORK_FROM_RE)) {
+      if (seen.has(m[1]))
+        continue;
+      seen.add(m[1]);
+      ids.push(m[1]);
+    }
+  }
+  return ids;
+}
+function stripQuotedLines(body) {
+  return (body ?? "").split(`
+`).filter((l) => !l.trim().startsWith(">")).join(`
+`);
+}
+function commentAuthorCouldBeLoop(c) {
+  if ((c.author?.login ?? "").trim().endsWith("[bot]"))
+    return true;
+  return TRUSTED_AUTHOR_ASSOCIATIONS.has((c.authorAssociation ?? "").trim().toUpperCase());
+}
+function commentIsMachinery(c) {
+  const b = stripQuotedLines(c.body).trim();
+  const marked = b.startsWith(SHIPFLOW_CONTRACT.markers.escalationBannerEmoji) || b.includes(SHIPFLOW_CONTRACT.markers.markerPrefix);
+  return marked && commentAuthorCouldBeLoop(c);
+}
+var CONFIRMATION_TOKENS = new Set(SHIPFLOW_CONTRACT.intentGate.confirmationTokens.map((t) => t.toLowerCase()));
+function normalizeTokenLine(line) {
+  return line.replace(/[\u{FE0E}\u{FE0F}\u{1F3FB}-\u{1F3FF}]/gu, "").replace(/^[>\s*_`#\-–—•]+/, "").replace(/[\s*_`.!,;:]+$/, "").trim().toLowerCase();
+}
+function isWholeLineConfirmation(body) {
+  const lines = stripQuotedLines(body).split(`
+`).map((l) => l.trim()).filter((l) => l !== "" && !/^[-*_]{3,}$/.test(l));
+  if (lines.length !== 1)
+    return false;
+  return CONFIRMATION_TOKENS.has(normalizeTokenLine(lines[0]));
+}
+function commentTs(iso) {
+  const t = Date.parse(iso ?? "");
+  return Number.isNaN(t) ? -Infinity : t;
+}
+function reporterCorrectionOn(pr) {
+  return scanForCorrection(pr).candidates[0] ?? null;
+}
+function reporterCorrectionsOn(pr) {
+  return scanForCorrection(pr).candidates;
+}
+function correctionTrailUnreadable(pr) {
+  return scanForCorrection(pr).unreadable;
+}
+function correctionHorizon(comments) {
+  const byId = new Map;
+  for (const c of comments)
+    if (c.id)
+      byId.set(c.id, c);
+  let horizon = -Infinity;
+  for (const c of comments) {
+    if (!commentIsMachinery(c))
+      continue;
+    const authored = stripQuotedLines(c.body);
+    const named = [...authored.matchAll(REWORK_FROM_RE)].map((m) => m[1]);
+    if (named.length > 0) {
+      for (const id of named) {
+        const answeredAt = commentTs(byId.get(id)?.createdAt);
+        horizon = Math.max(horizon, Number.isFinite(answeredAt) ? answeredAt : commentTs(c.createdAt));
+      }
+    } else if (authored.includes(SHIPFLOW_CONTRACT.markers.reworkFrom)) {
+      horizon = Math.max(horizon, commentTs(c.createdAt));
+    }
+  }
+  return horizon;
+}
+function scanForCorrection(pr) {
+  const comments = pr.comments ?? [];
+  if (comments.length === 0)
+    return { candidates: [], unreadable: false };
+  const answered = new Set(reworkAttemptsOn(pr));
+  const trailLegible = comments.some(commentIsMachinery);
+  const horizon = correctionHorizon(comments);
+  const eligible = [];
+  for (const c of comments) {
+    if (commentIsMachinery(c))
+      continue;
+    if (!TRUSTED_AUTHOR_ASSOCIATIONS.has((c.authorAssociation ?? "").trim().toUpperCase()))
+      continue;
+    if (c.id && answered.has(c.id))
+      continue;
+    if (stripQuotedLines(c.body).trim() === "")
+      continue;
+    if (isWholeLineConfirmation(c.body))
+      continue;
+    eligible.push(c);
+  }
+  if (!trailLegible)
+    return { candidates: [], unreadable: eligible.length > 0 };
+  const candidates = eligible.filter((c) => commentTs(c.createdAt) > horizon).sort((a, b) => commentTs(a.createdAt) - commentTs(b.createdAt));
+  return { candidates: candidates.slice(0, MAX_CORRECTION_CANDIDATES), unreadable: false };
+}
+var MAX_CORRECTION_CANDIDATES = 5;
+var CORRECTION_EXCERPT_CHARS = 200;
+function reporterCorrectionRow(c) {
+  const flat = (c.body ?? "").replace(/\s+/g, " ").trim();
+  return {
+    id: c.id ?? "",
+    author: c.author?.login ?? "",
+    at: c.createdAt ?? "",
+    url: c.url ?? "",
+    excerpt: flat.length > CORRECTION_EXCERPT_CHARS ? `${flat.slice(0, CORRECTION_EXCERPT_CHARS - 1)}…` : flat
+  };
+}
+var PART_OF_ISSUE_RE = /Part of #(\d+)/gi;
+function partOfIssueNumbers(body) {
+  const out = [];
+  for (const m of (body ?? "").matchAll(PART_OF_ISSUE_RE)) {
+    const n = parseInt(m[1], 10);
+    if (n > 0 && !out.includes(n))
+      out.push(n);
+  }
+  return out;
+}
+function linkedIssueNumbers(pr) {
+  const out = (pr.closingIssuesReferences ?? []).map((i) => i.number);
+  for (const n of partOfIssueNumbers(pr.body))
+    if (!out.includes(n))
+      out.push(n);
+  return out;
 }
 var NO_CI_GRACE_HOURS = 0.25;
 function mergeDecision(pr, me, opts) {
@@ -5136,6 +5290,9 @@ function safeUnresolvedThreadCount(fetchThreads) {
     return { count: 0, degraded: true };
   }
 }
+function hasReporterReviewLabel(pr) {
+  return (pr.labels ?? []).some((l) => l.name === SHIPFLOW_CONTRACT.labels.names.needsReporterReview);
+}
 function foreignPrRow(entry, cl) {
   const { pr, trusted, distrust } = entry;
   return {
@@ -5152,7 +5309,7 @@ function foreignPrRow(entry, cl) {
     ciState: cl.ciState,
     approved: cl.approved,
     ageHours: Math.round(cl.ageHours),
-    needsAttention: trusted && cl.needsAction,
+    needsAttention: trusted && cl.needsAction && cl.state === "conflict",
     reasons: trusted ? cl.reasons : [...cl.reasons, `untrusted_head:${distrust}`],
     foreign: true,
     author: pr.author?.login ?? "",
@@ -5160,9 +5317,58 @@ function foreignPrRow(entry, cl) {
     ...trusted ? {} : { distrust, humanOnly: true }
   };
 }
+function minePrRow(pr, cl, ctx) {
+  const corrections = cl.state === "reporter_corrected" ? reporterCorrectionsOn(pr) : [];
+  const closesIssues = (pr.closingIssuesReferences ?? []).map((i) => i.number);
+  const parentIssues = linkedIssueNumbers(pr);
+  const escalateOnce = owesEscalation(cl) && parentIssues.length > 0 && !ctx.parentIsEscalated(parentIssues);
+  return {
+    number: pr.number,
+    title: pr.title,
+    branch: pr.headRefName,
+    base: pr.baseRefName ?? "",
+    url: pr.url,
+    draft: pr.isDraft,
+    reviewDecision: pr.reviewDecision || "none",
+    unresolvedThreads: ctx.unresolvedThreads,
+    closesIssues,
+    state: cl.state,
+    ciState: cl.ciState,
+    approved: cl.approved,
+    ageHours: Math.round(cl.ageHours),
+    needsAttention: cl.needsAction || escalateOnce,
+    reasons: cl.reasons,
+    ...corrections.length ? {
+      correction: reporterCorrectionRow(corrections[0]),
+      corrections: corrections.map(reporterCorrectionRow),
+      parentNeedsHuman: ctx.parentIsEscalated(parentIssues)
+    } : {},
+    ...escalateOnce ? { escalateOnce: true, parentNeedsHuman: false } : {},
+    ...ctx.degraded ? { degraded: true } : {}
+  };
+}
 function actionableConflicts(prs) {
   return prs.filter((p) => p.state === "conflict" && !p.humanOnly).length;
 }
+var PARKED_STATES = ["awaiting_review", "ci_pending", "awaiting_reporter"];
+function parkedCount(prs) {
+  return prs.filter((p) => p.needsAttention !== true && (PARKED_STATES.includes(p.state) || p.foreign === true && p.state === "reporter_corrected")).length;
+}
+function actionableCorrections(prs) {
+  return prs.filter((p) => p.state === "reporter_corrected" && p.foreign !== true).length;
+}
+var STATE_ICONS = {
+  reporter_corrected: "\uD83D\uDCE3",
+  awaiting_reporter: "\uD83D\uDE4B",
+  conflict: "\uD83D\uDD00",
+  ci_failing: "\uD83D\uDD34",
+  changes_requested: "✏️",
+  review_comments: "\uD83D\uDCAC",
+  ci_pending: "⏳",
+  approved_ready: "✅",
+  stale: "\uD83D\uDD70️",
+  awaiting_review: "·"
+};
 function registerInboxCommand(program2) {
   program2.command("inbox").description("Reconciler view: open PRs (by state: conflict / ci_failing / changes_requested / approved_ready / stale …) and in-progress issues with new comments. With the OPT-IN repo-wide conflict sweep (`config set conflict-sweep true`, or --conflict-sweep) it also lists conflicted PRs by other authors — trusted same-repo heads only (issue #393)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Force the repo-wide foreign-PR conflict sweep on for this run (default: the `conflict-sweep` config key, which is off)").option("--json", "Output JSON").action(runAction(async (opts) => {
     const { project } = await loadCtx(program2);
@@ -5170,29 +5376,18 @@ function registerInboxCommand(program2) {
     const me = ghCurrentLogin();
     const staleHours = resolveStalePrHours();
     const sweepEnabled = opts.conflictSweep === true || resolveConflictSweep();
+    const maxReworks = resolveMaxFixAttempts();
+    let escalatedIssues = null;
+    const parentIsEscalated = (issueNumbers) => {
+      escalatedIssues ??= new Set(ghIssueListByLabel(repo, NEEDS_HUMAN_LABEL).map((i) => i.number));
+      return issueNumbers.some((n) => escalatedIssues.has(n));
+    };
     const minePrs = ghPRListMine(repo);
     const prs = minePrs.map((pr) => {
       const { count: unresolvedThreads, degraded: degraded2 } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
-      const intentBlocked = (pr.labels ?? []).some((l) => l.name === SHIPFLOW_CONTRACT.labels.names.needsReporterReview);
-      const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked });
-      return {
-        number: pr.number,
-        title: pr.title,
-        branch: pr.headRefName,
-        base: pr.baseRefName ?? "",
-        url: pr.url,
-        draft: pr.isDraft,
-        reviewDecision: pr.reviewDecision || "none",
-        unresolvedThreads,
-        closesIssues: (pr.closingIssuesReferences ?? []).map((i) => i.number),
-        state: cl.state,
-        ciState: cl.ciState,
-        approved: cl.approved,
-        ageHours: Math.round(cl.ageHours),
-        needsAttention: cl.needsAction,
-        reasons: cl.reasons,
-        ...degraded2 ? { degraded: true } : {}
-      };
+      const intentBlocked = hasReporterReviewLabel(pr);
+      const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks });
+      return minePrRow(pr, cl, { unresolvedThreads, degraded: degraded2, parentIsEscalated });
     });
     const issues = ghIssueListByLabel(repo, IN_PROGRESS_LABEL).map((i) => {
       const reply = issueNeedsReply(i.comments ?? [], me);
@@ -5207,13 +5402,13 @@ function registerInboxCommand(program2) {
     if (sweepEnabled) {
       try {
         for (const entry of foreignConflictedPRs(minePrs, ghPRListAll(repo), me, { enabled: true })) {
-          const cl = classifyPR(entry.pr, me, { staleHours });
+          const cl = classifyPR(entry.pr, me, { staleHours, intentBlocked: hasReporterReviewLabel(entry.pr), maxReworks });
           prs.push(foreignPrRow(entry, cl));
         }
       } catch {}
     }
     const count = (s) => prs.filter((p) => p.state === s).length;
-    const degraded = prs.filter((p) => ("degraded" in p) && p.degraded).length;
+    const degraded = prs.filter((p) => p.degraded).length;
     const summary = {
       prsNeedingAttention: prs.filter((p) => p.needsAttention).length,
       issuesNeedingAttention: issues.filter((i) => i.needsAttention).length,
@@ -5222,10 +5417,11 @@ function registerInboxCommand(program2) {
       changesRequested: count("changes_requested"),
       conflicts: actionableConflicts(prs),
       stale: count("stale"),
-      parked: prs.filter((p) => p.state === "awaiting_review" || p.state === "ci_pending" || p.state === "awaiting_reporter").length,
+      reporterCorrected: actionableCorrections(prs),
+      parked: parkedCount(prs),
       degraded,
       conflictSweep: sweepEnabled,
-      humanOnlyConflicts: prs.filter((p) => ("humanOnly" in p) && p.humanOnly).length
+      humanOnlyConflicts: prs.filter((p) => p.humanOnly).length
     };
     emit(opts, withProvenance({ repo, prs, issues, summary }), () => {
       console.log(`\uD83D\uDCE5 Inbox for ${repo}`);
@@ -5235,25 +5431,14 @@ function registerInboxCommand(program2) {
       if (summary.humanOnlyConflicts) {
         console.log(`\uD83D\uDD12 ${summary.humanOnlyConflicts} conflicted PR(s) on an untrusted head (fork / non-collaborator) — reported only, never checked out by the loop.`);
       }
-      const icon = {
-        awaiting_reporter: "\uD83D\uDE4B",
-        conflict: "\uD83D\uDD00",
-        ci_failing: "\uD83D\uDD34",
-        changes_requested: "✏️",
-        review_comments: "\uD83D\uDCAC",
-        ci_pending: "⏳",
-        approved_ready: "✅",
-        stale: "\uD83D\uDD70️",
-        awaiting_review: "·"
-      };
       if (prs.length) {
         console.log("");
         const rows = prs.map((p) => [
-          `${icon[p.state] ?? "·"} #${p.number}`,
+          `${STATE_ICONS[p.state] ?? "·"} #${p.number}`,
           p.state,
           `ci:${p.ciState}`,
           `${p.ageHours}h`,
-          p.title + ("degraded" in p && p.degraded ? " ⚠️ degraded" : "") + ("humanOnly" in p && p.humanOnly ? ` \uD83D\uDD12 ${p.distrust} — human only` : "")
+          p.title + (p.correction ? ` \uD83D\uDCE3 @${p.correction.author} corrected the reading` : "") + (p.corrections && p.corrections.length > 1 ? ` (+${p.corrections.length - 1} more unanswered)` : "") + (p.escalateOnce ? " \uD83C\uDD98 escalate once (no rework left)" : "") + (p.parentNeedsHuman ? " (parent is needs-human)" : "") + (p.degraded ? " ⚠️ degraded" : "") + (p.humanOnly ? ` \uD83D\uDD12 ${p.distrust} — human only` : "")
         ]);
         for (const l of renderTable(["PR", "State", "CI", "Age", "Title"], rows))
           console.log(`  ${l}`);
@@ -6591,8 +6776,7 @@ ${opts.body ?? ""}`;
     const diff = ghPRDiffText(repo, number);
     let issue = null;
     const closing = prView.closingIssuesReferences?.[0];
-    const partOf = /Part of #(\d+)/i.exec(prView.body ?? "");
-    const linkedNum = closing?.number ?? (partOf ? parseInt(partOf[1], 10) : 0);
+    const linkedNum = closing?.number ?? partOfIssueNumbers(prView.body)[0] ?? 0;
     if (linkedNum > 0) {
       try {
         issue = { ...ghIssueView(repo, linkedNum), linkKind: closing ? "closes" : "part-of" };

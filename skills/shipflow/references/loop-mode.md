@@ -73,7 +73,7 @@ Read them with `renaiss-shipflow config list`; set with `config set <key> <v>`
 |---|---|---|
 | `merge-policy` | `manual` | `manual` = never auto-merge (park for a human) · `auto-on-green` = merge when CI green **and** approved · `auto-timeout` = green + no objection past `stale-pr-hours` |
 | `require-ci` | `true` | CI must be green before a PR is "advanced" / merged |
-| `max-fix-attempts` | `3` | CI-fix tries on one PR before escalating to a human |
+| `max-fix-attempts` | `3` | CI-fix tries on one PR before escalating to a human — also caps reporter-correction reworks (#442) |
 | `wip-limit` | `10` | max open PRs you own before you stop admitting new work |
 | `stale-pr-hours` | `48` | a green, unreviewed PR older than this is `stale` → ping/escalate |
 | `bug-hunt` | `true` | when the queue is empty, run a test+QA sweep and file issues for bugs found (Phase C) |
@@ -285,10 +285,24 @@ collect its return. Loop A until nothing in-flight `needsAttention`:
   default off) — and even then only **trusted** heads (same-repo,
   `OWNER`/`MEMBER`/`COLLABORATOR`, no drafts) are actionable; `humanOnly: true`
   rows are for a human to look at, never for the loop to check out.
+- `reporter_corrected` → **rework it — the reporter has answered** (issue #442).
+  Same gated PR, except a trusted non-machinery comment has landed that the loop
+  has not acted on. The row carries the reply itself — `correction: {id, author,
+  at, url, excerpt}` plus `parentNeedsHuman` — so you judge it without a second
+  API call. The gate stays ON throughout: nothing here merges, and the reworked
+  PR re-arms. Protocol (decision-vs-question, the `needs-human` parent fork, the
+  mandatory marked comment, the ceiling) → § "A reporter correction IS the human
+  answering" under Guardrails. **Judge before you dispatch:** a question or
+  chatter is not a correction, and burns a worker cycle.
 - `awaiting_reporter` → **park — the reporter must confirm; re-checked next tick.**
   The PR carries `needs-reporter-review`: a worker's interpretation/deviation is
   unconfirmed (issue #190), so no policy will merge it and only the reporter (or a
-  maintainer removing the label) can clear it. **It outranks `conflict`** — and
+  maintainer removing the label) can clear it. Silence parks forever, by design —
+  a *reply* is what moves it, and a correcting reply arrives as
+  `reporter_corrected` above. The **one** exception is a row carrying
+  `escalateOnce: true` — the loop hit the rework ceiling, or refused to read the
+  thread — where the whole action is a single `issue escalate` and the row parks
+  again as soon as the parent carries `needs-human`. **It outranks `conflict`** — and
   every other state — because each route below it tells a worker to *act on the
   PR*, and acting can destroy the gate: the label is self-clearing (issue #411),
   the loop's own comment strips it, and the `conflict` route *requires* commenting
@@ -448,20 +462,32 @@ else `SHIPFLOW_LOOP_CAP`, else **5**.
 
 ## Reconcile playbook (inbox `state` → action)
 
-Ladder, highest first: `awaiting_reporter` › `conflict` › `ci_failing` ›
-`changes_requested` › `review_comments` › `ci_pending` › `approved_ready` ›
-`stale` › `awaiting_review`. `awaiting_reporter` tops it — above `conflict` —
-because every route below it dispatches a worker to *act on the PR*, and an
-interpretation nobody has confirmed must not be reworked, rebased or merged
-until the human answers. (The original reason was mechanical: the label was
-**self-clearing** — a loop comment stripped it, and the `conflict` route
-requires commenting on the PR. #411 closed that hole; the ordering stays for the
-reason under it.) Both reasons are still reported, so nothing is hidden — only
-the dispatch waits.
+Ladder, highest first: `reporter_corrected` › `awaiting_reporter` › `conflict` ›
+`ci_failing` › `changes_requested` › `review_comments` › `ci_pending` ›
+`approved_ready` › `stale` › `awaiting_review`.
+
+`awaiting_reporter` outranks everything below it — `conflict` included — because
+every route below dispatches a worker to *act on the PR*, and an interpretation
+nobody has confirmed must not be reworked, rebased or merged **until the human
+answers**. (The original reason was mechanical: the label was **self-clearing** —
+a loop comment stripped it, and the `conflict` route requires commenting on the
+PR. #411 closed that hole; the ordering stays for the reason under it.) Both
+reasons are still reported, so nothing is hidden — only the dispatch waits.
+
+`reporter_corrected` sits one rung above it, and is where the second half of that
+sentence finally means something (issue #442). "Until the human answers" was
+written as a rule and implemented as a full stop: a reporter who answered got the
+same parked row as one who said nothing, byte for byte. **A correction IS the
+human answering** — the one input that resolves the ambiguity the gate is holding
+for — so the *rework* is admitted. Nothing else loosens: the label stays, `pr
+automerge` still reports `unconfirmed interpretation`, a bare rebase and a merge
+are still withheld, and the reworked PR re-arms on a newer unconfirmed reading.
+Silence still parks forever.
 
 | `state` | What it means | Action |
 |---|---|---|
-| `awaiting_reporter` | approved + green, interpretation unconfirmed (`needs-reporter-review`) | park — the reporter must confirm; re-checked next tick |
+| `reporter_corrected` | still gated, and the reporter replied with a correction | rework per § "A reporter correction IS the human answering" — brief it as settled; the gate stays ON |
+| `awaiting_reporter` | approved + green, interpretation unconfirmed (`needs-reporter-review`) | park — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable`) → `issue escalate` ONCE, nothing else |
 | `ci_failing` | a check is red | fix on branch, push; escalate after `max-fix-attempts` |
 | `changes_requested` | reviewer wants changes | pr-feedback → fix → push → reply |
 | `review_comments` | unaddressed comments | pr-feedback (may already be handled) → reply |
@@ -578,7 +604,7 @@ the dispatch waits.
   | --- | --- |
   | **Any comment the loop posts** | MUST carry a `<!-- shipflow:` marker — `pr approve --comment` and `pr post-review` stamp `<!-- shipflow:loop-review -->` for you; a hand-written `gh pr comment` does not |
   | **Releasing the gate** | only the reporter, with a reply that is ONLY `confirmed` / `/confirm` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / `+1` / 👍 and nothing else — never the loop |
-  | **Correcting the reading** | leaves the gate ON, by design: rework the PR |
+  | **Correcting the reading** | leaves the gate ON, by design: rework the PR — the loop now DOES, via `reporter_corrected` (see below) |
   | **A QUALIFIED yes** | also leaves it ON — `yes but change the copy first` is a correction, not consent |
   | **Prose that reads as consent** | also leaves it ON — even `Confirmed — ship it`, because it is not the token |
   | **A token with ANYTHING under it** | also leaves it ON — one newline or one blank line, a correction or a thank-you |
@@ -600,6 +626,102 @@ the dispatch waits.
   the server performs posts an attributable audit comment naming the actor and
   quoting their line — if the label vanished and no such comment exists, treat
   it as a bug, not a confirmation.
+- 🟢 **A reporter correction IS the human answering — rework it** (issue #442).
+  The row above says a correction "leaves the gate ON, by design: rework the PR",
+  and the server's near-miss nudge promises the reporter the same thing in so
+  many words. Nothing did. `awaiting_reporter` only parked, and the inbox row was
+  byte-identical with and without their reply — so a reporter who did exactly
+  what the system asked got silence, no nudge (`awaiting_reporter` outranks
+  `stale`, #439) and no way out.
+
+  `inbox` now classifies such a PR **`reporter_corrected`** — ranked immediately
+  above `awaiting_reporter`, `needsAttention: true`, `reasons:
+  ["needs-reporter-review", "reporter_correction"]` — and puts the reply ON the
+  row: `corrections: [{id, author, at, url, excerpt}, …]` (**every** unanswered
+  comment, OLDEST first) with `correction` = `corrections[0]`, plus
+  `parentNeedsHuman`. Summary gains `reporterCorrected`; the PR leaves `parked`.
+
+  The CLI decides only the deterministic half — *which comments here has the loop
+  not already answered?* You decide the rest, by the same judgement the
+  `needs-human` trigger already asks of you:
+
+  | Check | Rule |
+  | --- | --- |
+  | **Decision, or question?** | Only a DECISION dispatches — "not quite, scope it to the CLI only". A question or chatter ("does this cover the migration?") stays parked, exactly as it does on a `needs-human` issue. Guessing here burns a worker cycle per stray comment. |
+  | **Read the WHOLE list** | The decision is often NOT the newest comment: the gate's nudge tells reporters to send thanks and notes as a SEPARATE comment, so correction-then-note is the documented shape. Judge every entry in `corrections`; dispatch on the decision and echo THAT entry's `id`. |
+  | **Parent escalated?** | `parentNeedsHuman: true` → use the **needs-human answer path** above instead (clear `needs-human`, add `loop-proceed`, bake in, dispatch). One reply, one protocol — never both. Resolved from closing refs AND a `Part of #N` slice link, so a `--partial` PR's parent counts. |
+  | **Brief** | Bake the correction in as **SETTLED**, like an answered escalation decision: never re-ask it, never re-derive the reading it replaced. |
+  | **Worker MUST comment** | The rework ends with the marked comment below. Not optional — see the box after this table. |
+  | **Gate** | Untouched. Never remove the label; never post a confirmation on the reporter's behalf. `pr automerge` still refuses with `unconfirmed interpretation`, and the reworked PR re-arms. |
+  | **Ceiling** | `max-fix-attempts` reworks per PR (default 3). At the ceiling the row falls back to `awaiting_reporter` carrying `rework_ceiling` in `reasons` → `issue escalate` ONCE, don't re-poll. |
+  | **`correction_unreadable`** | The PR has human-shaped comments but NO loop-machinery comment at all, so the detector refuses to read the thread (below). Escalate to a human — never hand-judge it into a rework. |
+
+  🟡 **The two refusals arrive as WORK, once.** `rework_ceiling` and
+  `correction_unreadable` stay `awaiting_reporter` — there is no rework route out
+  of either — but the row carries **`escalateOnce: true`** and
+  `needsAttention: true`, because "escalate once" is an instruction Phase A can
+  only follow on a row it actually visits, and Phase A iterates `needsAttention`.
+  Once-ness needs no new state: `issue escalate` puts `needs-human` on the parent
+  issue, which is exactly what makes `escalateOnce` false on the next tick, and
+  the row parks. A PR with no linked issue has nothing to escalate and stays
+  parked. Do ONLY the escalation from such a row — never a rework, never a merge.
+
+  🟡 **What counts as "the loop already answered this".** Exactly ONE comment
+  suppresses: the worker's **`rework-from`** marker, and it suppresses up to the
+  comment it NAMES, so anything newer survives. Every other marked comment either
+  preceded the reply (the gate notice) or responded to it without acting on it —
+  the server's `intent-gate-hint` nudge, posted on *every* correction seconds
+  after it lands, and the reviewer's `loop-review` verdict on the current head.
+  Both used to bury the correction they followed. The marker is read only from a
+  `[bot]` author or a trusted association, and only from text the author actually
+  typed: **quoting** a marker (GitHub's Quote reply copies them verbatim) is a
+  claim, not evidence — the same rule as the intent-gate audit record (#411).
+  This is why the marker is mandatory: forget it and the loop re-offers the same
+  comment until the ceiling stops it.
+
+  🔴 **The marked comment is what keeps this from becoming
+  rework-then-park-forever.** Nothing re-pings the reporter after a rework:
+  `NotifyNeedsReporterReview` fires on `*.labeled` only and the label never
+  re-applies, and the near-miss nudge is once-per-PR. A silent rework leaves a
+  *newer* unconfirmed reading in the same silence — worse than where it started.
+  Post exactly this shape, as the LAST thing the rework does:
+
+  ```markdown
+  ## 🔁 Reworked per your correction
+
+  | | |
+  | --- | --- |
+  | **You said** | <one-line quote of the correction> |
+  | **New reading** | <the interpretation now implemented — one line> |
+  | **Changed** | <what moved — one line> |
+
+  <the intentGate.releaseHint sentence, verbatim from the contract>
+
+  <!-- shipflow:rework-from id=<the id of the `corrections` entry you acted on> -->
+  ```
+
+  The `rework-from` marker is **load-bearing code, not a convention**: the CLI
+  reads `id=` back so the same comment can never re-trigger, and counts the
+  markers for the ceiling. `renderReworkFromMarker()` renders it and
+  `SHIPFLOW_CONTRACT.intentGate.releaseHint` is the hint — copy neither by hand.
+  Its absence is the anti-self-loop failure: an UNMARKED loop comment on a gated
+  PR is indistinguishable from a fresh reporter correction (same login, same
+  association — that is why no author filter exists here), so the loop reworks in
+  response to itself until the ceiling stops it. Echo the id of the entry you
+  ACTED on: the horizon moves to that comment, so a correction that arrived while
+  the worker was running is still waiting on the next tick instead of being
+  buried by the answer to an older one.
+
+  🔴 **A PR with no machinery comment at all is refused outright**, with
+  `correction_unreadable` on the row. This is not theoretical: PR #401, the live
+  gated PR, carries three UNMARKED `MEMBER` comments — an old reviewer verdict, a
+  brief summary, and a parking note signed `<sub>🤖 ShipFlow loop …</sub>` — every
+  one of them written by the loop and every one indistinguishable from a human
+  correction by content or by author. Reading that thread would have dispatched a
+  rework in reply to the loop's own parking note. Every PR gated by a current CLI
+  has a trail (`pr automerge` posts the marked gate notice as it applies the
+  label), so this only ever fires on legacy or hand-labelled PRs — where the
+  right answer is a human, not a guess.
 - Reconcile (A) acts only on **your own** PRs and claimed issues. Don't touch
   others' PRs/issues unless asked.
 - Because blocked/escalated issues keep their claim and carry `needs-human`,
