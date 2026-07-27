@@ -2848,6 +2848,16 @@ class ShipFlowClient {
     }
     return res.json();
   }
+  async uploadMedia(org, projectId, files) {
+    const form = new FormData;
+    for (const f of files)
+      form.append("files", new Blob([f.data]), f.filename);
+    const res = await this.fetchWithRefresh(`${this.baseUrl}/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/media`, { method: "POST", body: form });
+    if (!res.ok) {
+      throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    }
+    return res.json();
+  }
   async claimIssue(org, projectId, number, body) {
     try {
       const res = await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/issues/${number}/claim`, body);
@@ -4004,6 +4014,12 @@ function ghOpenPRClosingIssues(repo) {
 function ghPRDiffText(repo, number) {
   return _exec(`gh pr diff ${number} --repo ${shellQuote(repo)}`, { maxBuffer: 32 * 1024 * 1024 }).toString();
 }
+function ghPRMergedByHead(repo, branch) {
+  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --head ${shellQuote(branch)} --state merged --limit 1 --json number,headRefOid`).toString();
+  const rows = JSON.parse(out);
+  const pr = rows[0];
+  return pr && typeof pr.number === "number" && typeof pr.headRefOid === "string" ? { number: pr.number, headRefOid: pr.headRefOid } : null;
+}
 function ghPRView(repo, number) {
   const out = _exec(`gh pr view ${number} --repo ${shellQuote(repo)} --json ${PR_FIELDS}`).toString();
   return JSON.parse(out);
@@ -4277,6 +4293,81 @@ function cleanupMergedLocalBranch(headBranch) {
     _exec(`git branch -D ${shellQuote(headBranch)}`, { stdio: "ignore" });
     _exec("git worktree prune", { stdio: "ignore" });
   } catch {}
+}
+var GC_BRANCH_PREFIX = "fix/";
+var GC_MAX_BRANCHES = 20;
+function localGcCandidates() {
+  try {
+    const out = _exec(`git for-each-ref --sort=committerdate --format='%(refname:short) %(objectname)' refs/heads/${GC_BRANCH_PREFIX}`).toString();
+    const tips = [];
+    for (const line of out.split(`
+`)) {
+      const m = line.trim().match(/^(\S+) ([0-9a-f]{40}(?:[0-9a-f]{24})?)$/);
+      if (m)
+        tips.push({ name: m[1], tip: m[2] });
+    }
+    if (tips.length <= GC_MAX_BRANCHES)
+      return tips;
+    for (let i = tips.length - 1;i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [tips[i], tips[j]] = [tips[j], tips[i]];
+    }
+    return tips.slice(0, GC_MAX_BRANCHES);
+  } catch {
+    return [];
+  }
+}
+function localRepoMatches(repoFullName) {
+  try {
+    const url = _exec("git remote get-url origin").toString().trim();
+    const host = url.match(/^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?([^:/]+)[:/]/i)?.[1] ?? "";
+    if (host.toLowerCase() !== "github.com")
+      return false;
+    const m = url.match(/[/:]([^/:]+\/[^/]+?)(?:\.git)?$/);
+    return m ? m[1].toLowerCase() === repoFullName.toLowerCase() : false;
+  } catch {
+    return false;
+  }
+}
+function localBranchExists(branch) {
+  try {
+    _exec(`git rev-parse --verify --quiet refs/heads/${shellQuote(branch)}`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isAncestorOfMergedHead(tip, mergedHeadOid) {
+  try {
+    _exec(`git merge-base --is-ancestor ${shellQuote(tip)} ${shellQuote(mergedHeadOid)}`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function branchWorktreeDirty(branch) {
+  try {
+    const worktrees = parseWorktrees(_exec("git worktree list --porcelain").toString());
+    const held = worktrees.find((w) => w.branch === `refs/heads/${branch}`);
+    if (!held)
+      return false;
+    return _exec(`git -C ${shellQuote(held.path)} status --porcelain`).toString().trim() !== "";
+  } catch {
+    return true;
+  }
+}
+function planMergedBranchGc(branches, mergedByHead) {
+  const plan = { clean: [], unpushed: [] };
+  for (const b of branches) {
+    const pr = mergedByHead.get(b.name);
+    if (!pr)
+      continue;
+    if (pr.headRefOid === b.tip)
+      plan.clean.push({ name: b.name, prNumber: pr.number });
+    else
+      plan.unpushed.push({ name: b.name, prNumber: pr.number });
+  }
+  return plan;
 }
 var MACHINE_DOMAIN_SUFFIXES = [".local", ".ts.net", ".lan", ".internal"];
 function suspiciousCommitEmail(email, hostname) {
@@ -4879,7 +4970,7 @@ function issueRow(i) {
 
 // src/commands/issue.ts
 import { hostname as hostname2 } from "node:os";
-import { readFileSync as readFileSync3 } from "node:fs";
+import { readFileSync as readFileSync3, statSync } from "node:fs";
 import { basename as basename2 } from "node:path";
 
 // src/message-lint.ts
@@ -5035,17 +5126,109 @@ function validateEvidenceSelection(before, after, misc, labels = [], beforeCapti
   }
   return null;
 }
+var VIDEO_EXTS = [".mp4", ".mov", ".webm"];
+var MAX_SCREENSHOT_BYTES = 8 << 20;
+function isVideoPath(p) {
+  const lower = p.toLowerCase();
+  return VIDEO_EXTS.some((e) => lower.endsWith(e));
+}
+function validateScreenshotSelection(paths, captions) {
+  if (paths.length === 0 && captions.length > 0) {
+    return "--screenshot-caption without --screenshot — captions describe screenshots by position.";
+  }
+  for (const p of paths) {
+    if (!isImagePath(p) && !isVideoPath(p)) {
+      return `${p}: not a recognized screenshot/recording type (${[...IMAGE_EXTS, ...VIDEO_EXTS].join(" ")}).`;
+    }
+  }
+  if (captions.length > paths.length) {
+    return `${captions.length} --screenshot-caption(s) for ${paths.length} --screenshot(s) — captions describe shots by position, at most one per screenshot.`;
+  }
+  return null;
+}
+function screenshotCaptionText(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/\r?\n/g, " ");
+}
+function markdownLinkText(s) {
+  return s.replace(/([\[\]`\\])/g, "\\$1");
+}
+function renderScreenshotsSection(shots) {
+  if (shots.length === 0)
+    return "";
+  const parts = ["## Screenshots"];
+  for (const s of shots) {
+    const embed = isVideoPath(s.filename) ? `<video src="${s.url}" controls width="480"></video>
+
+[▶ ${markdownLinkText(s.filename)}](${s.url})` : `<img src="${s.url}" alt="${screenshotCaptionText(s.filename)}" width="480">`;
+    const caption = s.caption?.trim() ? `
+<br><sub>${screenshotCaptionText(s.caption.trim())}</sub>` : "";
+    parts.push(`${embed}${caption}`);
+  }
+  return parts.join(`
+
+`);
+}
 
 // src/commands/issue.ts
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
-  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--json", "Output JSON").action(runAction(async (opts) => {
+  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--json", "Output JSON").action(runAction(async (opts) => {
+    const shots = opts.screenshot ?? [];
+    const shotCaptions = opts.screenshotCaption ?? [];
+    const shotErr = validateScreenshotSelection(shots, shotCaptions);
+    if (shotErr) {
+      console.error(shotErr);
+      process.exit(1);
+    }
     const ctx = await loadCtx(program2);
     const repo = opts.repo ?? ctx.project.repoFullName;
     const title = opts.title ?? await promptText("Title: ");
-    const body = opts.body === "-" ? await readStdin() : opts.body ?? "";
+    let body = opts.body === "-" ? await readStdin() : opts.body ?? "";
     for (const p of lintMessageBody(body))
       console.warn(`⚠️  body lint: ${p}`);
+    if (shots.length > 0) {
+      for (const p of shots) {
+        const size = statSync(p).size;
+        if (size > MAX_SCREENSHOT_BYTES) {
+          const msg = `${p}: ${(size / (1 << 20)).toFixed(1)}MB exceeds the 8MB per-file limit — issue NOT created.`;
+          if (opts.json)
+            console.log(JSON.stringify({ error: msg }));
+          else
+            console.error(msg);
+          process.exit(1);
+        }
+      }
+      const files = shots.map((p) => ({ filename: basename2(p), data: new Uint8Array(readFileSync3(p)) }));
+      let urls;
+      try {
+        ({ urls } = await ctx.client.uploadMedia(ctx.creds.org, ctx.project.projectId, files));
+      } catch (e) {
+        const msg = `Screenshot upload failed — issue NOT created: ${e.message}`;
+        if (opts.json)
+          console.log(JSON.stringify({ error: msg }));
+        else {
+          console.error(msg);
+          console.error("Retry, or create without --screenshot and attach via `issue evidence --image` once the issue exists.");
+        }
+        process.exit(1);
+      }
+      if (urls.length !== files.length) {
+        const msg = `Screenshot upload returned ${urls.length} URL(s) for ${files.length} file(s) — issue NOT created.`;
+        if (opts.json)
+          console.log(JSON.stringify({ error: msg }));
+        else
+          console.error(msg);
+        process.exit(1);
+      }
+      const section = renderScreenshotsSection(files.map((f, i) => ({
+        filename: f.filename,
+        url: urls[i],
+        caption: shotCaptions[i]
+      })));
+      body = body.trimEnd() ? `${body.trimEnd()}
+
+${section}` : section;
+    }
     const labels = opts.label ?? [];
     for (const l of labels)
       ghEnsureLabel(repo, l);
@@ -5434,6 +5617,69 @@ function parkedCount(prs) {
 function actionableCorrections(prs) {
   return prs.filter((p) => p.state === "reporter_corrected" && p.foreign !== true).length;
 }
+var GC_LOOKUP_BUDGET_MS = 20000;
+function gcMergedLocalBranches(repo, deps = {}) {
+  const {
+    matches = localRepoMatches,
+    candidates = localGcCandidates,
+    lookup = ghPRMergedByHead,
+    cleanup = cleanupMergedLocalBranch,
+    isDirty = branchWorktreeDirty,
+    isAncestor = isAncestorOfMergedHead,
+    stillExists = localBranchExists,
+    nowMs = Date.now
+  } = deps;
+  const empty = { cleaned: [], unpushed: [], dirty: [], failed: [], lookupsSkipped: 0 };
+  try {
+    if (!matches(repo))
+      return empty;
+    const branches = candidates();
+    if (!branches.length)
+      return empty;
+    const deadline = nowMs() + GC_LOOKUP_BUDGET_MS;
+    let lookupsSkipped = 0;
+    const mergedByHead = new Map;
+    for (const b of branches) {
+      if (nowMs() > deadline) {
+        lookupsSkipped++;
+        continue;
+      }
+      try {
+        const pr = lookup(repo, b.name);
+        if (pr)
+          mergedByHead.set(b.name, pr);
+      } catch {}
+    }
+    const plan = planMergedBranchGc(branches, mergedByHead);
+    const cleanable = [...plan.clean];
+    const unpushed = [];
+    for (const u of plan.unpushed) {
+      const tip = branches.find((b) => b.name === u.name)?.tip ?? "";
+      const head = mergedByHead.get(u.name)?.headRefOid ?? "";
+      if (tip && head && isAncestor(tip, head))
+        cleanable.push(u);
+      else
+        unpushed.push(u);
+    }
+    const cleaned = [];
+    const dirty = [];
+    const failed = [];
+    for (const c of cleanable) {
+      if (isDirty(c.name)) {
+        dirty.push(c);
+        continue;
+      }
+      cleanup(c.name);
+      if (stillExists(c.name))
+        failed.push(c);
+      else
+        cleaned.push(c);
+    }
+    return { cleaned, unpushed, dirty, failed, lookupsSkipped };
+  } catch {
+    return empty;
+  }
+}
 var STATE_ICONS = {
   reporter_corrected: "\uD83D\uDCE3",
   awaiting_reporter: "\uD83D\uDE4B",
@@ -5459,6 +5705,22 @@ function registerInboxCommand(program2) {
       escalatedIssues ??= new Set(ghIssueListByLabel(repo, NEEDS_HUMAN_LABEL).map((i) => i.number));
       return issueNumbers.some((n) => escalatedIssues.has(n));
     };
+    const gc = gcMergedLocalBranches(repo);
+    for (const c of gc.cleaned) {
+      console.warn(`\uD83E\uDDF9 ${c.name}: PR #${c.prNumber} merged externally — local branch/worktree cleaned.`);
+    }
+    for (const u of gc.unpushed) {
+      console.warn(`⚠️  ${u.name}: PR #${u.prNumber} merged, but the local tip has commits the PR never saw — kept (unpushed work).`);
+    }
+    for (const d of gc.dirty) {
+      console.warn(`⚠️  ${d.name}: PR #${d.prNumber} merged, but its worktree has uncommitted edits — kept (removal would destroy them).`);
+    }
+    for (const f of gc.failed) {
+      console.warn(`⚠️  ${f.name}: PR #${f.prNumber} merged but cleanup could not remove the branch (busy worktree?) — will retry next tick.`);
+    }
+    if (gc.lookupsSkipped > 0) {
+      console.warn(`⏱ merged-branch GC: ${gc.lookupsSkipped} candidate lookup(s) deferred to the next tick (time budget).`);
+    }
     const minePrs = ghPRListMine(repo);
     const prs = minePrs.map((pr) => {
       const { count: unresolvedThreads, degraded: degraded2 } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
@@ -5498,9 +5760,12 @@ function registerInboxCommand(program2) {
       parked: parkedCount(prs),
       degraded,
       conflictSweep: sweepEnabled,
-      humanOnlyConflicts: prs.filter((p) => p.humanOnly).length
+      humanOnlyConflicts: prs.filter((p) => p.humanOnly).length,
+      gcCleaned: gc.cleaned.length,
+      gcUnpushedKept: gc.unpushed.length + gc.dirty.length,
+      gcFailed: gc.failed.length
     };
-    emit(opts, withProvenance({ repo, prs, issues, summary }), () => {
+    emit(opts, withProvenance({ repo, prs, issues, summary, gc }), () => {
       console.log(`\uD83D\uDCE5 Inbox for ${repo}`);
       console.log(`Needs action: ${meter(summary.prsNeedingAttention, prs.length)} PRs · ${meter(summary.issuesNeedingAttention, issues.length)} issues · ✅ ${summary.readyToMerge} ready to merge`);
       if (degraded)

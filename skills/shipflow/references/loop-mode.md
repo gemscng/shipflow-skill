@@ -47,6 +47,13 @@ Use a **single** worktree, reused for every iteration (not one per issue):
   worktree. **Cleanup:** merged `fix/issue-*` branches are pruned automatically
   at merge time by `pr automerge`/`pr merge` (remote via gh `--delete-branch`,
   local via a force-prune that detaches HEAD if the worktree is on the branch).
+  PRs merged OUTSIDE those commands — GitHub UI, `gh pr merge`, the dashboard, a
+  human releasing the intent gate — are healed by the **merged-branch GC** that
+  `inbox` runs each tick (issue #455): any local `fix/*` branch whose PR merged
+  at exactly the local tip gets the same cleanup (dedicated worktree removed,
+  loop worktree detached, branch deleted); a tip with unpushed commits — or a
+  holding worktree with uncommitted edits — is kept and reported
+  (`summary.gcUnpushedKept`) for a human to judge.
   At run end — only once no PRs you own are still in flight — tear the worktree
   down: `ExitWorktree`, else `cd` out and `git worktree remove
   .worktrees/shipflow-loop` + `git branch -D shipflow-loop/base`. Surface its

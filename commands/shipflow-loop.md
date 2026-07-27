@@ -31,7 +31,12 @@ if it exists; all work happens inside it.
 Each tick:
 
 **A. Reconcile in-flight first** — `renaiss-shipflow inbox --json` classifies each
-open PR into a `state`. Act, then re-run A until nothing `needsAttention`:
+open PR into a `state`. The inbox also runs a **merged-branch GC** (issue #455):
+local `fix/*` branches whose PR was merged outside the CLI (GitHub UI, `gh pr
+merge`, a human releasing the intent gate) are cleaned — worktree freed, branch
+deleted — automatically; `summary.gcUnpushedKept > 0` means a merged PR's local
+branch held unpushed commits and was kept for a human. Act, then re-run A until
+nothing `needsAttention`:
 - `ci_failing` → fix on its branch, push; after `max-fix-attempts` still red →
   `renaiss-shipflow issue escalate <issue> --reason "…"`.
 - `changes_requested` / `review_comments` → `references/pr-feedback.md` (fix every

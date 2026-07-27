@@ -55,7 +55,7 @@ requests to the same CLI calls.
 | "what's my status" / "what's on my plate" | `renaiss-shipflow status --json` |
 | "list issues" / "show open issues" | `renaiss-shipflow issues list --json` |
 | "export issues to excel" / "issue spreadsheet" | `renaiss-shipflow issues export` — GitHub filters supported: `--state open\|closed\|all`, `--label` (repeatable), `--assignee`, `--author`, `--mention`, `--milestone`, `--search`, `--limit`, `--out <file.xlsx>` |
-| "open an issue about X" / "file an issue" | `renaiss-shipflow issue create --title "X" --body "..."` |
+| "open an issue about X" / "file an issue" | `renaiss-shipflow issue create --title "X" --body "..."` — for anything visible (broken layout, wrong render, error dialog) add `--screenshot <path...>` (+ `--screenshot-caption` per shot): hosted and embedded in the body, worth more than prose |
 | "I'm building X" / feature work with no issue / before a PR with no `Fixes #N` | Detect a related open issue — read `references/feature-issue-detection.md` |
 | "auto-create issues" / "enable auto issue" | `renaiss-shipflow config set auto-issue true` |
 | "let me work on issue 42" / "pick up #42" | `renaiss-shipflow issue work 42 --json` |
