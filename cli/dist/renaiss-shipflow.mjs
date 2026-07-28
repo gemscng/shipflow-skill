@@ -2454,6 +2454,7 @@ function credentialsForProfile(name) {
   return readJsonOr(join(dir, "credentials.json"), null);
 }
 var MERGE_POLICIES = ["manual", "auto-on-green", "auto-timeout"];
+var INTENT_GATE_MODES = ["strict", "trusted"];
 function ensureDir() {
   const dir = configDir();
   if (!existsSync(dir)) {
@@ -2568,6 +2569,11 @@ function resolveRequireReview() {
     return parseBool(env);
   const c = loadConfig().requireReview;
   return c === undefined ? true : c;
+}
+function resolveIntentGateMode() {
+  const env = process.env.SHIPFLOW_INTENT_GATE;
+  const raw = env != null && env.trim() !== "" ? env.trim() : loadConfig().intentGate ?? "strict";
+  return INTENT_GATE_MODES.includes(raw) ? raw : "strict";
 }
 function resolveConflictSweep() {
   const env = process.env.SHIPFLOW_CONFLICT_SWEEP;
@@ -6057,6 +6063,17 @@ var SETTINGS = [
     effective: resolveConflictSweep
   },
   {
+    key: "intent-gate",
+    field: "intentGate",
+    set: (v, c) => {
+      const m = v.trim();
+      if (!INTENT_GATE_MODES.includes(m))
+        throw new Error(`intent-gate must be one of: ${INTENT_GATE_MODES.join(", ")}`);
+      return c.intentGate = m;
+    },
+    effective: resolveIntentGateMode
+  },
+  {
     key: "loop-worker-model",
     field: "loopWorkerModel",
     set: (v, c) => c.loopWorkerModel = v.trim(),
@@ -6532,6 +6549,13 @@ function findNearMissDeviationHeadings(prBody) {
   return out;
 }
 var INTERPRETATION_NOTE_CALLOUT = /^[^\p{L}\n]*interpretation note/imu;
+function hasExplicitInterpretationSignal(prBody) {
+  if (!prBody)
+    return false;
+  if (prBody.includes(SHIPFLOW_CONTRACT.markers.interpretationNote))
+    return true;
+  return INTERPRETATION_NOTE_CALLOUT.test(prBody);
+}
 function hasInterpretationSignal(prBody) {
   if (!prBody)
     return false;
@@ -6847,7 +6871,7 @@ var APPROVED_LABEL = SHIPFLOW_CONTRACT.labels.names.shipflowApproved;
 var REPORTER_REVIEW_LABEL = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
 function evalIntentGate(repo, number, prView) {
   const hasLabel = (prView.labels ?? []).some((l) => l.name === REPORTER_REVIEW_LABEL);
-  const signal = hasInterpretationSignal(prView.body ?? "");
+  const signal = resolveIntentGateMode() === "trusted" ? hasExplicitInterpretationSignal(prView.body ?? "") : hasInterpretationSignal(prView.body ?? "");
   const everCleared = signal && !hasLabel ? intentGateEverCleared(ghIntentGateClearance(repo, number, REPORTER_REVIEW_LABEL)) : false;
   return intentGate({ signal, hasLabel, everCleared });
 }

@@ -86,9 +86,11 @@ nothing `needsAttention`:
   re-escalate. (If the reply is only a question/chatter with no decision, leave it
   escalated.)
 
-**B. Admit new work only under the WIP limit** — if (open PRs you own) ≥
-`wip-limit`, skip B. Else while PRs-this-run < `cap`, admit ONE issue (each step a
-subagent):
+**B. Admit new work only under the WIP limit** — if `summary.wipActionable` (from
+`inbox --json`; open PRs you own minus reporter-parked ones, #451) ≥ `wip-limit`,
+skip B. Else while PRs-opened-THIS-PASS < `cap` (the counter resets to zero every
+tick — hitting the cap never carries across ticks, #451), admit ONE issue (each
+step a subagent):
 1. **Pick** — `renaiss-shipflow issue next --json` (priority→severity→newest; skips
    `needs-human`/claimed/`⏳ waiting-on`). Exit 4 / `issue: null` → nothing to
    admit. Dependency: blocked-by an unmerged `#X` → `issue wait <n> --on <#X>`
@@ -122,8 +124,10 @@ you **reproduce** that isn't already an open issue (dedupe via `issues list
 to **A**; nothing new → real stop. Cap: `bug-hunt-cap` (default 5); reproduced bugs
 only, never duplicates.
 
-**D. Repeat** A→B→C until PRs-this-run hits `cap`, **or** the queue is empty and the
-bug sweep found nothing new (or `bug-hunt` is off).
+**D. Repeat** A→B→C until PRs-opened-this-pass hits `cap`, **or** the queue is
+empty and the bug sweep found nothing new (or `bug-hunt` is off). An empty queue
+reports as "queue empty", never "at cap"; the next tick starts a fresh pass with
+the cap counter at zero (#451).
 
 **Continuous mode (default)** — unless you pass `once`, the loop keeps running: do
 one full pass (A→B→C→D), then go **dormant ~15 min** and run the pass again,
@@ -161,8 +165,9 @@ judges at a glance — `✅ N merged · 🔀 N opened · ⏸ N parked (reason) �
 escalated (reason)` — per the graphical-first Message style (`loop-mode.md`). By
 default (continuous mode) don't ask — post that summary line and end
 the turn, leaving the next tick to resume after the dormancy; only with `once` then
-ask whether to continue or raise the policy — for intent-gated rows say "awaiting
-your confirmation token (or remove the label)", never "merge by hand" (#451).
+ask whether to continue, raise the policy, or hand-merge rows that are ONLY
+policy-parked (`manual` merge-policy) — for intent-gated rows say "awaiting
+your confirmation token (or remove the label)" and never offer a hand-merge (#451).
 
 **Cleanup at run end** (only when truly stopping, not pausing mid-run/resuming):
 once no PRs you own are still in flight, tear down the loop worktree so it doesn't

@@ -81,7 +81,8 @@ Read them with `renaiss-shipflow config list`; set with `config set <key> <v>`
 | `merge-policy` | `manual` | `manual` = never auto-merge (park for a human) · `auto-on-green` = merge when CI green **and** approved · `auto-timeout` = green + no objection past `stale-pr-hours` |
 | `require-ci` | `true` | CI must be green before a PR is "advanced" / merged |
 | `max-fix-attempts` | `3` | CI-fix tries on one PR before escalating to a human — also caps reporter-correction reworks (#442) |
-| `wip-limit` | `10` | max ACTIONABLE open PRs you own before you stop admitting new work — PRs parked on a human (`awaiting_reporter` / `needs-human`) don't count (#451; read `summary.wipActionable`) |
+| `intent-gate` | `strict` | `strict` = a Deviations section, an Interpretation-note callout, or the interpretation marker all park the PR for the reporter · `trusted` = only the EXPLICIT reinterpretation signals (marker/callout) park; reviewer-approved deviations merge on green (#471 — for solo operators) |
+| `wip-limit` | `10` | max ACTIONABLE open PRs you own before you stop admitting new work — reporter-parked (`awaiting_reporter`) PRs don't count (#451; read `summary.wipActionable`) |
 | `stale-pr-hours` | `48` | a green, unreviewed PR older than this is `stale` → ping/escalate |
 | `bug-hunt` | `true` | when the queue is empty, run a test+QA sweep and file issues for bugs found (Phase C) |
 | `bug-hunt-cap` | `5` | max NEW issues the bug sweep may file per run |
@@ -361,10 +362,12 @@ evidence comments):
 ### B. Admit new work — under the WIP limit, every issue reviewed first
 
 The WIP comparison counts **actionable** open PRs only — read
-`summary.wipActionable` from `inbox --json` (issue #451): PRs parked on a human
-(`awaiting_reporter`, or a `needs-human` escalation) are a timer exactly like
-`issue wait --on #X`, and letting them consume WIP slots jams admission with
-nothing the loop can do about it. If `wipActionable` ≥ `wip-limit`, **skip B**
+`summary.wipActionable` from `inbox --json` (issue #451): PRs parked on the
+reporter (`awaiting_reporter`) are a timer exactly like `issue wait --on #X`,
+and letting them consume WIP slots jams admission with nothing the loop can do
+about it. (A PR whose PARENT issue is `needs-human`-escalated still counts —
+the row itself is usually actionable, and resolving parents per row would cost
+an API call each; PR #470 review noted the boundary.) If `wipActionable` ≥ `wip-limit`, **skip B**
 (drain A instead). Otherwise, while PRs-opened-THIS-PASS < `cap`, admit ONE
 issue — each step a fresh subagent. **The cap is per pass, not per session**
 (issue #451): in continuous mode the counter RESETS to zero at the start of
