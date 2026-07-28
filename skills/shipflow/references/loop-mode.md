@@ -81,7 +81,7 @@ Read them with `renaiss-shipflow config list`; set with `config set <key> <v>`
 | `merge-policy` | `manual` | `manual` = never auto-merge (park for a human) · `auto-on-green` = merge when CI green **and** approved · `auto-timeout` = green + no objection past `stale-pr-hours` |
 | `require-ci` | `true` | CI must be green before a PR is "advanced" / merged |
 | `max-fix-attempts` | `3` | CI-fix tries on one PR before escalating to a human — also caps reporter-correction reworks (#442) |
-| `wip-limit` | `10` | max open PRs you own before you stop admitting new work |
+| `wip-limit` | `10` | max ACTIONABLE open PRs you own before you stop admitting new work — PRs parked on a human (`awaiting_reporter` / `needs-human`) don't count (#451; read `summary.wipActionable`) |
 | `stale-pr-hours` | `48` | a green, unreviewed PR older than this is `stale` → ping/escalate |
 | `bug-hunt` | `true` | when the queue is empty, run a test+QA sweep and file issues for bugs found (Phase C) |
 | `bug-hunt-cap` | `5` | max NEW issues the bug sweep may file per run |
@@ -360,8 +360,16 @@ evidence comments):
 
 ### B. Admit new work — under the WIP limit, every issue reviewed first
 
-If (open PRs you own) ≥ `wip-limit`, **skip B** (drain A instead). Otherwise, while
-PRs-opened-this-run < `cap`, admit ONE issue — each step a fresh subagent:
+The WIP comparison counts **actionable** open PRs only — read
+`summary.wipActionable` from `inbox --json` (issue #451): PRs parked on a human
+(`awaiting_reporter`, or a `needs-human` escalation) are a timer exactly like
+`issue wait --on #X`, and letting them consume WIP slots jams admission with
+nothing the loop can do about it. If `wipActionable` ≥ `wip-limit`, **skip B**
+(drain A instead). Otherwise, while PRs-opened-THIS-PASS < `cap`, admit ONE
+issue — each step a fresh subagent. **The cap is per pass, not per session**
+(issue #451): in continuous mode the counter RESETS to zero at the start of
+every tick — a session that opened 5 PRs yesterday is not "at cap" today, and
+"🛑 at cap" may only ever appear in a tick that itself opened `cap` PRs.
 
 1. **Pick** — `renaiss-shipflow issue next --json` (claims next open/unclaimed,
    priority → severity → newest; optional `--label bug`; skips `needs-human`/claimed).
@@ -462,10 +470,13 @@ still applies to fixes. Turn it off with `config set bug-hunt false` (or
 
 ### D. Repeat / stop
 
-Loop A→B→C. The run ends only when PRs-opened-this-run has hit `cap`, **or** the
+Loop A→B→C. The PASS ends when PRs-opened-this-pass has hit `cap`, **or** the
 queue is empty AND the bug sweep (C) surfaced nothing new (or `bug-hunt` is off).
-`cap` precedence: a `cap=N` token the user passed (`cap=all` drains the queue),
-else `SHIPFLOW_LOOP_CAP`, else **5**.
+In continuous mode the next tick starts a FRESH pass with the cap counter at
+zero — hitting the cap never carries across ticks (issue #451). An empty queue
+is reported as "queue empty", never as "at cap"; the two idle states read
+differently on purpose. `cap` precedence: a `cap=N` token the user passed
+(`cap=all` drains the queue), else `SHIPFLOW_LOOP_CAP`, else **5**.
 
 ## Reconcile playbook (inbox `state` → action)
 
@@ -753,9 +764,13 @@ Silence still parks forever.
   won't approve it and `pr automerge` won't merge it, regardless of `merge-policy`.
 - **At the cap or an empty queue:** summarize — PRs opened, merged (if policy
   allowed), parked-awaiting-review, and escalated (with reasons) — then ask
-  whether to continue beyond the cap, raise the merge policy, or merge anything by
-  hand. Releasing escalated claims and any `pr merge`/`release` still need explicit
-  confirmation. (That "ask" applies only to a `once`/single-pass run; **by default
+  whether to continue beyond the cap or raise the merge policy. For rows parked
+  on the intent gate, the correct copy is "N PR(s) await your confirmation token
+  on the PR (or remove the `needs-reporter-review` label)" — never suggest a
+  hand-merge for a gated PR: no policy merges those, and a bypass defeats the
+  gate (issue #451). "Merge by hand" may only be offered for rows the operator
+  can legitimately merge (e.g. policy-parked on `manual`). Releasing escalated
+  claims and any `pr merge`/`release` still need explicit confirmation. (That "ask" applies only to a `once`/single-pass run; **by default
   the loop is continuous** — don't ask, post the one-line summary and end the turn,
   leaving the recurring trigger to resume the next pass after its dormancy. A
   **spawned / headless session** never asks either — it reports via prose and ends.)

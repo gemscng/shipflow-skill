@@ -161,7 +161,8 @@ judges at a glance — `✅ N merged · 🔀 N opened · ⏸ N parked (reason) �
 escalated (reason)` — per the graphical-first Message style (`loop-mode.md`). By
 default (continuous mode) don't ask — post that summary line and end
 the turn, leaving the next tick to resume after the dormancy; only with `once` then
-ask whether to continue, raise the policy, or merge by hand.
+ask whether to continue or raise the policy — for intent-gated rows say "awaiting
+your confirmation token (or remove the label)", never "merge by hand" (#451).
 
 **Cleanup at run end** (only when truly stopping, not pausing mid-run/resuming):
 once no PRs you own are still in flight, tear down the loop worktree so it doesn't

@@ -5663,6 +5663,9 @@ function parkedCount(prs) {
 function actionableCorrections(prs) {
   return prs.filter((p) => p.state === "reporter_corrected" && p.foreign !== true).length;
 }
+function actionableWip(prs) {
+  return prs.filter((p) => p.foreign !== true && p.state !== "awaiting_reporter").length;
+}
 var GC_LOOKUP_BUDGET_MS = 20000;
 function gcMergedLocalBranches(repo, deps = {}) {
   const {
@@ -5807,6 +5810,7 @@ function registerInboxCommand(program2) {
       degraded,
       conflictSweep: sweepEnabled,
       humanOnlyConflicts: prs.filter((p) => p.humanOnly).length,
+      wipActionable: actionableWip(prs),
       gcCleaned: gc.cleaned.length,
       gcUnpushedKept: gc.unpushed.length + gc.dirty.length,
       gcFailed: gc.failed.length
