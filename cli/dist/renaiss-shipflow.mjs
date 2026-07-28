@@ -5144,6 +5144,34 @@ function isImagePath(p) {
   const lower = p.toLowerCase();
   return IMAGE_EXTS.some((e) => lower.endsWith(e));
 }
+var EXIT_EVIDENCE_THREAD_FAILED = 11;
+function evidenceThreadVerdict(status, threadNotified, threadError) {
+  const effective = status ?? (threadNotified ? "delivered" : "no-reporter-thread");
+  const reason = threadError || "no reason reported by the server";
+  switch (effective) {
+    case "failed":
+      return threadNotified ? {
+        exitCode: EXIT_EVIDENCE_THREAD_FAILED,
+        note: `⚠️  reporter thread delivery INCOMPLETE — some artifacts landed, at least one did not; re-send ONLY the missing ones: ${reason}`,
+        isError: true,
+        partial: true
+      } : {
+        exitCode: EXIT_EVIDENCE_THREAD_FAILED,
+        note: `❌ reporter thread delivery FAILED — the reporter was NOT notified: ${reason}`,
+        isError: true,
+        partial: false
+      };
+    case "delivered":
+      return { exitCode: 0, note: "\uD83D\uDCAC reporter thread notified.", isError: false, partial: false };
+    default:
+      return {
+        exitCode: 0,
+        note: "ℹ️  no chat reporter thread for this issue — nothing to notify (normal for a GitHub-filed issue, not a failure).",
+        isError: false,
+        partial: false
+      };
+  }
+}
 function validateEvidenceSelection(before, after, misc, labels = [], beforeCaptions = [], afterCaptions = [], imageCaptions = []) {
   const hasBefore = before.length > 0;
   const hasAfter = after.length > 0;
@@ -5540,10 +5568,11 @@ ${formatPrecedentSuggestion(precedent)}`;
       touched: opts.touched ?? [],
       images: misc.map(toImg)
     });
+    const verdict = evidenceThreadVerdict(res.threadStatus, res.threadNotified, res.threadError);
     emit(opts, res, () => {
       const where = [];
       if (res.threadNotified)
-        where.push("reporter thread");
+        where.push(verdict.partial ? "reporter thread (PARTIAL)" : "reporter thread");
       if (res.prCommented)
         where.push("PR comment");
       if (res.githubCommented)
@@ -5551,7 +5580,13 @@ ${formatPrecedentSuggestion(precedent)}`;
       console.log(`\uD83E\uDDEA Evidence delivered to: ${where.join(" + ") || "nowhere (check server logs)"}`);
       for (const u of res.threadImageUrls ?? [])
         console.log(`  ${u}`);
+      if (!verdict.isError)
+        console.log(verdict.note);
     }, { pretty: true });
+    if (verdict.isError) {
+      console.error(verdict.note);
+      process.exit(verdict.exitCode);
+    }
   }));
 }
 function printIssueContext(issueData, triage, repo, project, json) {
@@ -6881,10 +6916,11 @@ function stampLoopReview(body) {
 
 ${marker}`;
 }
+var INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**";
 function renderIntentGateNotice() {
   const tokens = SHIPFLOW_CONTRACT.intentGate.confirmationTokens.map((t) => `\`${t}\``).join(", ");
   return [
-    `⏸️ **Merge blocked — awaiting the reporter's confirmation** (\`${REPORTER_REVIEW_LABEL}\`)`,
+    `${INTENT_GATE_NOTICE_HEADLINE} (\`${REPORTER_REVIEW_LABEL}\`)`,
     "",
     "This PR's body carries an interpretation or deviation nobody has confirmed, so ShipFlow will not auto-merge it.",
     "",
@@ -6902,6 +6938,58 @@ function renderIntentGateNotice() {
   ].join(`
 `);
 }
+var GATE_ARM_BLOCKER = "intent gate could not be armed";
+function armIntentGate(repo, number, gate, w) {
+  const applyLabel = gate.applyLabel;
+  let applyNotice = applyLabel;
+  let lookupFailure = "";
+  if (!applyLabel && gate.blocked) {
+    try {
+      applyNotice = !w.noticePosted(repo, number);
+    } catch (e) {
+      applyNotice = false;
+      lookupFailure = `notice lookup: ${e instanceof Error ? e.message : String(e)} — notice presence unverified, not re-posted (retried next pass)`;
+    }
+  }
+  if (!applyLabel && !applyNotice) {
+    return lookupFailure ? { attempted: true, armed: false, blockers: [GATE_ARM_BLOCKER], gateArmError: lookupFailure } : { attempted: false, armed: true, blockers: [] };
+  }
+  const failures = [];
+  const guard = (what, fn) => {
+    try {
+      fn();
+      return true;
+    } catch (e) {
+      failures.push(`${what}: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  };
+  let labelOnIssue = true;
+  if (applyLabel) {
+    guard("ensure label", () => w.ensureLabel(repo, number));
+    labelOnIssue = guard("add label", () => w.addLabel(repo, number));
+  }
+  if (applyNotice) {
+    if (labelOnIssue)
+      guard("post notice", () => w.postNotice(repo, number));
+    else
+      failures.push("post notice: deferred — label not applied, so a confirmation reply would be ignored");
+  }
+  if (failures.length === 0)
+    return { attempted: true, armed: true, blockers: [] };
+  return {
+    attempted: true,
+    armed: false,
+    blockers: [GATE_ARM_BLOCKER],
+    gateArmError: failures.join("; ")
+  };
+}
+var liveIntentGateWriters = {
+  ensureLabel: (repo) => ghEnsureLabel(repo, REPORTER_REVIEW_LABEL, labelColorFor(REPORTER_REVIEW_LABEL), "An unconfirmed worker interpretation/deviation awaiting the issue reporter's confirmation"),
+  addLabel: (repo, number) => ghIssueAddLabels(repo, number, [REPORTER_REVIEW_LABEL]),
+  postNotice: (repo, number) => ghIssueComment(repo, number, renderIntentGateNotice()),
+  noticePosted: (repo, number) => ghIssueComments(repo, number).some((c) => c.body.includes(INTENT_GATE_NOTICE_HEADLINE))
+};
 function unresolvedThreadsOrBlock(repo, number) {
   try {
     return { count: ghReviewThreads(repo, number).filter((t) => !t.isResolved).length, unavailable: false };
@@ -7012,18 +7100,22 @@ ${opts.body ?? ""}`;
     const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
     const wouldMerge = decision.wouldMerge && !threads.unavailable;
     if (!wouldMerge) {
-      if (gate.applyLabel) {
-        try {
-          ghEnsureLabel(repo, REPORTER_REVIEW_LABEL, labelColorFor(REPORTER_REVIEW_LABEL), "An unconfirmed worker interpretation/deviation awaiting the issue reporter's confirmation");
-          ghIssueAddLabels(repo, number, [REPORTER_REVIEW_LABEL]);
-          ghIssueComment(repo, number, renderIntentGateNotice());
-        } catch (e) {
-          console.warn(`needs-reporter-review label failed (will retry next attempt): ${e instanceof Error ? e.message : String(e)}`);
-        }
+      const arm = armIntentGate(repo, number, gate, liveIntentGateWriters);
+      const allBlockers = [...blockers, ...arm.blockers];
+      if (!arm.armed) {
+        console.error(`❌ ${GATE_ARM_BLOCKER} — the reporter is not confirmed to have been asked: ${arm.gateArmError}`);
       }
-      emit(opts, { number, merged: false, policy, blockers, ...decision.unsatisfiable ? { unsatisfiable: true } : {} }, () => {
+      emit(opts, {
+        number,
+        merged: false,
+        policy,
+        blockers: allBlockers,
+        ...arm.attempted ? { gateArmed: arm.armed } : {},
+        ...arm.gateArmError ? { gateArmError: arm.gateArmError } : {},
+        ...decision.unsatisfiable ? { unsatisfiable: true } : {}
+      }, () => {
         console.log(`⏸️  PR #${number} not auto-merged — still blocked on:`);
-        for (const b of blockers)
+        for (const b of allBlockers)
           console.log(`  [ ] ${b}`);
         if (decision.unsatisfiable) {
           console.log("  ⚠️  This blocker cannot clear by waiting — escalate for a human decision.");
