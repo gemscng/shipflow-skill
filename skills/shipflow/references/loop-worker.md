@@ -65,7 +65,18 @@ data in your context, not the orchestrator's.
    #196) rejects a prose-shaped body (≥3 parallel facts but no
    table/checklist/bullets) with exit 2 and creates nothing — restructure the
    body per the Message style contract and re-run; never drop the flag to
-   sneak a body through. **Full fix** → the injected header links
+   sneak a body through.
+   **Readable-body contract (issue #464)** — a body full of tables can still be
+   an unreadable wall. The HEADLINE (what renders un-collapsed) is at most ~25
+   visible lines: TLDR (≤4 sentences — what/why/risk), "What changed" (≤3
+   bullets), one Verified line. EVERYTHING else — root-cause diagrams, file
+   tables, format matrices, testing checklists, review-round logs — goes inside
+   `<details><summary><b>Section name</b> — one-line gist</summary>` blocks.
+   Two exceptions stay visible, never folded: a **Deviations from brief**
+   section (the reporter must see the intent-gate surface) and the
+   `<!-- shipflow:interpretation -->` marker. The lint enforces a hard ceiling
+   (50 visible lines outside `<details>`, exit 2 under `--lint=strict`); write
+   for ~25, not for the ceiling. **Full fix** → the injected header links
    `Closes #N` — a reference (not a copy) that closes the issue on merge (the
    default). **Partial slice** (the brief covered only part of the issue) → pass
    **`--partial`**: the header then links `Part of #N` — a plain reference, **no**

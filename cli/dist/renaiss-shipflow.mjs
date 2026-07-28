@@ -5004,6 +5004,41 @@ function lintMessageBody(body) {
     `body is pure prose but carries ${factSentences.length} sentences of parallel facts (paths/counts/labels) — ` + "restructure as a table (>3 facts), checklist, or bullet list so humans can skim it"
   ];
 }
+function visibleLineCount(body) {
+  let depth = 0;
+  let fenced = false;
+  let count = 0;
+  for (const line of body.split(`
+`)) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      if (depth === 0 && line.trim() !== "")
+        count++;
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) {
+      if (depth === 0 && line.trim() !== "")
+        count++;
+      continue;
+    }
+    const stripped = line.replace(/`[^`\n]*`/g, " ");
+    const opens = (stripped.match(/<details\b/gi) ?? []).length;
+    const closes = (stripped.match(/<\/details>/gi) ?? []).length;
+    if (depth === 0 && line.trim() !== "")
+      count++;
+    depth = Math.max(0, depth + opens - closes);
+  }
+  return count;
+}
+var MAX_VISIBLE_BODY_LINES = 50;
+function lintBodyLength(body) {
+  const visible = visibleLineCount(body);
+  if (visible <= MAX_VISIBLE_BODY_LINES)
+    return [];
+  return [
+    `body has ${visible} visible lines outside <details> (max ${MAX_VISIBLE_BODY_LINES}) — ` + "lead with a short TLDR + key changes, and fold long sections (diagrams, file tables, " + "checklists, review logs) into <details> blocks; keep any 'Deviations from brief' section visible"
+  ];
+}
 
 // src/issue-order.ts
 var NEEDS_HUMAN_LABEL = SHIPFLOW_CONTRACT.labels.names.needsHuman;
@@ -5184,7 +5219,7 @@ function registerIssueCommand(program2) {
     const repo = opts.repo ?? ctx.project.repoFullName;
     const title = opts.title ?? await promptText("Title: ");
     let body = opts.body === "-" ? await readStdin() : opts.body ?? "";
-    for (const p of lintMessageBody(body))
+    for (const p of [...lintMessageBody(body), ...lintBodyLength(body)])
       console.warn(`⚠️  body lint: ${p}`);
     if (shots.length > 0) {
       for (const p of shots) {
@@ -6851,7 +6886,7 @@ function registerPRCommand(program2) {
         process.exit(1);
       }
     }
-    const lintProblems = lintMessageBody(opts.body ?? "");
+    const lintProblems = [...lintMessageBody(opts.body ?? ""), ...lintBodyLength(opts.body ?? "")];
     if (lintProblems.length) {
       if (opts.lint === "strict") {
         console.error("PR body failed prose lint — restructure it (or drop --lint=strict):");
