@@ -134,8 +134,9 @@ step a subagent):
 clean): if `bug-hunt` is on (default), run `renaiss-shipflow test` + `regression
 --json` + a real-browser QA sweep (`references/browser-testing.md`). For each bug
 you **reproduce** that isn't already an open issue (dedupe via `issues list
---json`), file it: `renaiss-shipflow issue create --title "…" --body "<repro>"
---label bug --label auto-qa --json` (+ attach evidence). Filed ≥1 new issue → back
+--json`), file it: `renaiss-shipflow issue create --title "…" --body "<ladder body>"
+--label bug --label auto-qa --json` (+ attach evidence) — body per the
+issue-body ladder (`references/loop-mode.md` § "Message style"). Filed ≥1 new issue → back
 to **A**; nothing new → real stop. Cap: `bug-hunt-cap` (default 5); reproduced bugs
 only, never duplicates.
 

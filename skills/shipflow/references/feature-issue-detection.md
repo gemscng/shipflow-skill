@@ -26,10 +26,18 @@ substantial work land un-tracked, without creating duplicate issues.
 4. **No match →** check the auto-issue setting:
    `renaiss-shipflow config get auto-issue --json`.
    - **`autoIssue: true`** → create one automatically:
-     `renaiss-shipflow issue create --title "<concise>" --body "<what + why>"`,
+     `renaiss-shipflow issue create --title "<concise>" --body "<ladder body>"`,
      report which issue you opened, and continue — **don't ask**.
    - **`autoIssue: false`** (default) → **ask** first: "No open issue covers this
      — want me to open one? (proposed title: …)". Create only on a yes.
+
+   Either way the body follows the **issue-body ladder**
+   (`loop-mode.md` § "Message style"; demo: issue #387): status-header
+   blockquote first line (priority emoji · type · area · effort · source —
+   here `auto-issue`), then **Why** + **What** (≤3 bullets each), an evidence
+   table for any `file:line` claim, and always an acceptance checklist;
+   mermaid only when the design has a flow/sequence/state shape, long detail
+   folded into `<details>`.
 5. Once linked (matched or created), reference it in the PR body (`Fixes #N`).
 
 ## Auto mode

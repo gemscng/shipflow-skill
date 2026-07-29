@@ -539,5 +539,5 @@ binds every decision an LLM judge makes autonomously:
 
 Everything you write on GitHub (comments, PR bodies, issue bodies) follows the one
 **Message style** contract — graphical-first (tables / mermaid / checklists /
-meters before bullets, ≤12 words/bullet), plus the PR-body and issue-body
-templates — in `loop-mode.md` § "Message style". Don't restate it here.
+meters before bullets, ≤12 words/bullet), plus the PR-body template and the
+issue-body ladder — in `loop-mode.md` § "Message style". Don't restate it here.

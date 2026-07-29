@@ -399,7 +399,8 @@ every tick — a session that opened 5 PRs yesterday is not "at cap" today, and
    pick the next. **If the brief is a partial slice with deferred parts, file each as
    a follow-up sub-issue now** — `renaiss-shipflow issue create --title "…" --body
    "Part of #<n>: …"` — *before* dispatching the worker, so deferred scope is tracked,
-   not dropped. See `references/loop-reviewer.md`.
+   not dropped — each body per the **issue-body ladder** (§ "Message style"),
+   its status header sourcing `Part of #<n>`. See `references/loop-reviewer.md`.
    **Post the brief's "Unknowns & assumptions" section on the issue** as a comment
    ending with `<!-- shipflow:loop -->` (so it never trips the needs-human
    auto-unblock) before dispatching the worker: every assumption the reviewer
@@ -482,9 +483,10 @@ needs action), don't stop yet. If `bug-hunt` is on (`config get bug-hunt`, defau
    (retry once to confirm), classified with a **severity + category** from the
    taxonomy, and not already an open issue (dedupe via `renaiss-shipflow issues list
    --json` — match by title/area; skip anything labelled `auto-qa` you already filed):
-   `renaiss-shipflow issue create --title "<bug>" --body "<repro + expected vs actual>"
+   `renaiss-shipflow issue create --title "<bug>" --body "<issue-body ladder>"
    --label bug --label auto-qa --label "severity:<…>" --label "area:<…>" --json`
-   (`bug-taxonomy.md` §3). Attach evidence with `issue evidence <n> --file <shot>`,
+   (`bug-taxonomy.md` §3; body = the **issue-body ladder** in § "Message style" —
+   status header sourcing `auto-qa sweep`, Repro core, acceptance checklist). Attach evidence with `issue evidence <n> --file <shot>`,
    and update the baseline. **Only file what you reproduced** — no speculative or
    duplicate issues.
 3. **Feed the loop**: if the sweep filed ≥1 new issue → **go back to A** (the loop
@@ -594,6 +596,7 @@ Silence still parks forever.
   open-ended, or ambiguous, **carve a bounded, value-adding slice** and defer the
   rest as follow-up sub-issues — the **orchestrator** files those with
   `renaiss-shipflow issue create` linked to the parent (`Part of #N`) at admit time,
+  bodies per the issue-body ladder (§ "Message style"),
   before the slice PR opens — rather than handing the whole thing to a human.
   Reserve `issue escalate` for a genuine **hard blocker** — missing
   secrets/credentials or external setup the loop can't do, a security-/trust-critical
@@ -861,7 +864,29 @@ PR body template (sections, all visual-first, blank line between each):
 if the failure is a flow · **Changed** table (file → what) · **Testing** checklist
 with numbers · **Evidence** images/links.
 
-Issue body template — exactly this shape (blank lines are load-bearing):
+### Issue-body ladder — every ShipFlow-filed issue body
+
+**Authoritative for EVERY issue body ShipFlow files** — loop bug-sweep /
+auto-qa issues, Phase-B follow-up sub-issues, feature-relate auto-issues,
+harvest-filed issues, and hand-filed `/shipflow-new-issue` — same discipline
+as the chat format ladder above. Issue #387 is the live, self-demonstrating
+demo. Build the body top-down:
+
+| # | Element | When | Shape |
+|---|---|---|---|
+| 1 | **Status header** | always — the first line | one blockquote line: `> <priority emoji> **P<n> · <type> · <area> · effort <S/M/L>** · <wave/source>` |
+| 2 | **Body core** | always | bug → the Repro core below; feature/task → **Why** + **What** (≤3 bullets each) |
+| 3 | **Mermaid diagram** | the defect or design has a flow, sequence, or state shape | small `flowchart`/`sequenceDiagram`/`stateDiagram` — beats prose causality |
+| 4 | **Evidence table** | any `file:line` claim | `\| Claim \| Where \|` — every claim grounded in `path:line` / links / screenshots |
+| 5 | **Acceptance checklist** | always | `- [ ]` items — the reviewer's coverage gate checks them 1:1 |
+| 6 | **`<details>` folds** | long logs, alt options, raw data | collapsed at the bottom, never unfolded |
+
+Priority emoji: 🔴 P0 · 🟠 P1 · 🟡 P2 · 🟢 P3. Wave/source examples:
+`auto-qa sweep`, `Part of #N`, `wave 3`, `hand-filed`. All general rules above
+apply (≤30 words per cell, blank line between sections, prose last).
+
+**Bug-body core** — the former minimal issue template, subsumed as element 2
+(one shape, no separate template; blank lines are load-bearing):
 
 ```
 **Repro**
@@ -873,11 +898,11 @@ Issue body template — exactly this shape (blank lines are load-bearing):
 **Actual** <one line>
 
 **Impact** <one line> · severity:<level>
-
-**Evidence** <links>
 ```
 
-Nothing else.
+Screenshots/links land in the evidence table (element 4); the acceptance
+checklist (element 5) still closes a bug body — minimally
+`- [ ] <actual> no longer occurs; <expected> observed`.
 
 ### Commit messages: invoke the smart-commit skill
 

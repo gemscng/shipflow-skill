@@ -39,7 +39,8 @@ renaiss-shipflow --version   # sanity: bundled CLI runs under node >= 20
 - Every `renaiss-shipflow` command, flag, and exit-code contract.
 - The Message style contract (`loop-mode.md` § "Message style") — graphical-first
   tables/mermaid/checklists/meters; GitHub renders them the same no matter who wrote them.
-- Escalation lint rules, evidence pair rules, PR/issue body templates.
+- Escalation lint rules, evidence pair rules, the PR-body template and the
+  issue-body ladder.
 - Guardrails: never bare `pr merge`/`release` without explicit human confirmation;
   `merge-policy` governs automerge.
 

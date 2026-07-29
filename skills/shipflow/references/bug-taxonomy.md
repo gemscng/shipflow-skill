@@ -48,10 +48,13 @@ renaiss-shipflow issue create --title "<bug>" --body "<body — see shape below>
 
 The reviewer uses the same severity words in its verdict bullets (`[critical|high|med]`).
 
-The body follows the issue-body template (`loop-mode.md` § "Message style"),
-graphical-first so triage can judge it in one glance:
+The body follows the **issue-body ladder** (`loop-mode.md` § "Message style" —
+the one authoritative copy), graphical-first so triage can judge it in one
+glance. For a sweep-filed bug that means:
 
 ```
+> 🟡 **P2 · bug · <area> · effort S** · auto-qa sweep
+
 **Repro**
 1. <step>
 2. <step>
@@ -62,11 +65,16 @@ graphical-first so triage can judge it in one glance:
 
 **Impact** <one line> · severity:<level>
 
-**Evidence** <screenshot/recording links>
+| Evidence | Where |
+|---|---|
+| <claim> | <path:line / screenshot link> |
+
+- [ ] <actual> no longer occurs; <expected> observed
 ```
 
-The blank lines are load-bearing: GitHub collapses single newlines into one
-run-on paragraph.
+Add a small mermaid block only when the defect has a flow/sequence/state
+shape; fold long logs into `<details>`. The blank lines are load-bearing:
+GitHub collapses single newlines into one run-on paragraph.
 
 
 ## 4. Per-page QA checklist (the bug sweep's method)
