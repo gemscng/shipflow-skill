@@ -73,7 +73,8 @@ requests to the same CLI calls.
 | "is PR 87 mergeable" / "can this auto-merge" | `renaiss-shipflow pr ready 87 --json` |
 | "any open review comments on 87" / "external reviews" | `renaiss-shipflow pr reviews 87 --json` (unresolved threads incl. bots) |
 | "resolve the review threads I fixed" | `renaiss-shipflow pr resolve 87 --thread <id>` |
-| "approve PR 87" (reviewer verdict) | `renaiss-shipflow pr approve 87 --comment "..."` (refuses while threads are open) |
+| "capture PR 87's diff for a security scan" | `renaiss-shipflow pr diff 87 --out /tmp/pr-87.patch` — GitHub's own bytes, never local git, so a detached/stale worktree can't empty it; prints `files=/lines=/sha256=`, writes `0600` (exit 9 = empty capture) |
+| "approve PR 87" (reviewer verdict) | `renaiss-shipflow pr approve 87 --comment "..." --scan-files <N> --scan-report <path> --scan-digest <sha256>` (refuses while threads are open, exit 7; refuses an unattested, unbound or mismatched security scan, exit 9) |
 | "auto-merge if ready" (loop) | `renaiss-shipflow pr automerge 87 --json` (self-gates on `merge-policy`) |
 | "rebase PR 87 onto its base" | `renaiss-shipflow pr sync 87` (on the PR's branch; aborts cleanly on conflict) |
 | "fix the conflict" / "resolve the merge conflict" | `renaiss-shipflow pr sync 87 --keep-conflicts` then follow `references/conflict-resolution.md` (resolve by intent → `pr conflict-check --base origin/<base>` → test → force-with-lease) |

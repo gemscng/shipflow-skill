@@ -3046,6 +3046,10 @@ function degradedProjectWarning(repoFullName, cause) {
 function featureMapSkippedWarning(cause) {
   return `⚠️ WARNING ${SHIPFLOW_API_DEP} feature map unavailable — per-feature evidence coverage NOT checked; ` + `packet omits the coverage lines: ${cause}`;
 }
+var GITHUB_REST_DEP = "github-rest";
+function changedFilesUnavailableWarning(cause) {
+  return `⚠️ WARNING ${GITHUB_REST_DEP} unavailable — PR changed-file list NOT read; ` + `scan attestation NOT verified (expected file count undetermined): ${cause}`;
+}
 
 // src/commands/helpers.ts
 function buildClientAuth(auth, creds) {
@@ -4030,6 +4034,11 @@ function ghOpenPRClosingIssues(repo) {
 }
 function ghPRDiffText(repo, number) {
   return _exec(`gh pr diff ${number} --repo ${shellQuote(repo)}`, { maxBuffer: 32 * 1024 * 1024 }).toString();
+}
+function ghPRChangedFiles(repo, number) {
+  const out = _exec(`gh api --paginate repos/${shellQuote(repo)}/pulls/${number}/files --jq ${shellQuote(".[].filename")}`, { maxBuffer: 32 * 1024 * 1024 }).toString();
+  return out.split(`
+`).map((l) => l.trim()).filter(Boolean);
 }
 function ghPRMergedByHead(repo, branch) {
   const out = _exec(`gh pr list --repo ${shellQuote(repo)} --head ${shellQuote(branch)} --state merged --limit 1 --json number,headRefOid`).toString();
@@ -6252,7 +6261,8 @@ function registerCapabilityCommand(program2) {
 
 // src/commands/pr.ts
 import { execSync as execSync4 } from "node:child_process";
-import { existsSync as existsSync4, readFileSync as readFileSync5 } from "node:fs";
+import { closeSync, existsSync as existsSync4, lstatSync, openSync, readFileSync as readFileSync5, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { createHash as createHash2 } from "node:crypto";
 import { join as join5 } from "node:path";
 import { hostname as hostname3 } from "node:os";
 
@@ -6990,6 +7000,143 @@ var liveIntentGateWriters = {
   postNotice: (repo, number) => ghIssueComment(repo, number, renderIntentGateNotice()),
   noticePosted: (repo, number) => ghIssueComments(repo, number).some((c) => c.body.includes(INTENT_GATE_NOTICE_HEADLINE))
 };
+var SCAN_EXIT = 9;
+function isExecutableInstructionPath(lower) {
+  return lower === "claude.md" || lower.endsWith("/claude.md") || lower === "agents.md" || lower.endsWith("/agents.md") || lower.startsWith("skills/") || lower.includes("/skills/") || lower.includes(".claude/commands/") || lower.includes(".claude/agents/") || lower === ".github/copilot-instructions.md" || lower.endsWith("/.github/copilot-instructions.md");
+}
+function isDocsPath(p) {
+  const lower = p.toLowerCase();
+  if (isExecutableInstructionPath(lower))
+    return false;
+  if (lower.endsWith(".md"))
+    return true;
+  return lower.endsWith(".html") && p.startsWith("docs/");
+}
+function isDocsOnlyChange(paths) {
+  return paths.length > 0 && paths.every(isDocsPath);
+}
+function evaluateScanAttestation(i) {
+  const base = { files: i.attested, expected: i.expected, degraded: [] };
+  if (!i.approving)
+    return { ...base, ok: true, verdict: "not-required", reason: "" };
+  if (i.reportExists === false) {
+    return { ...base, ok: false, verdict: "no-report", reason: "--scan-report names nothing readable (missing, empty, or not a regular file) — an unreadable report is not proof a scan ran" };
+  }
+  if (i.attestedDigest && i.actualDigest && i.attestedDigest !== i.actualDigest) {
+    return { ...base, ok: false, verdict: "digest-mismatch", reason: `--scan-digest ${i.attestedDigest.slice(0, 12)}… is not this PR's diff (GitHub serves ${i.actualDigest.slice(0, 12)}…) — the scan read other bytes, or the PR moved after the capture; re-capture with \`pr diff\` and re-scan` };
+  }
+  if (isDocsOnlyChange(i.paths))
+    return { ...base, ok: true, verdict: "not-required", reason: "" };
+  if (i.attested === null) {
+    return { ...base, ok: false, verdict: "missing", reason: "no --scan-files attestation — an approval must state how many files the security scan read" };
+  }
+  if (i.attested === 0) {
+    return { ...base, ok: false, verdict: "zero", reason: "the security scan read 0 files — an empty capture cannot produce a CLEAN verdict (capture the diff with `pr diff <n> --out <path>` and scan THAT file)" };
+  }
+  if (i.expected === null) {
+    return {
+      ...base,
+      ok: false,
+      verdict: "undetermined",
+      reason: `GitHub's changed-file count could not be read, so the attestation of ${i.attested} file(s) could not be verified — a gate that could not run is request_changes, never a footnote`,
+      degraded: [GITHUB_REST_DEP]
+    };
+  }
+  if (i.attested !== i.expected) {
+    return { ...base, ok: false, verdict: "mismatch", reason: `scan attestation mismatch — attested ${i.attested} file(s), GitHub reports ${i.expected} changed file(s); the scan did not read this PR's diff` };
+  }
+  if (i.reportExists == null) {
+    return { ...base, ok: false, verdict: "no-report", reason: "no --scan-report — an approval must carry the scan's written findings (write them to a file, then pass it)" };
+  }
+  if (!i.attestedDigest) {
+    return { ...base, ok: false, verdict: "no-digest", reason: "no --scan-digest — the file count alone is copyable off GitHub without opening a diff; pass the `sha256=` that `pr diff` printed for the capture you scanned" };
+  }
+  if (i.actualDigest === null) {
+    return {
+      ...base,
+      ok: false,
+      verdict: "undetermined",
+      reason: "this PR's diff could not be re-read, so --scan-digest could not be checked — a gate that could not run is request_changes, never a footnote",
+      degraded: [GITHUB_REST_DEP]
+    };
+  }
+  return { ...base, ok: true, verdict: "verified", reason: "" };
+}
+function scanAttestationLine(a, reportPath, digest) {
+  const report = reportPath ? ` · report: \`${reportPath}\`` : "";
+  const bound = digest ? ` · diff sha256 \`${digest.slice(0, 12)}\`` : "";
+  if (a.verdict === "not-required" && a.files !== null) {
+    const census = a.expected === null ? " (GitHub's changed-file count could not be read)" : `, GitHub reports ${a.expected} changed`;
+    return `\uD83D\uDD0D Security scan: **${a.files} file(s) scanned**${census} — recorded; no scan gate applies to this change, so the attestation was not cross-checked${bound}${report}.`;
+  }
+  if (a.verdict === "not-required")
+    return `\uD83D\uDD0D Security scan: not required — no scan gate applies to this change (docs-only, or no approval recorded).`;
+  if (a.ok)
+    return `\uD83D\uDD0D Security scan: **${a.files} file(s) scanned**, GitHub reports ${a.expected} changed — attestation VERIFIED${bound}${report}.`;
+  return `⛔ Security scan attestation FAILED (${a.verdict}): ${a.reason}${report}`;
+}
+function recordsScanLine(a, approving) {
+  return approving || a.files !== null;
+}
+function parseScanFiles(raw) {
+  if (raw === undefined)
+    return null;
+  const n = Number.parseInt(String(raw).trim(), 10);
+  return Number.isFinite(n) && n >= 0 && String(n) === String(raw).trim() ? n : null;
+}
+function diffDigest(diff) {
+  return createHash2("sha256").update(diff, "utf8").digest("hex");
+}
+function scanReportUsable(path) {
+  if (path === undefined)
+    return null;
+  try {
+    const st = statSync2(path);
+    return st.isFile() && st.size > 0;
+  } catch {
+    return false;
+  }
+}
+function prDiffDigestOrNull(repo, number) {
+  try {
+    return diffDigest(ghPRDiffText(repo, number));
+  } catch {
+    return null;
+  }
+}
+function writeCapture(path, diff) {
+  const st = lstatSync(path, { throwIfNoEntry: false });
+  if (st && !st.isFile()) {
+    throw new Error(`refusing to write the diff capture to ${path}: it exists and is not a regular file (symlink or directory) — pick another --out path`);
+  }
+  if (st)
+    rmSync(path, { force: true });
+  const fd = openSync(path, "wx", 384);
+  try {
+    writeFileSync3(fd, diff);
+  } finally {
+    closeSync(fd);
+  }
+}
+function changedFilesOrNull(repo, number) {
+  try {
+    return { paths: ghPRChangedFiles(repo, number), unavailable: false };
+  } catch (e) {
+    console.warn(changedFilesUnavailableWarning(flattenCause(e)));
+    return { paths: [], unavailable: true };
+  }
+}
+function countDiffFiles(diff) {
+  return (diff.match(/^diff --git /gm) ?? []).length;
+}
+function countDiffLines(diff) {
+  if (diff === "")
+    return 0;
+  return diff.endsWith(`
+`) ? diff.split(`
+`).length - 1 : diff.split(`
+`).length;
+}
 function unresolvedThreadsOrBlock(repo, number) {
   try {
     return { count: ghReviewThreads(repo, number).filter((t) => !t.isResolved).length, unavailable: false };
@@ -7321,7 +7468,39 @@ ${opts.body ?? ""}`;
     }
     console.log(buildReviewPacket({ pr: prView, threads, diff, issue, features }));
   }));
-  pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", "1-2 sentence verdict summary").option("--verdict <v>", "approve | comment | request_changes | reject", "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...]}); '-' or omitted reads stdin").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("diff <number>").description("Capture a PR's FULL unfiltered diff from GitHub to a file — the security scan's input. Never reads local git, so a detached or stale worktree cannot empty it; exits 9 when the diff has zero files, unconditionally, and writes nothing at all in that case").requiredOption("--out <path>", "File to write the raw diff bytes to").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+    const ctx = await loadGhCtx(program2, opts.repo);
+    const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    const diff = ghPRDiffText(repo, number);
+    const census = changedFilesOrNull(repo, number);
+    const names = census.paths;
+    const files = countDiffFiles(diff);
+    const lines = countDiffLines(diff);
+    const sha256 = diffDigest(diff);
+    const out = {
+      number,
+      out: opts.out,
+      files,
+      lines,
+      sha256,
+      changedFiles: census.unavailable ? null : names.length,
+      ...degradedField({ degraded: census.unavailable ? [...ctx.degraded, GITHUB_REST_DEP] : ctx.degraded })
+    };
+    if (files === 0) {
+      emit(opts, { ...out, ok: false, reason: "empty diff capture" }, () => {
+        console.error(`⛔ Empty diff capture for PR #${number}: GitHub served 0 file(s), so nothing was written to ${opts.out}; ${census.unavailable ? "GitHub's file list could not be read" : `GitHub's file list reports ${names.length} changed file(s)`}.`);
+        console.error(`   Nothing here is scannable — do NOT scan ${opts.out} and do NOT report CLEAN.`);
+        if (names.length)
+          console.error(`   Changed per GitHub: ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` … (+${names.length - 10})` : ""}`);
+        else if (!census.unavailable)
+          console.error(`   Both sources came back empty — treat that as "could not read this PR", not as "this PR is empty".`);
+      });
+      process.exit(SCAN_EXIT);
+    }
+    writeCapture(opts.out, diff);
+    emit(opts, { ...out, ok: true }, () => console.log(`files=${files} lines=${lines} sha256=${sha256}`));
+  }));
+  pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", "1-2 sentence verdict summary").option("--verdict <v>", "approve | comment | request_changes | reject", "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...]}); '-' or omitted reads stdin").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to post --verdict approve on a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the review body").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const rawFindings = opts.findings && opts.findings !== "-" ? readFileSync5(opts.findings, "utf8") : opts.findings === "-" ? await readStdin2() : "";
@@ -7334,14 +7513,50 @@ ${opts.body ?? ""}`;
     }
     const findings = Array.isArray(parsed) ? parsed : parsed?.findings ?? [];
     const verdict = ["approve", "comment", "request_changes", "reject"].includes(opts.verdict ?? "") ? opts.verdict : "comment";
-    const anchors = diffAnchors(ghPRDiffText(repo, number));
-    const payload = buildReviewPayload({ summary: opts.summary ?? "", verdict, findings, anchors });
+    const census = changedFilesOrNull(repo, number);
+    const approving = verdict === "approve";
+    let prDiff = null;
+    if (approving) {
+      try {
+        prDiff = ghPRDiffText(repo, number);
+      } catch {
+        prDiff = null;
+      }
+    }
+    const scan = evaluateScanAttestation({
+      approving,
+      attested: parseScanFiles(opts.scanFiles),
+      expected: census.unavailable ? null : census.paths.length,
+      paths: census.paths,
+      reportExists: scanReportUsable(opts.scanReport),
+      attestedDigest: opts.scanDigest ?? null,
+      actualDigest: prDiff === null ? null : diffDigest(prDiff)
+    });
+    const scanField = { files: scan.files, expected: scan.expected, verdict: scan.verdict };
+    if (!scan.ok) {
+      emit(opts, { number, verdict, posted: false, scan: scanField, ...degradedField({ degraded: [...ctx.degraded, ...scan.degraded] }) }, () => {
+        console.error(`⛔ Not posting an approve review on PR #${number}: ${scan.reason}`);
+        console.error(`   Capture the diff server-side, READ that file, then attest to what you read:`);
+        console.error(`     renaiss-shipflow pr diff ${number} --out /tmp/pr-${number}.patch   # prints files=<n> … sha256=<hex>`);
+        console.error(`     …then re-run with --scan-files <n> --scan-report <path> --scan-digest <sha256>.`);
+        console.error(`   Reporting that the scan could not run is always allowed: --verdict request_changes.`);
+      });
+      process.exit(SCAN_EXIT);
+    }
+    const anchors = diffAnchors(prDiff ?? ghPRDiffText(repo, number));
+    const summary = [
+      opts.summary ?? "",
+      recordsScanLine(scan, approving) ? scanAttestationLine(scan, opts.scanReport, opts.scanDigest) : ""
+    ].filter(Boolean).join(`
+
+`);
+    const payload = buildReviewPayload({ summary, verdict, findings, anchors });
     ghCreateReview(repo, number, payload);
     const inlineCount = payload.comments.length;
     const foldedCount = findings.length - inlineCount;
-    emit(opts, { number, verdict, inline: inlineCount, folded: foldedCount, ...degradedField(ctx) }, () => console.log(`Posted ${verdict} review on #${number}: ${inlineCount} inline finding(s) on the diff${foldedCount ? `, ${foldedCount} folded into the body` : ""}.`));
+    emit(opts, { number, verdict, posted: true, inline: inlineCount, folded: foldedCount, scan: scanField, ...degradedField({ degraded: [...ctx.degraded, ...scan.degraded] }) }, () => console.log(`Posted ${verdict} review on #${number}: ${inlineCount} inline finding(s) on the diff${foldedCount ? `, ${foldedCount} folded into the body` : ""}.`));
   }));
-  pr.command("approve <number>").description("Record the loop reviewer's approval: adds the shipflow-approved label (the automerge approval source) + an optional comment").option("--comment <text>", "Reviewer summary to post on the PR").option("--repo <fullname>", "Override target repo").option("--force", "Approve even with unresolved review threads (not recommended)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("approve <number>").description("Record the loop reviewer's approval: adds the shipflow-approved label (the automerge approval source) + an optional comment").option("--comment <text>", "Reviewer summary to post on the PR").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to approve a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the approval comment").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--force", "Approve even with unresolved review threads (not recommended)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const unresolved = ghReviewThreads(repo, number).filter((t) => !t.isResolved);
@@ -7355,13 +7570,44 @@ ${list}
 Address + resolve them (pr resolve), then approve (or --force).`));
       process.exit(7);
     }
+    const census = changedFilesOrNull(repo, number);
+    const scan = evaluateScanAttestation({
+      approving: true,
+      attested: parseScanFiles(opts.scanFiles),
+      expected: census.unavailable ? null : census.paths.length,
+      paths: census.paths,
+      reportExists: scanReportUsable(opts.scanReport),
+      attestedDigest: opts.scanDigest ?? null,
+      actualDigest: prDiffDigestOrNull(repo, number)
+    });
+    const scanField = { files: scan.files, expected: scan.expected, verdict: scan.verdict };
+    if (!scan.ok) {
+      emit(opts, { number, approved: false, scan: scanField, ...degradedField({ degraded: [...ctx.degraded, ...scan.degraded] }) }, () => {
+        console.error(`⛔ Not approving PR #${number}: ${scan.reason}`);
+        console.error(`   Capture the diff server-side, READ that file, then attest to what you read:`);
+        console.error(`     renaiss-shipflow pr diff ${number} --out /tmp/pr-${number}.patch   # prints files=<n> … sha256=<hex>`);
+        console.error(`     …then re-run: renaiss-shipflow pr approve ${number} --scan-files <n> --scan-report <path> --scan-digest <sha256>`);
+        console.error(`   A scan that could not run is request_changes (pr post-review ${number} --verdict request_changes), never an approval.`);
+      });
+      process.exit(SCAN_EXIT);
+    }
+    opts.comment = [opts.comment ?? "", scanAttestationLine(scan, opts.scanReport, opts.scanDigest)].filter(Boolean).join(`
+
+`);
+    try {
+      execSync4(`gh pr comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(stampLoopReview(opts.comment))}`, { stdio: ["ignore", "ignore", "inherit"] });
+    } catch (e) {
+      emit(opts, { number, approved: false, scan: scanField, ...degradedField({ degraded: [...ctx.degraded, GITHUB_REST_DEP] }) }, () => {
+        console.error(`⛔ Not approving PR #${number}: the scan attestation comment could not be posted (${flattenCause(e)}).`);
+        console.error(`   No label was applied — an approval whose attestation is missing from the PR is exactly the unfalsifiable state this gate exists to prevent. Re-run when GitHub answers.`);
+      });
+      process.exit(SCAN_EXIT);
+    }
     ghEnsureLabel(repo, APPROVED_LABEL, labelColorFor(APPROVED_LABEL), "Reviewed and approved by the ShipFlow loop reviewer");
     ghIssueAddLabels(repo, number, [APPROVED_LABEL]);
     ghIssueRemoveLabel(repo, number, NEEDS_HUMAN_LABEL);
-    if (opts.comment) {
-      execSync4(`gh pr comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(stampLoopReview(opts.comment))}`, { stdio: "ignore" });
-    }
-    emit(opts, { number, approved: true, label: APPROVED_LABEL, ...degradedField(ctx) }, () => console.log(`✅ PR #${number} approved — labelled "${APPROVED_LABEL}" (automerge can proceed under an auto-* policy).`));
+    emit(opts, { number, approved: true, label: APPROVED_LABEL, scan: scanField, ...degradedField(ctx) }, () => console.log(`✅ PR #${number} approved — labelled "${APPROVED_LABEL}" (automerge can proceed under an auto-* policy).
+   ${scanAttestationLine(scan, opts.scanReport, opts.scanDigest)}`));
   }));
   pr.command("reviews <number>").description("External review state: unresolved review threads (incl. bot reviewers) the loop must fix before approving").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);

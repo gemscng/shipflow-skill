@@ -418,13 +418,37 @@ every tick — a session that opened 5 PRs yesterday is not "at cap" today, and
    Returns `{pr, verified, regressionTest, healthDelta, blocked}`. Unverified/blocked
    → `issue escalate`, no PR.
 4. **Reviewer — PR review** (mandatory). Dispatch the reviewer on the new PR with
-   the brief. It first runs the MANDATORY **security diff scan** (loop-reviewer.md §0b — the `security-review` skill on the PR branch, findings fix-or-refuted like bot threads; the deeper /claude-security scan stays a human-run recommendation; a skipped scan is stated loudly and parks code diffs), then checks **external reviews** (`renaiss-shipflow pr reviews <n>
+   the brief. It first runs the MANDATORY **security diff scan** — and **the
+   reviewer is the scanner** (loop-reviewer.md §0b). Not the `security-review`
+   skill: its diff collector cannot be pointed at a captured file, so it is at
+   most a second opinion, and a CLEAN verdict with an empty `DIFF CONTENT` is
+   evidence of nothing. The deeper /claude-security scan stays a human-run
+   recommendation. Four steps, in order:
+
+   | # | Step | Command / artifact |
+   |---|---|---|
+   | 1 | **Capture** server-side — never from the cwd | `renaiss-shipflow pr diff <n> --out /tmp/pr-<n>.patch` → prints `files=N lines=N sha256=<hex>`; **exit 9 is a blocker → `request_changes`**, never a retry |
+   | 2 | **Read** the capture — the hunks, not a summary | Read `/tmp/pr-<n>.patch` (secrets, authz, input handling, exec/network, file posture, agent instruction text) |
+   | 3 | **Write** the findings | `/tmp/pr-<n>.scan.md` — findings or none; "none" is a result and has to be recorded somewhere falsifiable |
+   | 4 | **Attest** — all three flags, or approval is refused | `--scan-files <N>` `--scan-report <path>` `--scan-digest <hex>` |
+
+   Findings are fix-or-refuted like bot threads; a skipped scan is stated loudly
+   and parks code diffs (docs-only diffs may proceed). Then it checks **external
+   reviews** (`renaiss-shipflow pr reviews <n>
    --json` — unresolved threads incl. bot reviewers), then pulls `features --json` +
    the diff for a **whole-system review** (cross-feature impact, regressions, meets
    the brief), posts the review, and verdicts:
-   - **approve** — only with **no unresolved review threads**, brief met, CI green →
-     `renaiss-shipflow pr approve <pr> --comment "<summary>"` (adds `shipflow-approved`;
-     it refuses, exit 7, if any thread is still open). Now `approved_ready` for A.
+   - **approve** — only with **no unresolved review threads**, brief met, CI green.
+     All three scan flags are required on a code diff — **exit 9** without them —
+     and they come from the same `pr diff` capture that was actually read:
+     ```bash
+     renaiss-shipflow pr approve <pr> --comment "<summary>" \
+       --scan-files <N from files=> \
+       --scan-report /tmp/pr-<pr>.scan.md \
+       --scan-digest <hex from sha256=>
+     ```
+     (adds `shipflow-approved`; it also refuses, exit 7, if any thread is still
+     open). Now `approved_ready` for A.
    - **request changes** → list every fix incl. each external thread; re-dispatch a
      worker to fix + `pr resolve` the threads, then re-review. Never approve until
      all threads are resolved. External reviewers are async — if none have posted

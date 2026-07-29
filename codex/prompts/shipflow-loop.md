@@ -106,11 +106,26 @@ step a subagent):
    --after <after.png>` (screenshot evidence must be a before+after pair). Returns
    `{pr, verified, blocked}`. Unverified/blocked → `issue escalate`, no PR.
 4. **Reviewer — PR review** (mandatory): dispatch the reviewer on the new PR; it
-   runs the MANDATORY security diff scan (security-review skill; /claude-security stays a human-run recommendation) (loop-reviewer.md §0b — findings fix-or-refuted like bot threads; skipped-scan only for docs-only diffs, stated loudly), checks external reviews (`renaiss-shipflow pr reviews <pr> --json` — unresolved
+   runs the MANDATORY security diff scan **itself** — **the reviewer is the
+   scanner**, not the `security-review` skill, whose diff collector cannot be
+   pointed at a captured file (loop-reviewer.md §0b; /claude-security stays a
+   human-run recommendation). Four steps, in order: capture
+   (`renaiss-shipflow pr diff <pr> --out /tmp/pr-<pr>.patch` → prints
+   `files=N … sha256=<hex>`; **exit 9 = blocker, `request_changes`, never a
+   retry**), **read** that file's hunks, write findings to
+   `/tmp/pr-<pr>.scan.md` (findings or none — "none" is a result), then attest.
+   Findings are fix-or-refuted like bot threads; a skipped scan is only for
+   docs-only diffs and is stated loudly. Then checks external reviews
+   (`renaiss-shipflow pr reviews <pr> --json` — unresolved
    threads incl. bots like gemini-code-assist), pulls `features --json` + the diff
    for a whole-system review, posts it, then **approve** (only with no unresolved
-   threads, brief met, CI green) → `renaiss-shipflow pr approve <pr> --comment "…"`
-   (refuses while threads are open), or **request changes** → re-dispatch a worker to
+   threads, brief met, CI green) — **all three scan flags required, exit 9
+   otherwise**:
+   ```bash
+   renaiss-shipflow pr approve <pr> --comment "…" \
+     --scan-files <N from files=> --scan-report /tmp/pr-<pr>.scan.md --scan-digest <hex from sha256=>
+   ```
+   (also refuses, exit 7, while threads are open), or **request changes** → re-dispatch a worker to
    fix + `pr resolve` the threads, re-review. Do **not** `issue done` — the claim
    stays until the PR merges. (`pr automerge` also hard-blocks while any thread is
    unresolved.)

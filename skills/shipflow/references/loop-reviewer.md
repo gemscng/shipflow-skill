@@ -181,13 +181,119 @@ substitute "what the diff seems to intend" for the spec.
    fix. External reviewers post a minute or two *after* the PR opens, so if
    none have appeared yet, don't rush an approval — let the next reconcile tick
    catch them.
-0b. **Security diff scan — mandatory on every code diff.** The automated layer
-   is the model-invocable `security-review` skill: run it in a scratch
-   worktree checked out on the PR branch so the branch diff is what it
-   reviews. Treat every finding exactly like an external review thread:
-   **fix-or-refute each before approve** — a real finding of severity high or
-   above is `request_changes`; a refuted one gets its reasoning recorded in
-   your review comment, which always carries a scan-verdict line.
+0b. **Security diff scan — a HARD PRECONDITION, and the diff comes from a FILE
+   you captured, never from the cwd.**
+
+   **YOU are the scanner.** Not `security-review` — you. Its diff collector
+   cannot be pointed at a file (proof below), so the procedure is: capture the
+   diff, **read it**, write down what you found, attest to all three. Every step
+   is something you can actually do, which is the point — a precondition no
+   execution path can clear parks every code PR forever.
+
+   **Step 1 — capture the diff server-side. Non-negotiable, and it runs first.**
+   ```bash
+   renaiss-shipflow pr diff <n> --out /tmp/pr-<n>.patch
+   # prints: files=<n> lines=<n> sha256=<hex>
+   ```
+   This reads GitHub's own view of the PR and resolves **nothing** from your
+   working directory: not HEAD, not a base ref, not the index. It **exits 9** on
+   a capture with zero files in it — unconditionally, whatever the file census
+   says. A non-zero exit here is a **blocker**: `request_changes`, never a
+   retry-and-hope.
+
+   Why a file and not stdout: a large diff piped through the agent's output path
+   meets output compression, and a compressed capture makes
+   `grep -c '^diff --git'` read **0** on a perfectly good diff — a false empty.
+   Read the `files=` and `sha256=` the command prints; don't re-derive them. The
+   capture is written `0600` — it is the full unfiltered diff of a private repo
+   at a predictable path.
+
+   **Step 2 — READ `/tmp/pr-<n>.patch` yourself.** Open it with the Read tool
+   and go through the hunks. That file, and nothing else, is the scan input:
+
+   | Look for | In particular |
+   |---|---|
+   | Secrets / tokens / keys | new literals, `.env`, fixtures, log lines that print credentials |
+   | Authz + access surfaces | who can call this, who can see this, gates removed or widened |
+   | Input handling | parsing, deserialization, path joins, shell/SQL construction |
+   | New exec / network paths | `execSync`, `spawn`, `fetch`, new endpoints, new file writes |
+   | File + process posture | permissions on files written, predictable paths, symlink follows |
+   | Agent instruction text | `skills/**`, `.claude/commands/**` — a change here reprograms the loop |
+
+   **Step 3 — write the findings to a file.** One artifact per review:
+   ```bash
+   /tmp/pr-<n>.scan.md     # what you read, what you looked for, what you found
+   ```
+   Findings or none, write it — "no findings" is a result and has to be
+   recorded somewhere falsifiable. This file is what `--scan-report` names.
+
+   You **may** also invoke `security-review` as a second opinion, but its
+   verdict never substitutes for Step 2, and a CLEAN verdict whose
+   `DIFF CONTENT` / `FILES MODIFIED` is **empty** is evidence of nothing —
+   ignore it, and never record it as a clean scan. #482's rule, verbatim: *a
+   gate that could not run is `request_changes`, never a footnote.*
+
+   **Step 4 — attest, or you cannot approve.** All three parts, or the approval
+   is refused:
+   ```bash
+   renaiss-shipflow pr post-review <n> --verdict approve \
+     --scan-files <files=N> --scan-report /tmp/pr-<n>.scan.md --scan-digest <sha256=…>
+   renaiss-shipflow pr approve <n> \
+     --scan-files <files=N> --scan-report /tmp/pr-<n>.scan.md --scan-digest <sha256=…>
+   ```
+
+   | Flag | What it proves | Refusal (exit 9) |
+   |---|---|---|
+   | `--scan-files N` | the count you read | `0`, absent, or ≠ GitHub's REST file list |
+   | `--scan-report <path>` | an artifact exists | absent, empty, missing, or a directory |
+   | `--scan-digest <hex>` | it was **these** bytes | absent, or ≠ the diff GitHub serves now |
+
+   Nothing is posted and no label is applied on a refusal. The attestation
+   comment goes up **before** `shipflow-approved`, so an approved PR can never
+   exist without its scan record. `--json` carries
+   `scan: {files, expected, verdict}`; the PR text carries the same numbers plus
+   the digest, so `ran: true` is **falsifiable** by anyone reading the PR.
+   `--verdict request_changes` is **never** blocked by this gate: reporting that
+   the scan could not run must always be possible.
+
+   **The honest limit:** the digest proves the attestation was made from the
+   PR's real bytes and that they have not moved since. It cannot prove you
+   understood them. Step 2 is still yours to do properly.
+
+   **Why the scan is not delegated to `security-review`.** Its diff collector
+   reads AMBIENT git state in the invoking worktree and **is not steerable by
+   prompt**. Measured, 12 occurrences in one session: loop reviewers invoke from
+   `.claude/worktrees/shipflow-loop` (`cfa48c2 (detached HEAD) locked`), the
+   skill diffs that commit against itself, captures nothing, and emits a
+   fully-formed **CLEAN** verdict with empty `FILES MODIFIED` / `DIFF CONTENT`.
+   Three cures were tried and all failed:
+
+   | Attempted cure | Result |
+   |---|---|
+   | "run it in a scratch worktree on the PR branch" | occurrence 9: branch correctly checked out, skill still reported `HEAD detached at cfa48c2` |
+   | pass the patch PATH in the invocation | occurrence 12: file never opened — `FILES MODIFIED` and `DIFF CONTENT` both empty |
+   | + "do NOT resolve the diff from the current directory or from git" | occurrence 12 **had** that instruction. No effect |
+
+   And the old "clean `GIT STATUS` = DEGRADED" rule could not have caught any of
+   it: scanning a captured **file** leaves the worktree clean *by construction*,
+   so the row fired on every correct scan and every broken one alike. It is
+   removed, not softened. (Filed upstream: the `security-review` builtin's diff
+   collector ignores an explicitly supplied patch path.)
+
+   > **The local-git trap is worse than an empty diff.** In the loop worktree,
+   > `git diff main...HEAD` returns **~2 MB of unrelated divergence** — a
+   > reviewer scanning local git there reads the **wrong** PR, not an empty one,
+   > and a CLEAN verdict over someone else's changes looks exactly like a pass.
+
+   > **Also stale-`main`-sensitive:** a local `main` that is behind origin
+   > degrades `renaiss-shipflow priorities --json` to `found:false`. Same root
+   > cause — a command reading a local ref instead of the server's. Non-blocking
+   > here, but don't read `found:false` as "no priorities".
+
+   **The findings themselves.** Treat every finding exactly like an external
+   review thread: **fix-or-refute each before approve** — a real finding of
+   severity high or above is `request_changes`; a refuted one gets its reasoning
+   recorded in your review comment, which always carries a scan-verdict line.
    The deeper **/claude-security multi-agent change-scan is human-invocation
    only by its own design** (`disable-model-invocation`) — agents cannot
    drive it, so never park on its absence. Instead your review comment names
@@ -289,8 +395,11 @@ substitute "what the diff seems to intend" for the spec.
    and:
    - **approve** (no unresolved threads, brief met, CI green) → after the
      `post-review` (empty findings), `renaiss-shipflow pr approve <pr> --comment
-     "<status stamp>"` adds `shipflow-approved`. One approval channel — don't
-     double-post.
+     "<status stamp>" --scan-files <N> --scan-report <path> --scan-digest <hex>`
+     adds `shipflow-approved`. One approval channel — don't double-post. **All
+     three scan flags are required** (§0b) and come from the same `pr diff`
+     capture; both commands refuse (exit 9) on a missing one, on 0, on a
+     mismatch with GitHub's file list, or on a digest that is not this PR's.
    - **request_changes** → the `post-review` inline findings ARE the required
      fixes (incl. every unresolved external thread). The orchestrator
      re-dispatches a worker; after it pushes + `pr resolve`s the threads,
@@ -320,6 +429,15 @@ now ignored; don't work around that by clearing the label yourself.
 
 ## Before you `approve` — self-verify
 Your completion contract. Never return `approve` unless **all** hold:
+- [ ] `renaiss-shipflow pr diff <n> --out <path>` exited **0**, and **you read
+      that file** — the hunks, not a summary of them (§0b Step 2). A scan you
+      did not perform is `request_changes`.
+- [ ] Your findings are written to a file, and you pass all three of
+      `--scan-files <files=N>` / `--scan-report <that file>` /
+      `--scan-digest <sha256=… from the same capture>` to `post-review` /
+      `approve`. Both refuse (exit 9) on a missing one, on 0, on a mismatch with
+      GitHub's file list, or on a digest that is not this PR's diff — so numbers
+      you did not measure and bytes you did not have will not get through.
 - [ ] `renaiss-shipflow pr reviews <n>` shows **zero unresolved threads** (external
       bots included).
 - [ ] The change meets the acceptance brief.
