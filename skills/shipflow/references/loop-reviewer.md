@@ -173,6 +173,51 @@ you review against. If the packet warns **"no linked issue/brief found"**, that
 is itself a finding — flag the missing brief in your verdict; never quietly
 substitute "what the diff seems to intend" for the spec.
 
+**Degradation discipline: a gate that could not RUN blocks approve.** A
+dependency may never remove a check without saying so *in the artifact you
+read* — so the packet marks every input it failed to obtain, in its own body:
+
+| Degradation marker in the packet | The check that did NOT run |
+|---|---|
+| `⚠️ review threads UNAVAILABLE — unresolved count NOT determined` | §0's approve precondition — the unresolved-thread count |
+| `⚠️ Brief NOT loaded — issue #N could not be read` | the spec itself — judge nothing against a brief you never got |
+| `⚠️ WARNING shipflow-api feature map unavailable … NOT checked` | the per-feature evidence-coverage check |
+| `⚠️ triage unavailable — ShipFlow context and relatedFiles NOT loaded` | (intake mode) the issue's triage context |
+
+`--json` carries the same facts machine-readably: `degraded: ["github-graphql"]`
+(the thread and brief fetches — both `gh` GraphQL reads, so one GraphQL outage
+names one key) and/or `["shipflow-api"]`, with `["github-rest"]` reserved for
+REST reads like the changed-file census; plus `reviewThreads.unresolved: null` +
+`unavailable: true`, `spec.unavailable: true`, `evidence.featureMapSkipped`,
+`triageUnavailable: true`. The neutral counterparts below have `--json` fields
+too — `spec.notReadable: true` + `spec.notReadableNote`, and
+`evidence.featureMapNotApplicable` — and neither ever appears in `degraded[]`.
+
+**Any `degraded[]` entry, or any marker in the table above, is
+`request_changes`** — naming the un-run gate as the finding. Never approve on a
+degraded packet, and never record one as a footnote: a gate that could not run
+is not a gate that passed. In particular `reviewThreads.unresolved: null` is
+**not zero** — re-run `renaiss-shipflow pr packet <n>`, or check directly with
+`renaiss-shipflow pr reviews <n>`, before judging thread state.
+
+**Scope the rule to those markers — not to every ⚠️.** The packet quotes the
+issue body and the PR description verbatim, and emits its own ⚠️ for a missing
+brief and for thin evidence coverage. Those are ordinary findings, not
+degradations; blocking on the character would make healthy packets unapprovable.
+Three lines that look adjacent but are **not** degradations — every one of them
+renders in the packet **body**, so you will meet them in a captured packet, not
+only on the operator's stderr:
+
+| Line in the packet | What it means | Verdict effect |
+|---|---|---|
+| `NOTE per-feature evidence coverage not applicable — no ShipFlow feature map covers <repo> (cross-repo --repo target)` | `--repo` targets a repo outside this project, so no map could apply — nothing was attempted, nothing failed | **none** — never `request_changes` |
+| `NOTE #N is not a readable issue in <repo> — no acceptance brief to load` | the linked number is stale or names a PR, and **GitHub answered** about it — so nothing is unavailable | **none** — never `request_changes`; judge the stale link on its merits |
+| `⚠️ **No linked issue/brief found.**` | the brief is genuinely absent — the PR links no issue at all | a finding to flag (§ above), judged on its merits — **not** the same line as `Brief NOT loaded` above |
+
+A dependency that was *deliberately not consulted* is not a dependency that went
+dark. `degraded[]` and the three markers are reserved for a real failure — the
+day they also mean "irrelevant", they stop meaning anything.
+
 0. **External reviews first — clear them before you approve.** The packet's
    *External review threads* section lists unresolved threads, including async
    bot reviewers (gemini-code-assist, coderabbit). If any are unresolved you
@@ -181,6 +226,10 @@ substitute "what the diff seems to intend" for the spec.
    fix. External reviewers post a minute or two *after* the PR opens, so if
    none have appeared yet, don't rush an approval — let the next reconcile tick
    catch them.
+   **"unresolved: 0" is a MEASUREMENT, not a default.** When the section reads
+   `(UNAVAILABLE)` + `⚠️ review threads UNAVAILABLE`, the count was never
+   determined and this precondition **cannot be satisfied** — `request_changes`.
+   Treating it as zero is exactly the false green this gate exists to prevent.
 0b. **Security diff scan — a HARD PRECONDITION, and the diff comes from a FILE
    you captured, never from the cwd.**
 
@@ -438,8 +487,12 @@ Your completion contract. Never return `approve` unless **all** hold:
       `approve`. Both refuse (exit 9) on a missing one, on 0, on a mismatch with
       GitHub's file list, or on a digest that is not this PR's diff — so numbers
       you did not measure and bytes you did not have will not get through.
+- [ ] The packet carries **no `degraded[]` entry and no marker from the
+      degradation table above** — every gate it reports on actually ran. A
+      degraded packet is `request_changes`. (A `not applicable` note, or a ⚠️
+      quoted from the issue/PR body, is not a degradation.)
 - [ ] `renaiss-shipflow pr reviews <n>` shows **zero unresolved threads** (external
-      bots included).
+      bots included) — a *measured* zero, never an undetermined one.
 - [ ] The change meets the acceptance brief.
 - [ ] CI is green (or none is required) and you found no un-flagged cross-feature
       regression risk.

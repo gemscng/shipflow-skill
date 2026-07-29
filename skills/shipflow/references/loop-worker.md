@@ -14,6 +14,36 @@ worktree (sequential) or a dedicated worktree (parallel mode).
 You also pull ShipFlow's **feature map** yourself (below) — that keeps the heavy
 data in your context, not the orchestrator's.
 
+## Degraded inputs — read the ⚠️ markers, never work past them
+Mirrors `loop-reviewer.md` § "Degradation discipline". A dependency may never
+remove a check without saying so **in the artifact you read**, so every ShipFlow
+command marks the inputs it failed to obtain — in its own output, not only on
+stderr (a piped or captured artifact never sees stderr):
+
+| Marker | What did NOT load | What you must do |
+|---|---|---|
+| `⚠️ triage unavailable — ShipFlow context and relatedFiles NOT loaded` (`issue work`/`issue next`; `--json` `triageUnavailable: true`) | triage: `relatedFiles`, `relatedCommits`, features | Re-run before relying on `triage.*`; don't treat an empty context as "nothing related" |
+| `⚠️ review threads UNAVAILABLE — unresolved count NOT determined` (`pr packet`; `--json` `reviewThreads.unresolved: null`) | the unresolved-thread count | **Not zero.** Re-run, or `renaiss-shipflow pr reviews <n>` |
+| `⚠️ Brief NOT loaded — issue #N could not be read` (`pr packet`; `--json` `spec.unavailable: true`) | the acceptance brief | **Not "no brief".** Re-run, or `gh issue view <n>` |
+| `⚠️ WARNING shipflow-api feature map unavailable … NOT checked` (`pr packet`; `--json` `degraded[]`) | per-feature evidence coverage | Pull `features --json` yourself before claiming neighbour coverage |
+
+Two rules: **a missing marker means the check ran** — so never add one by hand
+to excuse skipped work; and **a present marker is never a footnote** — the
+reviewer treats any `degraded[]` entry or degraded-input marker from the table
+above as `request_changes`, so a PR whose evidence rests on a degraded read
+comes straight back.
+
+The rule is scoped to those markers, **not to every ⚠️**: the packet quotes
+issue and PR bodies verbatim and emits its own ⚠️ for a missing brief or thin
+coverage. Two neutral `NOTE` lines are likewise **not** degradations:
+`NOTE per-feature evidence coverage not applicable — no ShipFlow feature map
+covers <repo> (cross-repo --repo target)` — nothing was attempted, so nothing
+failed — and `NOTE #N is not a readable issue in <repo> — no acceptance brief
+to load` (`--json` `spec.notReadable: true`) — GitHub **answered** about the
+number, so nothing went dark; judge the stale link on its merits. Keep the
+markers reserved for real failures — they stop meaning anything the day they
+also mean "irrelevant".
+
 ## What a fix worker does (one issue, end-to-end)
 1. **Branch** — `git fetch origin && git checkout -b fix/issue-<n>-<slug> origin/<default>`.
    Then `renaiss-shipflow git-identity --fix` **before the first commit**: a fresh

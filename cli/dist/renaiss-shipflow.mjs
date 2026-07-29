@@ -2972,7 +2972,22 @@ function featureMapSkippedWarning(cause) {
 function changedFilesUnavailableWarning(cause) {
   return `⚠️ WARNING ${GITHUB_REST_DEP} unavailable — PR changed-file list NOT read; ` + `scan attestation NOT verified (expected file count undetermined): ${cause}`;
 }
-var SHIPFLOW_API_DEP = "shipflow-api", GITHUB_REST_DEP = "github-rest";
+function featureMapNotApplicableNote(target) {
+  return `NOTE per-feature evidence coverage not applicable — no ShipFlow feature map covers ${target} ` + `(cross-repo --repo target); the coverage lines are omitted by design, not by failure.`;
+}
+function reviewThreadsUnavailableWarning(cause) {
+  return `⚠️ WARNING ${GITHUB_GRAPHQL_DEP} unavailable — PR review threads NOT read; ` + `unresolved count NOT determined (the approve precondition could not be evaluated): ${cause}`;
+}
+function specUnavailableWarning(issueNumber, cause) {
+  return `⚠️ WARNING ${GITHUB_GRAPHQL_DEP} unavailable — issue #${issueNumber} NOT read; ` + `the acceptance brief could not be loaded (it is unavailable, NOT absent): ${cause}`;
+}
+function specNotReadableIssueNote(issueNumber, repo) {
+  return `NOTE #${issueNumber} is not a readable issue in ${repo} — no acceptance brief to load; ` + `GitHub answered about it, so nothing went dark (the link is stale or names a PR).`;
+}
+function triageUnavailableWarning(cause) {
+  return `⚠️ WARNING ${SHIPFLOW_API_DEP} triage unavailable — ShipFlow context and relatedFiles NOT loaded: ${cause}`;
+}
+var SHIPFLOW_API_DEP = "shipflow-api", GITHUB_REST_DEP = "github-rest", GITHUB_GRAPHQL_DEP = "github-graphql", TRIAGE_UNAVAILABLE_MARKER = "⚠️ triage unavailable — ShipFlow context and relatedFiles NOT loaded";
 var init_project = __esm(() => {
   init_config();
   init_client();
@@ -3015,15 +3030,20 @@ function repoOverrideBypassesProject(repoOverride, cwdRepo) {
     return false;
   return target.toLowerCase() !== (cwdRepo ?? "").toLowerCase();
 }
+function repoOverrideMakesProjectNotApplicable(repoOverride, cwdRepo) {
+  return cwdRepo !== null && repoOverrideBypassesProject(repoOverride, cwdRepo);
+}
 async function loadGhCtx(program2, repoOverride) {
   const { auth, creds, client } = loadJwtCtx(program2);
-  if (repoOverrideBypassesProject(repoOverride, cwdRepoFullName())) {
+  const cwdRepo = cwdRepoFullName();
+  if (repoOverrideBypassesProject(repoOverride, cwdRepo)) {
     return {
       auth,
       creds,
       client,
       project: { repoFullName: repoOverride.trim(), projectId: null, projectName: null },
-      degraded: []
+      degraded: [],
+      projectNotApplicable: repoOverrideMakesProjectNotApplicable(repoOverride, cwdRepo)
     };
   }
   const r = await resolveProjectDegradable(client, creds);
@@ -3038,7 +3058,8 @@ async function loadGhCtx(program2, repoOverride) {
       projectId: r.project?.projectId ?? null,
       projectName: r.project?.projectName ?? null
     },
-    degraded: r.degraded
+    degraded: r.degraded,
+    projectNotApplicable: false
   };
 }
 function degradedField(ctx) {
@@ -3965,6 +3986,23 @@ function ghAuthLogin() {
 function ghIssueView(repo, number) {
   const out = _exec(`gh issue view ${number} --repo ${shellQuote(repo)} --json ${FIELDS}`).toString();
   return JSON.parse(out);
+}
+var ISSUE_READ_ANSWERED_PATTERNS = [
+  /could not resolve to an issue/i,
+  /could not resolve to a pullrequest/i,
+  /could not resolve to an issue or pull request/i,
+  /\bno issue found\b/i,
+  /\b(?:http )?404\b(?=[^\n]*\/issues\/\d+)/i
+];
+function classifyIssueReadFailure(e) {
+  const parts = [
+    e instanceof Error ? e.message : String(e),
+    String(e?.stderr ?? ""),
+    String(e?.stdout ?? "")
+  ];
+  const text = parts.join(`
+`);
+  return ISSUE_READ_ANSWERED_PATTERNS.some((re) => re.test(text)) ? "not-an-issue" : "unavailable";
 }
 function ghIssueOrPrState(repo, number) {
   try {
@@ -5067,6 +5105,7 @@ function issueRow(i) {
 
 // src/commands/issue.ts
 init_client();
+init_project();
 import { hostname as hostname2 } from "node:os";
 import { readFileSync as readFileSync3, statSync } from "node:fs";
 import { basename as basename2 } from "node:path";
@@ -5338,6 +5377,17 @@ function renderScreenshotsSection(shots) {
 // src/commands/issue.ts
 init_prompts();
 init_helpers();
+async function loadTriage(ctx, repo, number) {
+  try {
+    return {
+      triage: await ctx.client.getTriage(ctx.creds.org, ctx.project.projectId, repo, number),
+      unavailable: false
+    };
+  } catch (e) {
+    console.warn(triageUnavailableWarning(flattenCause(e)));
+    return { triage: null, unavailable: true };
+  }
+}
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
   issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--json", "Output JSON").action(runAction(async (opts) => {
@@ -5421,8 +5471,8 @@ ${section}` : section;
       console.warn(`Claim failed (continuing unlocked): ${e.message}`);
     }
     const issueData = ghIssueView(repo, number);
-    const triage = await ctx.client.getTriage(ctx.creds.org, ctx.project.projectId, repo, number).catch(() => null);
-    printIssueContext(issueData, triage, repo, ctx.project, opts.json);
+    const t = await loadTriage(ctx, repo, number);
+    printIssueContext(issueData, t.triage, repo, ctx.project, opts.json, t.unavailable);
   }));
   issue.command("next").description("Pick & claim the next open, unclaimed issue (for the work loop); exits 4 when none remain").option("--repo <fullname>", "Override target repo").option("--label <label>", "Only consider issues with this label").option("--assignee <login>", "Only consider issues assigned to this user").option("--agent <name>", "Agent label recorded on the claim (default: $SHIPFLOW_AGENT or hostname)").option("--ttl <minutes>", "Claim lifetime in minutes (default 120)").option("--json", "Output JSON").action(runAction(async (opts) => {
     const ctx = await loadCtx(program2);
@@ -5488,8 +5538,8 @@ ${section}` : section;
         continue;
       }
       const issueData = ghIssueView(repo, cand.number);
-      const triage = await ctx.client.getTriage(ctx.creds.org, ctx.project.projectId, repo, cand.number).catch(() => null);
-      printIssueContext(issueData, triage, repo, ctx.project, opts.json);
+      const t = await loadTriage(ctx, repo, cand.number);
+      printIssueContext(issueData, t.triage, repo, ctx.project, opts.json, t.unavailable);
       return;
     }
     const reason = raced === candidates.length && raced > 0 ? "all_candidates_raced" : "no_actionable_issues";
@@ -5677,9 +5727,9 @@ ${formatPrecedentSuggestion(precedent)}`;
     }
   }));
 }
-function printIssueContext(issueData, triage, repo, project, json) {
+function printIssueContext(issueData, triage, repo, project, json, triageUnavailable = false) {
   if (json) {
-    console.log(JSON.stringify({ issue: issueData, triage, project }, null, 2));
+    console.log(JSON.stringify({ issue: issueData, triage, triageUnavailable, project }, null, 2));
     return;
   }
   console.log(`Issue #${issueData.number} — "${issueData.title}"`);
@@ -5708,6 +5758,9 @@ function printIssueContext(issueData, triage, repo, project, json) {
       console.log("Recent commits in same area:");
       triage.relatedCommits.slice(0, 5).forEach((c) => console.log(`  ${c}`));
     }
+  } else if (triageUnavailable) {
+    console.log(`
+${TRIAGE_UNAVAILABLE_MARKER}`);
   }
 }
 async function readStdin() {
@@ -6483,6 +6536,7 @@ var REVIEW_CONTRACT = {
 
 // src/packet.ts
 init_shipflow_contract_data();
+init_project();
 var PACKET_PER_FILE_CAP = REVIEW_CONTRACT.budgets.perFileDiffCap;
 var PACKET_TOTAL_CAP = REVIEW_CONTRACT.budgets.packetTotalCap;
 var PACKET_BRIEF_CAP = REVIEW_CONTRACT.budgets.briefCap;
@@ -6703,6 +6757,10 @@ function hasInterpretationSignal(prBody) {
     return true;
   return false;
 }
+var REVIEW_THREADS_UNAVAILABLE_MARKER = "⚠️ review threads UNAVAILABLE — unresolved count NOT determined";
+function specUnavailableMarker(issueNumber) {
+  return `⚠️ **Brief NOT loaded — issue #${issueNumber} could not be read.** The brief is ` + `UNAVAILABLE, not absent: do NOT judge this PR without it, and do NOT hold the missing ` + `brief against the author. Re-run the packet, or read the issue directly.`;
+}
 function buildReviewPacket(input) {
   const { pr, threads, diff, issue } = input;
   const b = [];
@@ -6724,6 +6782,10 @@ function buildReviewPacket(input) {
     const body = (issue.body ?? "").trim();
     b.push(body.length > PACKET_BRIEF_CAP ? body.slice(0, PACKET_BRIEF_CAP) + `
 … (brief truncated)` : body || "_(issue has no body)_");
+  } else if (input.specUnavailable) {
+    b.push(specUnavailableMarker(input.specUnavailable));
+  } else if (input.specNotReadable) {
+    b.push(specNotReadableIssueNote(input.specNotReadable.number, input.specNotReadable.repo));
   } else {
     b.push("⚠️ **No linked issue/brief found.** Do NOT infer the spec from the diff — " + "reviewing against a self-derived spec is a known silent failure. Flag the missing brief in your verdict.");
   }
@@ -6757,20 +6819,31 @@ function buildReviewPacket(input) {
   } else {
     b.push(`${ci.passing} passing · ${ci.failing} failing · ${ci.pending} pending${ci.failingChecks.length ? ` — failing: ${ci.failingChecks.join(", ")}` : ""}`);
   }
-  const unresolved = threads.filter((t) => !t.isResolved);
-  b.push(`
-## External review threads (unresolved: ${unresolved.length})`);
-  if (unresolved.length === 0) {
-    b.push("none");
+  if (input.threadsUnavailable) {
+    b.push(`
+## External review threads (UNAVAILABLE)`);
+    b.push(REVIEW_THREADS_UNAVAILABLE_MARKER);
+    b.push("_The approve precondition (zero unresolved threads) could NOT be evaluated. " + "A gate that could not run is `request_changes`, never a footnote — re-run the packet, " + "or check with `renaiss-shipflow pr reviews <n>`._");
   } else {
-    for (const t of unresolved.slice(0, 20)) {
-      const anchor = t.path ? `${t.path}${t.line ? `:${t.line}` : ""}` : "(top-level)";
-      b.push(`- ${anchor} @${t.author || "unknown"} — ${t.body.replace(/\s+/g, " ").slice(0, 140)}`);
+    const unresolved = threads.filter((t) => !t.isResolved);
+    b.push(`
+## External review threads (unresolved: ${unresolved.length})`);
+    if (unresolved.length === 0) {
+      b.push("none");
+    } else {
+      for (const t of unresolved.slice(0, 20)) {
+        const anchor = t.path ? `${t.path}${t.line ? `:${t.line}` : ""}` : "(top-level)";
+        b.push(`- ${anchor} @${t.author || "unknown"} — ${t.body.replace(/\s+/g, " ").slice(0, 140)}`);
+      }
     }
   }
   const evidence = extractEvidenceLines(pr.comments ?? []);
   b.push(`
 ## Evidence / health`);
+  if (input.featureMapSkipCause)
+    b.push(featureMapSkippedWarning(input.featureMapSkipCause));
+  else if (input.featureMapNotApplicable)
+    b.push(featureMapNotApplicableNote(input.featureMapNotApplicable));
   if (input.features?.length) {
     const touched = touchedFeatures(splitUnifiedDiff(diff).map((s) => s.path), input.features);
     if (touched.length) {
@@ -6818,6 +6891,20 @@ function buildReviewPacketData(input) {
   if (issue) {
     const t = trunc((issue.body ?? "").trim(), PACKET_BRIEF_CAP);
     spec = { linked: true, issue: { number: issue.number, linkKind: issue.linkKind, title: issue.title, body: t.text, truncated: t.truncated } };
+  } else if (input.specUnavailable) {
+    spec = {
+      linked: false,
+      unavailable: true,
+      issueNumber: input.specUnavailable,
+      warning: specUnavailableMarker(input.specUnavailable)
+    };
+  } else if (input.specNotReadable) {
+    spec = {
+      linked: false,
+      notReadable: true,
+      issueNumber: input.specNotReadable.number,
+      notReadableNote: specNotReadableIssueNote(input.specNotReadable.number, input.specNotReadable.repo)
+    };
   } else {
     spec = {
       linked: false,
@@ -6828,7 +6915,7 @@ function buildReviewPacketData(input) {
   const prDescription = prBody ? trunc(prBody, PACKET_BRIEF_CAP) : undefined;
   const deviations = extractDeviations(pr.body ?? "") || undefined;
   const unresolved = threads.filter((t) => !t.isResolved);
-  const reviewThreads = {
+  const reviewThreads = input.threadsUnavailable ? { unresolved: null, unavailable: true, items: [] } : {
     unresolved: unresolved.length,
     items: unresolved.slice(0, 20).map((t) => ({
       path: t.path || null,
@@ -6838,6 +6925,10 @@ function buildReviewPacketData(input) {
     }))
   };
   const evidence = { lines: extractEvidenceLines(pr.comments ?? []) };
+  if (input.featureMapSkipCause)
+    evidence.featureMapSkipped = featureMapSkippedWarning(input.featureMapSkipCause);
+  else if (input.featureMapNotApplicable)
+    evidence.featureMapNotApplicable = featureMapNotApplicableNote(input.featureMapNotApplicable);
   let features;
   if (input.features?.length) {
     const diffPaths = splitUnifiedDiff(diff).map((s) => s.path);
@@ -7518,23 +7609,47 @@ ${opts.body ?? ""}`;
   pr.command("packet <number>").description("Emit the pre-baked review packet for a PR: spec/brief, description, CI, unresolved threads, evidence, and a noise-filtered budgeted diff — everything the loop reviewer needs in one call").option("--repo <fullname>", "Override target repo").option("--json", "Emit the packet as a structured object instead of markdown").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    const degraded = [...ctx.degraded];
     const prView = ghPRView(repo, number);
     let threads = [];
+    let threadsUnavailable = false;
     try {
       threads = ghReviewThreads(repo, number);
-    } catch {}
+    } catch (e) {
+      threadsUnavailable = true;
+      degraded.push(GITHUB_GRAPHQL_DEP);
+      console.warn(reviewThreadsUnavailableWarning(flattenCause(e)));
+    }
     const diff = ghPRDiffText(repo, number);
     let issue = null;
     const closing = prView.closingIssuesReferences?.[0];
     const linkedNum = closing?.number ?? partOfIssueNumbers(prView.body)[0] ?? 0;
+    let specUnavailable = null;
+    let specNotReadable = null;
     if (linkedNum > 0) {
       try {
         issue = { ...ghIssueView(repo, linkedNum), linkKind: closing ? "closes" : "part-of" };
-      } catch {}
+      } catch (e) {
+        if (classifyIssueReadFailure(e) === "not-an-issue") {
+          specNotReadable = { number: linkedNum, repo };
+          console.warn(specNotReadableIssueNote(linkedNum, repo));
+        } else {
+          specUnavailable = linkedNum;
+          if (!degraded.includes(GITHUB_GRAPHQL_DEP))
+            degraded.push(GITHUB_GRAPHQL_DEP);
+          console.warn(specUnavailableWarning(linkedNum, flattenCause(e)));
+        }
+      }
     }
     let features;
-    const degraded = [...ctx.degraded];
-    let skipCause = ctx.project.projectId ? null : "no ShipFlow project resolved for the target repo";
+    let skipCause = null;
+    let featureMapNotApplicable = null;
+    if (!ctx.project.projectId) {
+      if (ctx.projectNotApplicable)
+        featureMapNotApplicable = ctx.project.repoFullName;
+      else
+        skipCause = "no ShipFlow project resolved for the target repo";
+    }
     if (ctx.project.projectId) {
       try {
         const fm = await ctx.client.getFeatureMapping(ctx.creds.org, ctx.project.projectId);
@@ -7554,14 +7669,16 @@ ${opts.body ?? ""}`;
     }
     if (skipCause && !ctx.degraded.length)
       console.warn(featureMapSkippedWarning(skipCause));
+    else if (featureMapNotApplicable)
+      console.warn(featureMapNotApplicableNote(featureMapNotApplicable));
     if (opts.json) {
       console.log(JSON.stringify({
-        ...withProvenance(buildReviewPacketData({ pr: prView, threads, diff, issue, features })),
+        ...withProvenance(buildReviewPacketData({ pr: prView, threads, diff, issue, features, threadsUnavailable, specUnavailable, specNotReadable, featureMapSkipCause: skipCause, featureMapNotApplicable })),
         ...degradedField({ degraded })
       }, null, 2));
       return;
     }
-    console.log(buildReviewPacket({ pr: prView, threads, diff, issue, features }));
+    console.log(buildReviewPacket({ pr: prView, threads, diff, issue, features, threadsUnavailable, specUnavailable, specNotReadable, featureMapSkipCause: skipCause, featureMapNotApplicable }));
   }));
   pr.command("diff <number>").description("Capture a PR's FULL unfiltered diff from GitHub to a file — the security scan's input. Never reads local git, so a detached or stale worktree cannot empty it; exits 9 when the diff has zero files, unconditionally, and writes nothing at all in that case").requiredOption("--out <path>", "File to write the raw diff bytes to").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
