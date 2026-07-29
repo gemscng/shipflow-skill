@@ -2063,209 +2063,145 @@ var require_commander = __commonJS((exports) => {
   exports.InvalidOptionArgumentError = InvalidArgumentError;
 });
 
-// src/prompts.ts
-var exports_prompts = {};
-__export(exports_prompts, {
-  promptYesNo: () => promptYesNo,
-  promptText: () => promptText,
-  promptSelect: () => promptSelect
-});
-import { createInterface } from "node:readline";
-async function promptText(question, input = process.stdin, output = process.stdout) {
-  const rl = createInterface({ input, output });
-  return new Promise((res, rej) => {
-    let answered = false;
-    rl.question(question, (a) => {
-      answered = true;
-      rl.close();
-      res(a.trim());
-    });
-    rl.once("close", () => {
-      if (!answered) {
-        rej(new Error(`"${question.trim().replace(/:\s*$/, "")}" needs input, but stdin closed without an answer — ` + "pass the value as a flag (e.g. --title/--tag) in non-interactive sessions."));
-      }
-    });
-  });
-}
-async function promptSelect(question, options) {
-  console.log(question);
-  options.forEach((o, i) => console.log(`  ${i + 1}. ${o}`));
-  const ans = await promptText(`Choice (1-${options.length}): `);
-  const n = parseInt(ans, 10);
-  if (Number.isNaN(n) || n < 1 || n > options.length) {
-    throw new Error(`Invalid choice: ${ans}`);
-  }
-  return n - 1;
-}
-async function promptYesNo(question, def = false) {
-  const ans = (await promptText(`${question} ${def ? "[Y/n]" : "[y/N]"}: `)).toLowerCase();
-  if (ans === "")
-    return def;
-  return ans === "y" || ans === "yes";
-}
-var init_prompts = () => {};
-
-// src/index.ts
-import { createRequire as createRequire3 } from "node:module";
-
-// ../../node_modules/commander/esm.mjs
-var import__ = __toESM(require_commander(), 1);
-var {
-  program,
-  createCommand,
-  createArgument,
-  createOption,
-  CommanderError,
-  InvalidArgumentError,
-  InvalidOptionArgumentError,
-  Command,
-  Argument,
-  Option,
-  Help
-} = import__.default;
-
-// src/config.ts
-import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
-import { createHash } from "node:crypto";
-
 // src/shipflow-contract-data.ts
-var SHIPFLOW_CONTRACT = {
-  $comment: "Canonical ShipFlow contract (issue #179), a SIBLING of review-contract.json: the single source of truth for cross-surface ShipFlow constants that are NOT specific to the review packet — the workflow-type / execution-status / channel-type / plan-type taxonomies, the GitHub label palette + lifecycle label names, the hidden issue-lifecycle markers, and the message-readability word cap. These are shared by a BROADER audience than the two reviewers (the server webhook/issue handlers, the CLI issue/PR commands, and the dashboard), so they live beside — not inside — review-contract.json, whose scope stays exactly 'constants both reviewers share' and whose caps/lists/mirrors are left untouched. Mirrors (regenerate with `node scripts/sync-review-contract.mjs`; parity tests on all three sides fail on drift): apps/renaissshipflow-server/internal/shipflowcontract/shipflow-contract.json (go:embed, byte-identical), apps/renaissshipflow-cli/src/shipflow-contract-data.ts (generated), apps/renaissshipflow-dashboard/src/lib/shipflow-contract-data.ts (generated). Only the LITERALS are single-sourced — each consumer keeps its own MATCHING semantics (the server matches the escalation banner with a loose HasPrefix on markers.escalationBannerEmoji; the CLI matches with the stricter startsWith on markers.escalationBannerHeading).",
-  version: 1,
-  workflowTypes: {
-    $comment: "The complete WorkflowType taxonomy. The Go domain.WorkflowType constants (domain/workflow.go — the dispatch source of truth, enumerated as domain.AllWorkflowTypes) are pinned to this list by a parity test, and the dashboard's WorkflowType union derives from it directly (typeof SHIPFLOW_CONTRACT.workflowTypes.values[number]). `uat_tests` is real (it has a Go runner + constant) and was missing from the dashboard union; `dependency_audit` was a phantom TS-only value with NO server constant or runner and has been removed (issue #179).",
-    values: [
-      "issue_triage",
-      "commit_impact",
-      "patch_notes",
-      "regression_tests",
-      "uat_tests",
-      "weekly_summary",
-      "planning_summary",
-      "pr_notification",
-      "pr_review",
-      "bug_report_triage",
-      "test_runner",
-      "codebase_qa"
-    ]
-  },
-  executionStatuses: {
-    $comment: "The complete domain.ExecutionStatus taxonomy (execution.go — the execution-list statuses the API emits), single-sourced per issue #185 exactly as #179 did for workflowTypes. Go's domain constants (enumerated as domain.AllExecutionStatuses) are pinned to this list by a parity test, the dashboard's ExecutionStatus union derives from it (any value the API can emit that the union misses white-screens StatusBadge), and a spec-accuracy test pins every execution-status enum in openapi.yaml to it (the spec had verified drift: `cancelled` was missing from ExecutionLog.status). NOT to be confused with the CLI's per-run gate statuses (pending/in_progress/success/failure/skipped) — that is a different server enum, renamed GateStatus in the CLI so this domain name stays unambiguous.",
-    values: [
-      "queued",
-      "dispatched",
-      "running",
-      "completed",
-      "failed",
-      "cancelled",
-      "skipped"
-    ]
-  },
-  channelTypes: {
-    $comment: "The complete domain.ChannelType taxonomy (notification.go — notification delivery methods), single-sourced per issue #185. Go's domain.AllChannelTypes is pinned to this list by a parity test, the dashboard and CLI ChannelType unions derive from it, and a spec-accuracy test pins every channelType enum in openapi.yaml to it (the spec had verified drift: `telegram` was live everywhere but missing from NotificationChannel/CreateChannelRequest).",
-    values: [
-      "discord",
-      "slack",
-      "email",
-      "webhook",
-      "telegram",
-      "whatsapp"
-    ]
-  },
-  planTypes: {
-    $comment: "The complete domain.PlanType taxonomy (tenant.go — subscription tiers), single-sourced per issue #185. Go's domain.AllPlanTypes is pinned to this list by a parity test, the dashboard and CLI PlanType unions derive from it, and a spec-accuracy test requires every plan enum in openapi.yaml to be a subset of it (full-list where the field is a stored plan; deliberate subsets like the upgrade-target [pro, enterprise] stay subsets).",
-    values: [
-      "free",
-      "pro",
-      "enterprise"
-    ]
-  },
-  labels: {
-    $comment: "ShipFlow's GitHub label palette + the lifecycle label NAMES. `colors` maps a label name to its 6-hex color; ShipFlow owns these colors and BOTH the server's ensureLabels and the CLI's ghEnsureLabel source this ONE map (pre-contract they were byte-identical copies, so a color edit on one side flip-flopped the label). `prefixColors` colors open-ended label groups by name prefix. `names` are the lifecycle labels the code references by MEANING (claim / escalation / approval / reporter-review / verify-failed); every `names` value is also a `colors` key (parity-tested). `verifyFailed` is applied by the post-deploy verifier when a PR's verification manifest has a failing assertion (issue #207) — it hooks the reporter ping and the follow-up auto-revert. `autoHarvested` marks issues the cross-reviewer finding harvester files from valid findings OTHER PR reviewers (gemini-code-assist, chatgpt-codex-connector) raised and ShipFlow missed (part of #56). Repaint/matching semantics stay per-consumer — only the literals are shared.",
-    colors: {
-      bug: "d73a4a",
-      enhancement: "a2eeef",
-      feature: "a2eeef",
-      task: "0052cc",
-      "priority:low": "0e8a16",
-      "priority:medium": "fbca04",
-      "priority:high": "ff9f1c",
-      "priority:critical": "e11d48",
-      "severity:cosmetic": "c5def5",
-      "severity:minor": "0e8a16",
-      "severity:major": "ff9f1c",
-      "severity:blocking": "e11d48",
-      "\uD83E\uDD16 in-progress": "1d76db",
-      "needs-reporter-review": "d4c5f9",
-      "needs-human": "d93f0b",
-      "shipflow-approved": "0e8a16",
-      "loop-proceed": "0e8a16",
-      "auto-qa": "5319e7",
-      "verify-failed": "b60205",
-      "severity:critical": "b60205",
-      "severity:high": "d93f0b",
-      "severity:medium": "fbca04",
-      "severity:low": "c2e0c6",
-      "via-shipflow": "0e7490",
-      "auto-harvested": "d876e3",
-      "⏳ waiting-on": "fbca04"
+var SHIPFLOW_CONTRACT;
+var init_shipflow_contract_data = __esm(() => {
+  SHIPFLOW_CONTRACT = {
+    $comment: "Canonical ShipFlow contract (issue #179), a SIBLING of review-contract.json: the single source of truth for cross-surface ShipFlow constants that are NOT specific to the review packet — the workflow-type / execution-status / channel-type / plan-type taxonomies, the GitHub label palette + lifecycle label names, the hidden issue-lifecycle markers, and the message-readability word cap. These are shared by a BROADER audience than the two reviewers (the server webhook/issue handlers, the CLI issue/PR commands, and the dashboard), so they live beside — not inside — review-contract.json, whose scope stays exactly 'constants both reviewers share' and whose caps/lists/mirrors are left untouched. Mirrors (regenerate with `node scripts/sync-review-contract.mjs`; parity tests on all three sides fail on drift): apps/renaissshipflow-server/internal/shipflowcontract/shipflow-contract.json (go:embed, byte-identical), apps/renaissshipflow-cli/src/shipflow-contract-data.ts (generated), apps/renaissshipflow-dashboard/src/lib/shipflow-contract-data.ts (generated). Only the LITERALS are single-sourced — each consumer keeps its own MATCHING semantics (the server matches the escalation banner with a loose HasPrefix on markers.escalationBannerEmoji; the CLI matches with the stricter startsWith on markers.escalationBannerHeading).",
+    version: 1,
+    workflowTypes: {
+      $comment: "The complete WorkflowType taxonomy. The Go domain.WorkflowType constants (domain/workflow.go — the dispatch source of truth, enumerated as domain.AllWorkflowTypes) are pinned to this list by a parity test, and the dashboard's WorkflowType union derives from it directly (typeof SHIPFLOW_CONTRACT.workflowTypes.values[number]). `uat_tests` is real (it has a Go runner + constant) and was missing from the dashboard union; `dependency_audit` was a phantom TS-only value with NO server constant or runner and has been removed (issue #179).",
+      values: [
+        "issue_triage",
+        "commit_impact",
+        "patch_notes",
+        "regression_tests",
+        "uat_tests",
+        "weekly_summary",
+        "planning_summary",
+        "pr_notification",
+        "pr_review",
+        "bug_report_triage",
+        "test_runner",
+        "codebase_qa"
+      ]
     },
-    prefixColors: {
-      "category:": "5319e7",
-      "area:": "c5def5",
-      "epic:": "d4c5f9"
+    executionStatuses: {
+      $comment: "The complete domain.ExecutionStatus taxonomy (execution.go — the execution-list statuses the API emits), single-sourced per issue #185 exactly as #179 did for workflowTypes. Go's domain constants (enumerated as domain.AllExecutionStatuses) are pinned to this list by a parity test, the dashboard's ExecutionStatus union derives from it (any value the API can emit that the union misses white-screens StatusBadge), and a spec-accuracy test pins every execution-status enum in openapi.yaml to it (the spec had verified drift: `cancelled` was missing from ExecutionLog.status). NOT to be confused with the CLI's per-run gate statuses (pending/in_progress/success/failure/skipped) — that is a different server enum, renamed GateStatus in the CLI so this domain name stays unambiguous.",
+      values: [
+        "queued",
+        "dispatched",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "skipped"
+      ]
     },
-    names: {
-      inProgress: "\uD83E\uDD16 in-progress",
-      needsReporterReview: "needs-reporter-review",
-      needsHuman: "needs-human",
-      shipflowApproved: "shipflow-approved",
-      verifyFailed: "verify-failed",
-      viaShipflow: "via-shipflow",
-      autoHarvested: "auto-harvested",
-      waitingOn: "⏳ waiting-on"
+    channelTypes: {
+      $comment: "The complete domain.ChannelType taxonomy (notification.go — notification delivery methods), single-sourced per issue #185. Go's domain.AllChannelTypes is pinned to this list by a parity test, the dashboard and CLI ChannelType unions derive from it, and a spec-accuracy test pins every channelType enum in openapi.yaml to it (the spec had verified drift: `telegram` was live everywhere but missing from NotificationChannel/CreateChannelRequest).",
+      values: [
+        "discord",
+        "slack",
+        "email",
+        "webhook",
+        "telegram",
+        "whatsapp"
+      ]
+    },
+    planTypes: {
+      $comment: "The complete domain.PlanType taxonomy (tenant.go — subscription tiers), single-sourced per issue #185. Go's domain.AllPlanTypes is pinned to this list by a parity test, the dashboard and CLI PlanType unions derive from it, and a spec-accuracy test requires every plan enum in openapi.yaml to be a subset of it (full-list where the field is a stored plan; deliberate subsets like the upgrade-target [pro, enterprise] stay subsets).",
+      values: [
+        "free",
+        "pro",
+        "enterprise"
+      ]
+    },
+    labels: {
+      $comment: "ShipFlow's GitHub label palette + the lifecycle label NAMES. `colors` maps a label name to its 6-hex color; ShipFlow owns these colors and BOTH the server's ensureLabels and the CLI's ghEnsureLabel source this ONE map (pre-contract they were byte-identical copies, so a color edit on one side flip-flopped the label). `prefixColors` colors open-ended label groups by name prefix. `names` are the lifecycle labels the code references by MEANING (claim / escalation / approval / reporter-review / verify-failed); every `names` value is also a `colors` key (parity-tested). `verifyFailed` is applied by the post-deploy verifier when a PR's verification manifest has a failing assertion (issue #207) — it hooks the reporter ping and the follow-up auto-revert. `autoHarvested` marks issues the cross-reviewer finding harvester files from valid findings OTHER PR reviewers (gemini-code-assist, chatgpt-codex-connector) raised and ShipFlow missed (part of #56). Repaint/matching semantics stay per-consumer — only the literals are shared.",
+      colors: {
+        bug: "d73a4a",
+        enhancement: "a2eeef",
+        feature: "a2eeef",
+        task: "0052cc",
+        "priority:low": "0e8a16",
+        "priority:medium": "fbca04",
+        "priority:high": "ff9f1c",
+        "priority:critical": "e11d48",
+        "severity:cosmetic": "c5def5",
+        "severity:minor": "0e8a16",
+        "severity:major": "ff9f1c",
+        "severity:blocking": "e11d48",
+        "\uD83E\uDD16 in-progress": "1d76db",
+        "needs-reporter-review": "d4c5f9",
+        "needs-human": "d93f0b",
+        "shipflow-approved": "0e8a16",
+        "loop-proceed": "0e8a16",
+        "auto-qa": "5319e7",
+        "verify-failed": "b60205",
+        "severity:critical": "b60205",
+        "severity:high": "d93f0b",
+        "severity:medium": "fbca04",
+        "severity:low": "c2e0c6",
+        "via-shipflow": "0e7490",
+        "auto-harvested": "d876e3",
+        "⏳ waiting-on": "fbca04"
+      },
+      prefixColors: {
+        "category:": "5319e7",
+        "area:": "c5def5",
+        "epic:": "d4c5f9"
+      },
+      names: {
+        inProgress: "\uD83E\uDD16 in-progress",
+        needsReporterReview: "needs-reporter-review",
+        needsHuman: "needs-human",
+        shipflowApproved: "shipflow-approved",
+        verifyFailed: "verify-failed",
+        viaShipflow: "via-shipflow",
+        autoHarvested: "auto-harvested",
+        waitingOn: "⏳ waiting-on"
+      }
+    },
+    markers: {
+      $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. MATCHING SEMANTICS (issue #411 changed these deliberately — the note above used to read `Do NOT change these matching semantics`): `commentIsLoopMachinery` no longer denylists three specific markers, it matches `markerPrefix` — ANY `<!-- shipflow:` token — because a denylist of known shapes guarding an unbounded set of free-form agent prose fails OPEN on every new shape the loop invents (measured on PRs #401 and #405, which cleared a merge blocker nobody confirmed). `markerPrefix` is the OPEN token every ShipFlow marker starts with; a comment carrying any of them is machinery and can never stand in for a human decision. `loopReview` stamps the loop reviewer's verdict comment (CLI review-contract.ts renderFindingBody + `pr approve --comment`) — it was a CLI-local const the server could not see, which is exactly how #405 cleared its own gate. `intentGateCleared` is the OPEN token on the server's attributable audit comment posted on EVERY `needs-reporter-review` removal, rendered as `<!-- shipflow:intent-gate-cleared by=<login> -->`; the CLI's intent gate reads it as the clearance artifact instead of trusting the bare `unlabeled` timeline event (see the `intentGate` section) — and reads it ANCHORED (own line, `by=<login> -->` shape) and ONLY from a bot/trusted-association author, because a bare Contains over every comment let anyone who can quote the literal disarm the gate permanently. `intentGateHint` stamps the server's one-time nudge posted when a human reply on a gated thread misses the release grammar; its presence is also how the nudge stays one-time (fail-stuck was previously invisible — the miss path only logged). `reworkFrom` is the OPEN-TOKEN a rework worker stamps on the comment it posts after acting on a reporter's CORRECTION of an intent-gated PR (issue #442), rendered as `<!-- shipflow:rework-from id=<comment-id> -->` — the `id=` attribute convention mirrors `precedentApplied`'s `pid=`. The CLI's `reporterCorrectionOn` reads the id back so suppression is EXACT (that comment has been answered) rather than timestamp-ordered, and counts the markers to enforce the rework ceiling; the server needs no accessor because `markerPrefix` already makes any comment carrying it machinery. It is the anti-self-loop backstop: without it a loop comment on a gated PR reads as a fresh reporter correction and the loop reworks in response to itself. Only the literals are single-sourced — each consumer still owns its own matching semantics.",
+      triaged: "<!-- shipflow:triaged -->",
+      loop: "<!-- shipflow:loop -->",
+      loopReview: "<!-- shipflow:loop-review -->",
+      interpretationNote: "<!-- shipflow:interpretation -->",
+      markerPrefix: "<!-- shipflow:",
+      intentGateCleared: "<!-- shipflow:intent-gate-cleared",
+      escalationBannerEmoji: "\uD83D\uDEA7",
+      escalationBannerHeading: "\uD83D\uDEA7 **Needs a human**",
+      verificationManifestHeading: "Verification manifest",
+      verificationComment: "<!-- shipflow:verification -->",
+      precedentContext: "<!-- shipflow:precedent-context",
+      precedentApplied: "<!-- shipflow:precedent-applied",
+      intentGateHint: "<!-- shipflow:intent-gate-hint -->",
+      reworkFrom: "<!-- shipflow:rework-from"
+    },
+    intentGate: {
+      $comment: "The release rule for the #190 intent gate (`needs-reporter-review`), single-sourced so the server's matcher, the CLI's ping comment and the skill docs cannot drift (issue #411 — the doc promised a rule the code did not implement). POLARITY: the label is a merge blocker held until a human CONFIRMS, so this is an AUTHORIZATION control, not a sentiment classifier. THE RULE: the quote-stripped body must reduce to EXACTLY ONE meaningful line — blank lines and pure-decoration lines (a `---` rule) are scaffolding, but a fenced block and everything in it COUNT as content — and that line, with leading/trailing markdown decoration and punctuation trimmed, must EQUAL one of `confirmationTokens` (case-insensitive, emoji skin-tone/variation modifiers normalised away). Nothing else clears the gate: the token is the WHOLE reply, or it does not confirm. WHY THE WHOLE BODY (PR #441, third review pass): whole-line equality judged `block[0]` and ignored everything after it, so a bare token on line 1 confirmed whatever followed. Measured through the real handler, all of `Confirmed`+`But scope it to the CLI only`, `\uD83D\uDC4D`+`not this implementation though`, `yes`+`Actually no, revert it`, `LGTM`+`hold the merge, this is wrong`, `confirmed`+`- but only the CLI half` CLEARED, and so did the blank-line forms `confirmed`+`Actually no, revert it` and `Yes`+`Actually no, revert it`. Every one is #411's exact harm: a merge on a reading the reporter had just narrowed. A SINGLE newline was enough, and that settles the scoping question — the rule ALREADY refuses extra words on the token's own line (`Confirmed — ship it` is armed), so accepting arbitrary text one newline later is incoherent: the same act, the same ambiguity, the opposite answer. Drawing the boundary at the line or at the paragraph only moves the hole down; this defect has now appeared at three granularities. Requiring the whole body is NOT the denylist the veto list was — it never inspects what follows, it refuses when anything follows. THE PRICE: `confirmed` plus a thank-you parks too. Accepted — commentary goes in a separate comment, costing one extra reply, never a wrong merge. A pasted fenced block counts as content here (unlike in the `N: answer` block parser, which skips fences whole so a fence's inner line can never be promoted to the judged line): `/confirm` over a fenced `no` was measured clearing, and a token with an attachment is not a token alone. WHY AN EXACT TOKEN AND NOT A GRAMMAR (PR #441, second review pass): the previous design matched an affirmative OPENING WORD and then vetoed a list of negations and contrastives found later in the paragraph. That is a denylist of known shapes guarding an unbounded set of free-form natural language — the exact anti-pattern this issue exists to close, re-earned inside its own fix. Negation-after-affirmative has no finite enumeration: `Confirmed the bug still repros`, `Yes, change the copy first` and `ok 1 - test passed` all survived a 27-word veto list, and each one FAILED OPEN — it merged a reading nobody confirmed. An exact token has the correct failure polarity for EVERY input, not merely for the inputs somebody remembered to enumerate: anything that is not the token leaves the gate armed, which one more reply fixes. Tokens must be unambiguous ALONE, as a whole line — that is what excludes `ok`, `sure`, `agreed`, `correct` and every bare imperative (`ship`, `merge`, `approve`, `proceed`), which read as consent or as an instruction depending on the sentence they open. The `N: answer` reply protocol also releases the gate, but it is held to the SAME stands-alone invariant as the token path (PR #441, fourth review pass): the decision block must BE the whole quote-stripped reply (no meaningful line outside it, a pasted fence included), EVERY line of that block must itself be a decision line, EVERY answer must be a `confirmationTokens` entry, and an escalation banner must actually be outstanding on the thread. Both positional checks are load-bearing and neither alone suffices — measured by ablation, the length test alone leaves `1: yes` + NEWLINE + `Actually no, revert it` clearing (same paragraph, so the counts match) and the per-line test alone leaves `1: yes` + BLANK LINE + `revert it` clearing (a later paragraph the block never reached). Reading the answers had fixed WHAT the block said but not WHERE it stopped, so this door stayed fail-OPEN at both granularities after the token path had closed both — and the escalation-outstanding guard does not mitigate it, because answering `N:` is exactly what a reporter does on an escalated thread — a content-agnostic `^\\\\d+:` match let `1: no, redo it` clear the blocker it was rejecting, and a pasted stack-trace line `10: undefined is not a function` do it by accident. FAIL-STUCK IS THE PRICE, and it is paid deliberately in two places, BOTH of which must state that the token is the whole reply or a reporter cannot discover it: `releaseHint` is the exact sentence the CLI puts on the PR when it APPLIES the label, and the server posts a one-time `intentGateHint` nudge naming the tokens whenever a human reply misses — including when the commenter's `author_association` is untrusted, which was the one branch that failed stuck in silence. Both render the token list FROM `confirmationTokens`, never from a hand-written copy, so neither can drift from the matcher — preserve that. Removing the label by hand stays the human override. Do NOT re-add a free-text grammar here to make it friendlier — narrowing the openers is safe, widening them is how this control dies.",
+      confirmationTokens: [
+        "/confirm",
+        "confirm",
+        "confirmed",
+        "approved",
+        "yes",
+        "lgtm",
+        "sgtm",
+        "ship it",
+        "\uD83D\uDC4D",
+        "+1"
+      ],
+      releaseHint: "Reply with ONLY `confirmed` and nothing else (`/confirm`, `confirm`, `approved`, `yes`, `LGTM`, `sgtm`, `ship it`, `+1` and \uD83D\uDC4D also work). That one line must be the whole reply — extra words on it (`yes but …`), a second line, or a following paragraph are each read as a correction and leave this gate ON, by design. Send any commentary as a separate comment."
+    },
+    readability: {
+      $comment: "Deterministic message-readability cap shared across GitHub surfaces: any single line that renders UNFOLDED over this many words is dense prose, not a scannable point — its detail belongs in a folded section. Enforced by the server's readability.VisibleLineWordCap (PR review + triage rendering) and the CLI's ACTION_LINE_WORD_LIMIT (loop escalation lint). ~20-word sentences plus room for a code reference.",
+      visibleLineWordCap: 30
     }
-  },
-  markers: {
-    $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. MATCHING SEMANTICS (issue #411 changed these deliberately — the note above used to read `Do NOT change these matching semantics`): `commentIsLoopMachinery` no longer denylists three specific markers, it matches `markerPrefix` — ANY `<!-- shipflow:` token — because a denylist of known shapes guarding an unbounded set of free-form agent prose fails OPEN on every new shape the loop invents (measured on PRs #401 and #405, which cleared a merge blocker nobody confirmed). `markerPrefix` is the OPEN token every ShipFlow marker starts with; a comment carrying any of them is machinery and can never stand in for a human decision. `loopReview` stamps the loop reviewer's verdict comment (CLI review-contract.ts renderFindingBody + `pr approve --comment`) — it was a CLI-local const the server could not see, which is exactly how #405 cleared its own gate. `intentGateCleared` is the OPEN token on the server's attributable audit comment posted on EVERY `needs-reporter-review` removal, rendered as `<!-- shipflow:intent-gate-cleared by=<login> -->`; the CLI's intent gate reads it as the clearance artifact instead of trusting the bare `unlabeled` timeline event (see the `intentGate` section) — and reads it ANCHORED (own line, `by=<login> -->` shape) and ONLY from a bot/trusted-association author, because a bare Contains over every comment let anyone who can quote the literal disarm the gate permanently. `intentGateHint` stamps the server's one-time nudge posted when a human reply on a gated thread misses the release grammar; its presence is also how the nudge stays one-time (fail-stuck was previously invisible — the miss path only logged). `reworkFrom` is the OPEN-TOKEN a rework worker stamps on the comment it posts after acting on a reporter's CORRECTION of an intent-gated PR (issue #442), rendered as `<!-- shipflow:rework-from id=<comment-id> -->` — the `id=` attribute convention mirrors `precedentApplied`'s `pid=`. The CLI's `reporterCorrectionOn` reads the id back so suppression is EXACT (that comment has been answered) rather than timestamp-ordered, and counts the markers to enforce the rework ceiling; the server needs no accessor because `markerPrefix` already makes any comment carrying it machinery. It is the anti-self-loop backstop: without it a loop comment on a gated PR reads as a fresh reporter correction and the loop reworks in response to itself. Only the literals are single-sourced — each consumer still owns its own matching semantics.",
-    triaged: "<!-- shipflow:triaged -->",
-    loop: "<!-- shipflow:loop -->",
-    loopReview: "<!-- shipflow:loop-review -->",
-    interpretationNote: "<!-- shipflow:interpretation -->",
-    markerPrefix: "<!-- shipflow:",
-    intentGateCleared: "<!-- shipflow:intent-gate-cleared",
-    escalationBannerEmoji: "\uD83D\uDEA7",
-    escalationBannerHeading: "\uD83D\uDEA7 **Needs a human**",
-    verificationManifestHeading: "Verification manifest",
-    verificationComment: "<!-- shipflow:verification -->",
-    precedentContext: "<!-- shipflow:precedent-context",
-    precedentApplied: "<!-- shipflow:precedent-applied",
-    intentGateHint: "<!-- shipflow:intent-gate-hint -->",
-    reworkFrom: "<!-- shipflow:rework-from"
-  },
-  intentGate: {
-    $comment: "The release rule for the #190 intent gate (`needs-reporter-review`), single-sourced so the server's matcher, the CLI's ping comment and the skill docs cannot drift (issue #411 — the doc promised a rule the code did not implement). POLARITY: the label is a merge blocker held until a human CONFIRMS, so this is an AUTHORIZATION control, not a sentiment classifier. THE RULE: the quote-stripped body must reduce to EXACTLY ONE meaningful line — blank lines and pure-decoration lines (a `---` rule) are scaffolding, but a fenced block and everything in it COUNT as content — and that line, with leading/trailing markdown decoration and punctuation trimmed, must EQUAL one of `confirmationTokens` (case-insensitive, emoji skin-tone/variation modifiers normalised away). Nothing else clears the gate: the token is the WHOLE reply, or it does not confirm. WHY THE WHOLE BODY (PR #441, third review pass): whole-line equality judged `block[0]` and ignored everything after it, so a bare token on line 1 confirmed whatever followed. Measured through the real handler, all of `Confirmed`+`But scope it to the CLI only`, `\uD83D\uDC4D`+`not this implementation though`, `yes`+`Actually no, revert it`, `LGTM`+`hold the merge, this is wrong`, `confirmed`+`- but only the CLI half` CLEARED, and so did the blank-line forms `confirmed`+`Actually no, revert it` and `Yes`+`Actually no, revert it`. Every one is #411's exact harm: a merge on a reading the reporter had just narrowed. A SINGLE newline was enough, and that settles the scoping question — the rule ALREADY refuses extra words on the token's own line (`Confirmed — ship it` is armed), so accepting arbitrary text one newline later is incoherent: the same act, the same ambiguity, the opposite answer. Drawing the boundary at the line or at the paragraph only moves the hole down; this defect has now appeared at three granularities. Requiring the whole body is NOT the denylist the veto list was — it never inspects what follows, it refuses when anything follows. THE PRICE: `confirmed` plus a thank-you parks too. Accepted — commentary goes in a separate comment, costing one extra reply, never a wrong merge. A pasted fenced block counts as content here (unlike in the `N: answer` block parser, which skips fences whole so a fence's inner line can never be promoted to the judged line): `/confirm` over a fenced `no` was measured clearing, and a token with an attachment is not a token alone. WHY AN EXACT TOKEN AND NOT A GRAMMAR (PR #441, second review pass): the previous design matched an affirmative OPENING WORD and then vetoed a list of negations and contrastives found later in the paragraph. That is a denylist of known shapes guarding an unbounded set of free-form natural language — the exact anti-pattern this issue exists to close, re-earned inside its own fix. Negation-after-affirmative has no finite enumeration: `Confirmed the bug still repros`, `Yes, change the copy first` and `ok 1 - test passed` all survived a 27-word veto list, and each one FAILED OPEN — it merged a reading nobody confirmed. An exact token has the correct failure polarity for EVERY input, not merely for the inputs somebody remembered to enumerate: anything that is not the token leaves the gate armed, which one more reply fixes. Tokens must be unambiguous ALONE, as a whole line — that is what excludes `ok`, `sure`, `agreed`, `correct` and every bare imperative (`ship`, `merge`, `approve`, `proceed`), which read as consent or as an instruction depending on the sentence they open. The `N: answer` reply protocol also releases the gate, but it is held to the SAME stands-alone invariant as the token path (PR #441, fourth review pass): the decision block must BE the whole quote-stripped reply (no meaningful line outside it, a pasted fence included), EVERY line of that block must itself be a decision line, EVERY answer must be a `confirmationTokens` entry, and an escalation banner must actually be outstanding on the thread. Both positional checks are load-bearing and neither alone suffices — measured by ablation, the length test alone leaves `1: yes` + NEWLINE + `Actually no, revert it` clearing (same paragraph, so the counts match) and the per-line test alone leaves `1: yes` + BLANK LINE + `revert it` clearing (a later paragraph the block never reached). Reading the answers had fixed WHAT the block said but not WHERE it stopped, so this door stayed fail-OPEN at both granularities after the token path had closed both — and the escalation-outstanding guard does not mitigate it, because answering `N:` is exactly what a reporter does on an escalated thread — a content-agnostic `^\\\\d+:` match let `1: no, redo it` clear the blocker it was rejecting, and a pasted stack-trace line `10: undefined is not a function` do it by accident. FAIL-STUCK IS THE PRICE, and it is paid deliberately in two places, BOTH of which must state that the token is the whole reply or a reporter cannot discover it: `releaseHint` is the exact sentence the CLI puts on the PR when it APPLIES the label, and the server posts a one-time `intentGateHint` nudge naming the tokens whenever a human reply misses — including when the commenter's `author_association` is untrusted, which was the one branch that failed stuck in silence. Both render the token list FROM `confirmationTokens`, never from a hand-written copy, so neither can drift from the matcher — preserve that. Removing the label by hand stays the human override. Do NOT re-add a free-text grammar here to make it friendlier — narrowing the openers is safe, widening them is how this control dies.",
-    confirmationTokens: [
-      "/confirm",
-      "confirm",
-      "confirmed",
-      "approved",
-      "yes",
-      "lgtm",
-      "sgtm",
-      "ship it",
-      "\uD83D\uDC4D",
-      "+1"
-    ],
-    releaseHint: "Reply with ONLY `confirmed` and nothing else (`/confirm`, `confirm`, `approved`, `yes`, `LGTM`, `sgtm`, `ship it`, `+1` and \uD83D\uDC4D also work). That one line must be the whole reply — extra words on it (`yes but …`), a second line, or a following paragraph are each read as a correction and leave this gate ON, by design. Send any commentary as a separate comment."
-  },
-  readability: {
-    $comment: "Deterministic message-readability cap shared across GitHub surfaces: any single line that renders UNFOLDED over this many words is dense prose, not a scannable point — its detail belongs in a folded section. Enforced by the server's readability.VisibleLineWordCap (PR review + triage rendering) and the CLI's ACTION_LINE_WORD_LIMIT (loop escalation lint). ~20-word sentences plus room for a code reference.",
-    visibleLineWordCap: 30
-  }
-};
+  };
+});
 
 // src/escalation-format.ts
 function bulletizeReason(reason) {
@@ -2296,14 +2232,6 @@ ${items.join(`
 `)}` : items.join(`
 `);
 }
-var ESCALATION_CATEGORIES = {
-  "money-write": "Enabling this writes real money-bearing values (prices, payouts, billing) to live systems. " + "A bad value reaches customers immediately, and transactions made at a wrong value can't be " + "undone by reverting data. The loop never self-authorizes money writes — a human owns the go/no-go.",
-  "prod-config": "This changes production configuration (env vars, flags, infrastructure) whose blast radius " + "spans everything behind it; a mistake can take production down or silently change live " + "behavior. The loop never applies production config itself.",
-  security: "This touches a security- or trust-critical surface (authn/authz, secrets, injection-prone " + "parsing) where a mistake is exploitable and autonomous validation can't establish safety.",
-  "missing-secret": "The work is blocked on a credential, secret, or account only a human can provision. Nothing " + "is wrong with the code — the loop lacks access it cannot grant itself.",
-  "external-dependency": "Blocked on an external system or third party (vendor approval, DNS, a service outside this " + "repo) that the loop cannot drive.",
-  invalid: "The issue looks invalid, duplicate, or out of scope; closing someone's issue is a judgment " + "call the loop leaves to a human."
-};
 function isActionHeading(heading) {
   return /action\s+needed/i.test(heading);
 }
@@ -2345,7 +2273,6 @@ function normalizeOwner(raw) {
   const login = (raw ?? "").trim().replace(/^@/, "");
   return login || undefined;
 }
-var ACTION_LINE_WORD_LIMIT = SHIPFLOW_CONTRACT.readability.visibleLineWordCap;
 function proseWordCount(text) {
   return text.replace(/`[^`]+`/g, "code").split(/\s+/).filter(Boolean).length;
 }
@@ -2440,7 +2367,6 @@ function formatPrecedentDisclosure(m) {
   ].join(`
 `);
 }
-var ESCALATION_BANNER = `${SHIPFLOW_CONTRACT.markers.escalationBannerHeading} — the loop is parked here until you reply.`;
 function findLatestEscalationComment(comments) {
   for (let i = comments.length - 1;i >= 0; i--) {
     const c = comments[i];
@@ -2478,9 +2404,26 @@ function formatEscalationBody(reason, opts = {}) {
   ].join(`
 `);
 }
+var ESCALATION_CATEGORIES, ACTION_LINE_WORD_LIMIT, ESCALATION_BANNER;
+var init_escalation_format = __esm(() => {
+  init_shipflow_contract_data();
+  ESCALATION_CATEGORIES = {
+    "money-write": "Enabling this writes real money-bearing values (prices, payouts, billing) to live systems. " + "A bad value reaches customers immediately, and transactions made at a wrong value can't be " + "undone by reverting data. The loop never self-authorizes money writes — a human owns the go/no-go.",
+    "prod-config": "This changes production configuration (env vars, flags, infrastructure) whose blast radius " + "spans everything behind it; a mistake can take production down or silently change live " + "behavior. The loop never applies production config itself.",
+    security: "This touches a security- or trust-critical surface (authn/authz, secrets, injection-prone " + "parsing) where a mistake is exploitable and autonomous validation can't establish safety.",
+    "missing-secret": "The work is blocked on a credential, secret, or account only a human can provision. Nothing " + "is wrong with the code — the loop lacks access it cannot grant itself.",
+    "external-dependency": "Blocked on an external system or third party (vendor approval, DNS, a service outside this " + "repo) that the loop cannot drive.",
+    invalid: "The issue looks invalid, duplicate, or out of scope; closing someone's issue is a judgment " + "call the loop leaves to a human."
+  };
+  ACTION_LINE_WORD_LIMIT = SHIPFLOW_CONTRACT.readability.visibleLineWordCap;
+  ESCALATION_BANNER = `${SHIPFLOW_CONTRACT.markers.escalationBannerHeading} — the loop is parked here until you reply.`;
+});
 
 // src/config.ts
-var DEFAULT_BASE = join(homedir(), ".config", "renaissshipflow");
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { createHash } from "node:crypto";
 function baseConfigDir() {
   return process.env.SHIPFLOW_CONFIG_DIR || DEFAULT_BASE;
 }
@@ -2491,9 +2434,6 @@ function configDir() {
   const profile = activeProfile();
   return profile ? join(baseConfigDir(), "profiles", profile) : baseConfigDir();
 }
-var configFile = () => join(configDir(), "config.json");
-var credsFile = () => join(configDir(), "credentials.json");
-var projectsFile = () => join(configDir(), "projects.json");
 function listProfiles() {
   try {
     return readdirSync(join(baseConfigDir(), "profiles"), { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
@@ -2505,8 +2445,6 @@ function credentialsForProfile(name) {
   const dir = name ? join(baseConfigDir(), "profiles", name) : baseConfigDir();
   return readJsonOr(join(dir, "credentials.json"), null);
 }
-var MERGE_POLICIES = ["manual", "auto-on-green", "auto-timeout"];
-var INTENT_GATE_MODES = ["strict", "trusted"];
 function ensureDir() {
   const dir = configDir();
   if (!existsSync(dir)) {
@@ -2528,23 +2466,12 @@ function writeJson(path, value) {
     mode: 384
   });
 }
-var loadConfig = () => readJsonOr(configFile(), {});
-var saveConfig = (c) => writeJson(configFile(), c);
-var clearConfig = () => {
-  try {
-    unlinkSync(configFile());
-  } catch {}
-};
-var loadCredentials = () => readJsonOr(credsFile(), null);
-var saveCredentials = (c) => writeJson(credsFile(), c);
 function refreshOpts(creds) {
   return {
     refreshToken: creds.refreshToken,
     onRefreshed: (t) => saveCredentials({ ...creds, jwt: t.token, refreshToken: t.refreshToken, expiresAt: t.expiresAt })
   };
 }
-var loadProjectCache = () => readJsonOr(projectsFile(), {});
-var saveProjectCache = (c) => writeJson(projectsFile(), c);
 function projectCacheKeyForRepoPath(absRepoRoot) {
   return createHash("sha256").update(absRepoRoot).digest("hex").slice(0, 16);
 }
@@ -2664,65 +2591,19 @@ function resolveApiKey() {
   const a = resolveAuthToken();
   return a?.token;
 }
-
-// src/commands/auth.ts
-function registerAuthCommands(program2) {
-  const auth = program2.command("auth").description("Manage authentication");
-  auth.command("login").description("[deprecated] Authenticate with an API key — prefer `renaiss-shipflow login`").argument("[api-key]", "API key (sfk_...)").action(async (apiKey) => {
-    if (!apiKey) {
-      const { promptText: promptText2 } = await Promise.resolve().then(() => (init_prompts(), exports_prompts));
-      apiKey = await promptText2("Enter your RenaissShipFlow API key (sfk_...): ");
-    }
-    if (!apiKey) {
-      console.error("Error: API key is required.");
-      process.exit(1);
-    }
-    const config = loadConfig();
-    config.apiKey = apiKey;
-    saveConfig(config);
-    console.log("API key saved. You can now use renaiss-shipflow commands.");
-    console.log("Note: `auth login` is deprecated — prefer `renaiss-shipflow login` (GitHub sign-in, works for every command).");
-  });
-  auth.command("logout").description("Clear stored credentials").action(() => {
-    clearConfig();
-    console.log("Logged out. Stored credentials cleared.");
-  });
-  auth.command("status").description("Show current authentication status").action(() => {
-    const key = resolveApiKey();
-    if (key) {
-      const masked = key.substring(0, 8) + "..." + key.substring(key.length - 4);
-      console.log(`Authenticated with key: ${masked}`);
-      if (process.env.SHIPFLOW_API_KEY) {
-        console.log("  (from SHIPFLOW_API_KEY env var)");
-      } else {
-        console.log("  (from ~/.config/renaissshipflow/config.json)");
-      }
-    } else {
-      console.log("Not authenticated. Run: renaiss-shipflow login");
-    }
-  });
-}
+var DEFAULT_BASE, configFile = () => join(configDir(), "config.json"), credsFile = () => join(configDir(), "credentials.json"), projectsFile = () => join(configDir(), "projects.json"), MERGE_POLICIES, INTENT_GATE_MODES, loadConfig = () => readJsonOr(configFile(), {}), saveConfig = (c) => writeJson(configFile(), c), clearConfig = () => {
+  try {
+    unlinkSync(configFile());
+  } catch {}
+}, loadCredentials = () => readJsonOr(credsFile(), null), saveCredentials = (c) => writeJson(credsFile(), c), loadProjectCache = () => readJsonOr(projectsFile(), {}), saveProjectCache = (c) => writeJson(projectsFile(), c);
+var init_config = __esm(() => {
+  init_escalation_format();
+  DEFAULT_BASE = join(homedir(), ".config", "renaissshipflow");
+  MERGE_POLICIES = ["manual", "auto-on-green", "auto-timeout"];
+  INTENT_GATE_MODES = ["strict", "trusted"];
+});
 
 // src/client.ts
-class ApiError extends Error {
-  status;
-  body;
-  constructor(status, body) {
-    super(`API error ${status}: ${body}`);
-    this.status = status;
-    this.body = body;
-    this.name = "ApiError";
-  }
-}
-
-class ClaimConflictError extends Error {
-  holder;
-  constructor(holder) {
-    super(holder ? `issue claimed by ${holder.actor}${holder.agent ? ` (${holder.agent})` : ""} until ${holder.expiresAt}` : "issue already claimed");
-    this.holder = holder;
-    this.name = "ClaimConflictError";
-  }
-}
 function backoffMs(attempt) {
   return 300 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
 }
@@ -2965,11 +2846,31 @@ class ShipFlowClient {
     return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/feature-mapping`);
   }
 }
+var ApiError, ClaimConflictError;
+var init_client = __esm(() => {
+  ApiError = class ApiError extends Error {
+    status;
+    body;
+    constructor(status, body) {
+      super(`API error ${status}: ${body}`);
+      this.status = status;
+      this.body = body;
+      this.name = "ApiError";
+    }
+  };
+  ClaimConflictError = class ClaimConflictError extends Error {
+    holder;
+    constructor(holder) {
+      super(holder ? `issue claimed by ${holder.actor}${holder.agent ? ` (${holder.agent})` : ""} until ${holder.expiresAt}` : "issue already claimed");
+      this.holder = holder;
+      this.name = "ClaimConflictError";
+    }
+  };
+});
 
 // src/project.ts
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";
-init_prompts();
 function parseGitRemote(url) {
   let m = url.match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/);
   if (m)
@@ -3004,7 +2905,6 @@ async function resolveProject(client, creds) {
     throw new Error(r.cause ?? "ShipFlow project resolution failed");
   return r.project;
 }
-var SHIPFLOW_API_DEP = "shipflow-api";
 function noAnswerStatus(status) {
   return status >= 500 || status === 408 || status === 429;
 }
@@ -3069,10 +2969,15 @@ function degradedProjectWarning(repoFullName, cause) {
 function featureMapSkippedWarning(cause) {
   return `⚠️ WARNING ${SHIPFLOW_API_DEP} feature map unavailable — per-feature evidence coverage NOT checked; ` + `packet omits the coverage lines: ${cause}`;
 }
-var GITHUB_REST_DEP = "github-rest";
 function changedFilesUnavailableWarning(cause) {
   return `⚠️ WARNING ${GITHUB_REST_DEP} unavailable — PR changed-file list NOT read; ` + `scan attestation NOT verified (expected file count undetermined): ${cause}`;
 }
+var SHIPFLOW_API_DEP = "shipflow-api", GITHUB_REST_DEP = "github-rest";
+var init_project = __esm(() => {
+  init_config();
+  init_client();
+  init_prompts();
+});
 
 // src/commands/helpers.ts
 function buildClientAuth(auth, creds) {
@@ -3173,7 +3078,6 @@ function getFormat(cmd) {
     return "yaml";
   return "table";
 }
-var UNEXPECTED_EXIT_CODE = 10;
 function runAction(fn) {
   return async (...args) => {
     try {
@@ -3186,10 +3090,131 @@ function runAction(fn) {
         console.log(JSON.stringify({ error: message }));
       else
         console.error(`Error: ${message}`);
-      process.exit(UNEXPECTED_EXIT_CODE);
+      process.exit(err instanceof UsageError ? 1 : UNEXPECTED_EXIT_CODE);
     }
   };
 }
+var UNEXPECTED_EXIT_CODE = 10, UsageError;
+var init_helpers = __esm(() => {
+  init_client();
+  init_config();
+  init_project();
+  UsageError = class UsageError extends Error {
+  };
+});
+
+// src/prompts.ts
+var exports_prompts = {};
+__export(exports_prompts, {
+  promptYesNo: () => promptYesNo,
+  promptText: () => promptText,
+  promptSelect: () => promptSelect
+});
+import { createInterface } from "node:readline";
+function declaredHeadless() {
+  const ci = (process.env.CI ?? "").toLowerCase();
+  const headless = (process.env.SHIPFLOW_HEADLESS ?? "").toLowerCase();
+  return ci === "1" || ci === "true" || headless === "1" || headless === "true" || (process.env.OPENCLAW_SESSION ?? "") !== "";
+}
+async function promptText(question, input = process.stdin, output = process.stdout) {
+  if (declaredHeadless() && input.isTTY) {
+    throw new UsageError(`"${question.trim().replace(/:\s*$/, "")}" needs interactive input, but this session is declared headless (CI/SHIPFLOW_HEADLESS) — ` + "pass the value as a flag (e.g. --title/--tag).");
+  }
+  const rl = createInterface({ input, output });
+  return new Promise((res, rej) => {
+    let answered = false;
+    rl.question(question, (a) => {
+      answered = true;
+      rl.close();
+      res(a.trim());
+    });
+    rl.once("close", () => {
+      if (!answered) {
+        rej(new UsageError(`"${question.trim().replace(/:\s*$/, "")}" needs input, but stdin closed without an answer — ` + "pass the value as a flag (e.g. --title/--tag) in non-interactive sessions."));
+      }
+    });
+  });
+}
+async function promptSelect(question, options) {
+  console.log(question);
+  options.forEach((o, i) => console.log(`  ${i + 1}. ${o}`));
+  const ans = await promptText(`Choice (1-${options.length}): `);
+  const n = parseInt(ans, 10);
+  if (Number.isNaN(n) || n < 1 || n > options.length) {
+    throw new Error(`Invalid choice: ${ans}`);
+  }
+  return n - 1;
+}
+async function promptYesNo(question, def = false) {
+  const ans = (await promptText(`${question} ${def ? "[Y/n]" : "[y/N]"}: `)).toLowerCase();
+  if (ans === "")
+    return def;
+  return ans === "y" || ans === "yes";
+}
+var init_prompts = __esm(() => {
+  init_helpers();
+});
+
+// src/index.ts
+import { createRequire as createRequire3 } from "node:module";
+
+// ../../node_modules/commander/esm.mjs
+var import__ = __toESM(require_commander(), 1);
+var {
+  program,
+  createCommand,
+  createArgument,
+  createOption,
+  CommanderError,
+  InvalidArgumentError,
+  InvalidOptionArgumentError,
+  Command,
+  Argument,
+  Option,
+  Help
+} = import__.default;
+
+// src/commands/auth.ts
+init_config();
+function registerAuthCommands(program2) {
+  const auth = program2.command("auth").description("Manage authentication");
+  auth.command("login").description("[deprecated] Authenticate with an API key — prefer `renaiss-shipflow login`").argument("[api-key]", "API key (sfk_...)").action(async (apiKey) => {
+    if (!apiKey) {
+      const { promptText: promptText2 } = await Promise.resolve().then(() => (init_prompts(), exports_prompts));
+      apiKey = await promptText2("Enter your RenaissShipFlow API key (sfk_...): ");
+    }
+    if (!apiKey) {
+      console.error("Error: API key is required.");
+      process.exit(1);
+    }
+    const config = loadConfig();
+    config.apiKey = apiKey;
+    saveConfig(config);
+    console.log("API key saved. You can now use renaiss-shipflow commands.");
+    console.log("Note: `auth login` is deprecated — prefer `renaiss-shipflow login` (GitHub sign-in, works for every command).");
+  });
+  auth.command("logout").description("Clear stored credentials").action(() => {
+    clearConfig();
+    console.log("Logged out. Stored credentials cleared.");
+  });
+  auth.command("status").description("Show current authentication status").action(() => {
+    const key = resolveApiKey();
+    if (key) {
+      const masked = key.substring(0, 8) + "..." + key.substring(key.length - 4);
+      console.log(`Authenticated with key: ${masked}`);
+      if (process.env.SHIPFLOW_API_KEY) {
+        console.log("  (from SHIPFLOW_API_KEY env var)");
+      } else {
+        console.log("  (from ~/.config/renaissshipflow/config.json)");
+      }
+    } else {
+      console.log("Not authenticated. Run: renaiss-shipflow login");
+    }
+  });
+}
+
+// src/commands/repos.ts
+init_helpers();
 
 // src/output.ts
 function printJson(data) {
@@ -3348,6 +3373,7 @@ function registerRepoCommands(program2) {
 }
 
 // src/commands/workflows.ts
+init_helpers();
 function registerWorkflowCommands(program2) {
   const workflows = program2.command("workflows").description("Manage repository workflows");
   workflows.command("list").description("List workflows for a repository").requiredOption("--repo <repo>", "Repository name").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (opts, cmd) => {
@@ -3401,6 +3427,7 @@ function collectKeyValue(value, prev) {
 }
 
 // src/commands/activity.ts
+init_helpers();
 function registerActivityCommand(program2) {
   program2.command("activity").description("View recent workflow activity").option("--last <n>", "Number of recent events to show", "10").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (opts, cmd) => {
     const { client, org, format } = getApiCtx(cmd);
@@ -3424,6 +3451,8 @@ function registerActivityCommand(program2) {
 }
 
 // src/commands/channels.ts
+init_helpers();
+init_shipflow_contract_data();
 function registerChannelCommands(program2) {
   const channels = program2.command("channels").description("Manage notification channels");
   channels.command("list").description("List notification channels").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (_opts, cmd) => {
@@ -3456,6 +3485,7 @@ function registerChannelCommands(program2) {
 }
 
 // src/commands/stats.ts
+init_helpers();
 var STAGE_TABLE_HEADERS = [
   "Stage",
   "Requests",
@@ -3535,6 +3565,7 @@ By Stage:`);
 }
 
 // src/commands/trigger.ts
+init_helpers();
 function registerTriggerCommand(program2) {
   program2.command("trigger").description("Manually trigger a workflow").argument("<workflow-type>", "Workflow type to trigger (e.g. regression_tests)").requiredOption("--repo <repo>", "Repository name").option("--json", "Output JSON").action(runAction(async (workflowType, opts, cmd) => {
     const { client, org } = getApiCtx(cmd);
@@ -3558,7 +3589,11 @@ function shellQuote(s) {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+// src/gh.ts
+init_shipflow_contract_data();
+
 // src/pr-state.ts
+init_shipflow_contract_data();
 var FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
 var PENDING = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"]);
 var APPROVAL_LABELS = new Set([SHIPFLOW_CONTRACT.labels.names.shipflowApproved, "approved", "✅ approved"]);
@@ -4186,7 +4221,10 @@ function ghResolveReviewThread(threadId) {
 }
 
 // src/commands/login.ts
+init_client();
+init_config();
 init_prompts();
+init_helpers();
 function formatNoTenantHelp(body) {
   let payload;
   try {
@@ -4292,6 +4330,7 @@ Git identity captured: ${cfg.gitName} <${cfg.gitEmail}> — apply per-repo with 
 // src/commands/git-identity.ts
 import { execFileSync, execSync as execSync3 } from "node:child_process";
 import { hostname } from "node:os";
+init_config();
 
 // src/git-local.ts
 import { realpathSync } from "node:fs";
@@ -4513,8 +4552,11 @@ function registerGitIdentityCommand(program2) {
 }
 
 // src/commands/init.ts
-import { resolve as resolve2 } from "node:path";
+init_config();
+init_project();
 init_prompts();
+init_helpers();
+import { resolve as resolve2 } from "node:path";
 function registerInitCommand(program2) {
   program2.command("init").description("Link the current repo to a ShipFlow project").action(runAction(async () => {
     const { creds, client } = loadJwtCtx(program2);
@@ -4544,6 +4586,7 @@ function registerInitCommand(program2) {
 }
 
 // src/commands/status.ts
+init_helpers();
 function registerStatusCommand(program2) {
   program2.command("status").description("Show ShipFlow status for the current project").option("--json", "Output JSON").action(runAction(async (opts) => {
     const { creds, client, project } = await loadCtx(program2);
@@ -4570,6 +4613,8 @@ function registerStatusCommand(program2) {
 }
 
 // src/commands/version.ts
+init_config();
+init_helpers();
 import { readdirSync as readdirSync3, readFileSync as readFileSync2 } from "node:fs";
 import { join as join3 } from "node:path";
 import { homedir as homedir3 } from "node:os";
@@ -4950,6 +4995,7 @@ function crc32(buf) {
 }
 
 // src/commands/issues.ts
+init_helpers();
 var collect = (v, prev) => prev.concat([v]);
 function registerIssuesCommand(program2) {
   const issues = program2.command("issues").description("Issue listing");
@@ -5020,9 +5066,11 @@ function issueRow(i) {
 }
 
 // src/commands/issue.ts
+init_client();
 import { hostname as hostname2 } from "node:os";
 import { readFileSync as readFileSync3, statSync } from "node:fs";
 import { basename as basename2 } from "node:path";
+init_escalation_format();
 
 // src/message-lint.ts
 var TABLE_ROW = /^\s*\|.+\|\s*$/m;
@@ -5091,7 +5139,11 @@ function lintBodyLength(body) {
   ];
 }
 
+// src/commands/issue.ts
+init_config();
+
 // src/issue-order.ts
+init_shipflow_contract_data();
 var NEEDS_HUMAN_LABEL = SHIPFLOW_CONTRACT.labels.names.needsHuman;
 var IN_PROGRESS_LABEL = SHIPFLOW_CONTRACT.labels.names.inProgress;
 var WAITING_ON_LABEL = SHIPFLOW_CONTRACT.labels.names.waitingOn;
@@ -5285,6 +5337,7 @@ function renderScreenshotsSection(shots) {
 
 // src/commands/issue.ts
 init_prompts();
+init_helpers();
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
   issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--json", "Output JSON").action(runAction(async (opts) => {
@@ -5665,6 +5718,9 @@ async function readStdin() {
 }
 
 // src/commands/inbox.ts
+init_config();
+init_shipflow_contract_data();
+init_helpers();
 function safeUnresolvedThreadCount(fetchThreads) {
   try {
     return { count: fetchThreads().filter((t) => !t.isResolved).length, degraded: false };
@@ -5926,6 +5982,7 @@ function registerInboxCommand(program2) {
 }
 
 // src/commands/features.ts
+init_helpers();
 function registerFeaturesCommand(program2) {
   program2.command("features").description("ShipFlow's feature map for this project (features → file paths/test info) — the reviewer's whole-system view").option("--json", "Output the raw feature map").option("--category <name>", "Filter to one category").action(runAction(async (opts) => {
     const { creds, client, project } = await loadCtx(program2);
@@ -5961,6 +6018,9 @@ ${cat}`);
     }, { pretty: true });
   }));
 }
+
+// src/commands/priorities.ts
+init_helpers();
 
 // src/priorities.ts
 import { existsSync as existsSync3, readFileSync as readFileSync4 } from "node:fs";
@@ -6053,6 +6113,7 @@ Greenlit class + normal slice → intake may proceed; deploy-blast-radius work A
 }
 
 // src/commands/config.ts
+init_config();
 var MERGE_POLICIES2 = ["manual", "auto-on-green", "auto-timeout"];
 var SETTINGS = [
   {
@@ -6216,6 +6277,7 @@ function registerConfigCommand(program2) {
 }
 
 // src/commands/claims.ts
+init_helpers();
 function registerClaimsCommand(program2) {
   program2.command("claims").description("List active agent claims (who is working on what)").option("--json", "Output JSON").action(runAction(async (opts) => {
     const { creds, client, project } = await loadCtx(program2);
@@ -6238,6 +6300,7 @@ function registerClaimsCommand(program2) {
 }
 
 // src/commands/capability.ts
+init_helpers();
 var CAPABILITY_CLASSES = ["capability", "access", "secret", "policy"];
 var CAPABILITY_STATUSES = ["open", "granted", "declined"];
 function registerCapabilityCommand(program2) {
@@ -6286,6 +6349,7 @@ function registerCapabilityCommand(program2) {
 }
 
 // src/commands/pr.ts
+init_config();
 import { execSync as execSync4 } from "node:child_process";
 import { closeSync, existsSync as existsSync4, lstatSync, openSync, readFileSync as readFileSync5, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { createHash as createHash2 } from "node:crypto";
@@ -6418,6 +6482,7 @@ var REVIEW_CONTRACT = {
 };
 
 // src/packet.ts
+init_shipflow_contract_data();
 var PACKET_PER_FILE_CAP = REVIEW_CONTRACT.budgets.perFileDiffCap;
 var PACKET_TOTAL_CAP = REVIEW_CONTRACT.budgets.packetTotalCap;
 var PACKET_BRIEF_CAP = REVIEW_CONTRACT.budgets.briefCap;
@@ -6812,6 +6877,7 @@ function buildReviewPacketData(input) {
 }
 
 // src/review-contract.ts
+init_shipflow_contract_data();
 var LOOP_VERDICTS = REVIEW_CONTRACT.verdicts.loop;
 var SEVERITIES = REVIEW_CONTRACT.severities;
 var DEFAULT_SEVERITY = REVIEW_CONTRACT.defaultSeverity;
@@ -6938,6 +7004,9 @@ function buildReviewPayload(opts) {
 }
 
 // src/commands/pr.ts
+init_shipflow_contract_data();
+init_helpers();
+init_project();
 var APPROVED_LABEL = SHIPFLOW_CONTRACT.labels.names.shipflowApproved;
 var REPORTER_REVIEW_LABEL = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
 function evalIntentGate(repo, number, prView) {
@@ -7925,6 +7994,7 @@ function syncEntryGuard(i) {
 }
 
 // src/commands/test.ts
+init_project();
 import { existsSync as existsSync5, readFileSync as readFileSync6 } from "node:fs";
 import { join as join6 } from "node:path";
 function registerTestCommand(program2) {
@@ -8002,6 +8072,8 @@ function detectRunner(root) {
 }
 
 // src/commands/regression.ts
+init_project();
+init_helpers();
 import { execSync as execSync5 } from "node:child_process";
 var REF_RESOLUTION_ERROR = "Failed to resolve git HEAD ref. Ensure you are in a git repository with at least one commit, or pass --ref explicitly.";
 function resolveRef(explicit, runGit = () => execSync5("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim()) {
@@ -8152,6 +8224,7 @@ function registerRegressionCommand(program2) {
 
 // src/commands/release.ts
 init_prompts();
+init_helpers();
 import { execSync as execSync6 } from "node:child_process";
 function registerReleaseCommand(program2) {
   program2.command("release").description("Trigger a ShipFlow release (patch_notes + regression + downstream workflows)").option("--tag <tag>", "Release tag (e.g. v0.7.3)").option("--base-tag <tag>", "Previous tag (auto-detect if omitted)").option("--env <env>", "Target environment (staging|prod)").option("--wait", "Block and stream status until terminal").option("--json", "Output JSON").action(runAction(async (opts) => {
@@ -8182,6 +8255,7 @@ function safeLatestTag() {
 }
 
 // src/commands/profile.ts
+init_config();
 function rows() {
   const active = activeProfile();
   return ["", ...listProfiles()].map((name) => {

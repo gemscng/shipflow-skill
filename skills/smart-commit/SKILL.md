@@ -79,10 +79,7 @@ I will create [N] commits in this order:
 
 ### Step 4: Execute
 
-After user confirmation, execute using HEREDOC. **No human present?** In an
-agent/loop context (a subagent, a headless session — nobody can answer), do NOT
-wait for confirmation: present the plan in your output and execute it directly
-(issue #490 — a worker waiting on this gate sits frozen forever).
+After user confirmation, execute using HEREDOC:
 
 ```bash
 git add [specific files]

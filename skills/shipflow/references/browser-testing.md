@@ -52,16 +52,35 @@ to no page, fall back to a smoke pass of the homepage + top nav.
   `--preview-url`, or production. Use the page the issue is about.
   **Starting a dev server: DETACH it, never foreground** (issue #490) — a
   foreground `npm run dev` blocks the whole tool call until the harness kills
-  it, which reads as the subagent frozen. Start it detached, probe readiness
-  boundedly, and tear it down before returning:
+  it, which reads as the subagent frozen. Three more rules from the PR #491
+  review: isolate per run (parallel workers sharing one PID file/port kill each
+  other's servers and probe the wrong branch), kill the PROCESS TREE (the saved
+  PID is the `npm` wrapper; its child server survives a bare `kill`), and ABORT
+  when readiness never comes — a fallen-through probe loop otherwise "passes":
   ```bash
-  nohup npm run dev > /tmp/shipflow-dev.log 2>&1 & echo $! > /tmp/shipflow-dev.pid
-  for i in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:3000 && break; sleep 2; done
-  # … drive the browser …
-  kill "$(cat /tmp/shipflow-dev.pid)" 2>/dev/null || true
+  RUN_DIR=$(mktemp -d)
+  # Reserve a FREE port: a random draw that collides with another worker's
+  # server makes the probe "ready" against the wrong app (PR #492 review).
+  PORT=$((3100 + RANDOM % 900))
+  while lsof -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; do PORT=$((3100 + RANDOM % 900)); done
+  ( PORT=$PORT nohup npm run dev > "$RUN_DIR/dev.log" 2>&1 & echo $! > "$RUN_DIR/dev.pid" )
+  # Teardown must take the whole DESCENDANT tree: the saved PID is the npm
+  # wrapper; `pkill -P` only reaches immediate children and a grandchild server
+  # survives, reparented to PID 1, still holding the port.
+  kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill "$1" 2>/dev/null; }
+  READY=
+  for i in $(seq 1 30); do
+    curl -fsS -o /dev/null "http://localhost:$PORT" && { READY=1; break; }
+    sleep 2
+  done
+  if [ -z "$READY" ]; then
+    tail -40 "$RUN_DIR/dev.log"           # the finding IS the failed startup
+    kill_tree "$(cat "$RUN_DIR/dev.pid")"
+    exit 1                                 # HARD STOP — never fall through into browser steps
+  fi
+  # … drive the browser against http://localhost:$PORT …
+  kill_tree "$(cat "$RUN_DIR/dev.pid")"
   ```
-  Readiness never came within the window → report that as the finding
-  (server log tail included) instead of retrying blind.
 - For auth-walled pages, import cookies once:
   `$BROWSE cookie-import-browser chrome --domain <domain>` (a one-time macOS
   Keychain prompt the user approves).
