@@ -48,9 +48,20 @@ to no page, fall back to a smoke pass of the homepage + top nav.
 
 - The browser is already healthy (step 1 ensured it) — **reuse** the session, don't
   relaunch.
-- Point it at the **running app** and its URL: a local dev server (start it if
-  needed, e.g. `npm run dev`), the PR's `--preview-url`, or production. Use the page
-  the issue is about.
+- Point it at the **running app** and its URL: a local dev server, the PR's
+  `--preview-url`, or production. Use the page the issue is about.
+  **Starting a dev server: DETACH it, never foreground** (issue #490) — a
+  foreground `npm run dev` blocks the whole tool call until the harness kills
+  it, which reads as the subagent frozen. Start it detached, probe readiness
+  boundedly, and tear it down before returning:
+  ```bash
+  nohup npm run dev > /tmp/shipflow-dev.log 2>&1 & echo $! > /tmp/shipflow-dev.pid
+  for i in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:3000 && break; sleep 2; done
+  # … drive the browser …
+  kill "$(cat /tmp/shipflow-dev.pid)" 2>/dev/null || true
+  ```
+  Readiness never came within the window → report that as the finding
+  (server log tail included) instead of retrying blind.
 - For auth-walled pages, import cookies once:
   `$BROWSE cookie-import-browser chrome --domain <domain>` (a one-time macOS
   Keychain prompt the user approves).

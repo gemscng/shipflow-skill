@@ -17,6 +17,16 @@ var __toESM = (mod, isNodeMode, target) => {
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, {
+      get: all[name],
+      enumerable: true,
+      configurable: true,
+      set: (newValue) => all[name] = () => newValue
+    });
+};
+var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // ../../node_modules/commander/lib/error.js
@@ -2053,6 +2063,48 @@ var require_commander = __commonJS((exports) => {
   exports.InvalidOptionArgumentError = InvalidArgumentError;
 });
 
+// src/prompts.ts
+var exports_prompts = {};
+__export(exports_prompts, {
+  promptYesNo: () => promptYesNo,
+  promptText: () => promptText,
+  promptSelect: () => promptSelect
+});
+import { createInterface } from "node:readline";
+async function promptText(question, input = process.stdin, output = process.stdout) {
+  const rl = createInterface({ input, output });
+  return new Promise((res, rej) => {
+    let answered = false;
+    rl.question(question, (a) => {
+      answered = true;
+      rl.close();
+      res(a.trim());
+    });
+    rl.once("close", () => {
+      if (!answered) {
+        rej(new Error(`"${question.trim().replace(/:\s*$/, "")}" needs input, but stdin closed without an answer — ` + "pass the value as a flag (e.g. --title/--tag) in non-interactive sessions."));
+      }
+    });
+  });
+}
+async function promptSelect(question, options) {
+  console.log(question);
+  options.forEach((o, i) => console.log(`  ${i + 1}. ${o}`));
+  const ans = await promptText(`Choice (1-${options.length}): `);
+  const n = parseInt(ans, 10);
+  if (Number.isNaN(n) || n < 1 || n > options.length) {
+    throw new Error(`Invalid choice: ${ans}`);
+  }
+  return n - 1;
+}
+async function promptYesNo(question, def = false) {
+  const ans = (await promptText(`${question} ${def ? "[Y/n]" : "[y/N]"}: `)).toLowerCase();
+  if (ans === "")
+    return def;
+  return ans === "y" || ans === "yes";
+}
+var init_prompts = () => {};
+
 // src/index.ts
 import { createRequire as createRequire3 } from "node:module";
 
@@ -2618,14 +2670,8 @@ function registerAuthCommands(program2) {
   const auth = program2.command("auth").description("Manage authentication");
   auth.command("login").description("[deprecated] Authenticate with an API key — prefer `renaiss-shipflow login`").argument("[api-key]", "API key (sfk_...)").action(async (apiKey) => {
     if (!apiKey) {
-      const { createInterface } = await import("node:readline");
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      apiKey = await new Promise((resolve) => {
-        rl.question("Enter your RenaissShipFlow API key (sfk_...): ", (answer) => {
-          rl.close();
-          resolve(answer.trim());
-        });
-      });
+      const { promptText: promptText2 } = await Promise.resolve().then(() => (init_prompts(), exports_prompts));
+      apiKey = await promptText2("Enter your RenaissShipFlow API key (sfk_...): ");
     }
     if (!apiKey) {
       console.error("Error: API key is required.");
@@ -2923,30 +2969,7 @@ class ShipFlowClient {
 // src/project.ts
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";
-
-// src/prompts.ts
-import { createInterface } from "node:readline";
-async function promptText(question) {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((res) => {
-    rl.question(question, (a) => {
-      rl.close();
-      res(a.trim());
-    });
-  });
-}
-async function promptSelect(question, options) {
-  console.log(question);
-  options.forEach((o, i) => console.log(`  ${i + 1}. ${o}`));
-  const ans = await promptText(`Choice (1-${options.length}): `);
-  const n = parseInt(ans, 10);
-  if (Number.isNaN(n) || n < 1 || n > options.length) {
-    throw new Error(`Invalid choice: ${ans}`);
-  }
-  return n - 1;
-}
-
-// src/project.ts
+init_prompts();
 function parseGitRemote(url) {
   let m = url.match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/);
   if (m)
@@ -4163,6 +4186,7 @@ function ghResolveReviewThread(threadId) {
 }
 
 // src/commands/login.ts
+init_prompts();
 function formatNoTenantHelp(body) {
   let payload;
   try {
@@ -4490,6 +4514,7 @@ function registerGitIdentityCommand(program2) {
 
 // src/commands/init.ts
 import { resolve as resolve2 } from "node:path";
+init_prompts();
 function registerInitCommand(program2) {
   program2.command("init").description("Link the current repo to a ShipFlow project").action(runAction(async () => {
     const { creds, client } = loadJwtCtx(program2);
@@ -5259,6 +5284,7 @@ function renderScreenshotsSection(shots) {
 }
 
 // src/commands/issue.ts
+init_prompts();
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
   issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--json", "Output JSON").action(runAction(async (opts) => {
@@ -8125,6 +8151,7 @@ function registerRegressionCommand(program2) {
 }
 
 // src/commands/release.ts
+init_prompts();
 import { execSync as execSync6 } from "node:child_process";
 function registerReleaseCommand(program2) {
   program2.command("release").description("Trigger a ShipFlow release (patch_notes + regression + downstream workflows)").option("--tag <tag>", "Release tag (e.g. v0.7.3)").option("--base-tag <tag>", "Previous tag (auto-detect if omitted)").option("--env <env>", "Target environment (staging|prod)").option("--wait", "Block and stream status until terminal").option("--json", "Output JSON").action(runAction(async (opts) => {
