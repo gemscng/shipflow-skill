@@ -2868,6 +2868,58 @@ var init_client = __esm(() => {
   };
 });
 
+// src/prompts.ts
+var exports_prompts = {};
+__export(exports_prompts, {
+  promptYesNo: () => promptYesNo,
+  promptText: () => promptText,
+  promptSelect: () => promptSelect
+});
+import { createInterface } from "node:readline";
+function declaredHeadless() {
+  const ci = (process.env.CI ?? "").toLowerCase();
+  const headless = (process.env.SHIPFLOW_HEADLESS ?? "").toLowerCase();
+  return ci === "1" || ci === "true" || headless === "1" || headless === "true" || (process.env.OPENCLAW_SESSION ?? "") !== "";
+}
+async function promptText(question, input = process.stdin, output = process.stdout) {
+  if (declaredHeadless() && input.isTTY) {
+    throw new UsageError(`"${question.trim().replace(/:\s*$/, "")}" needs interactive input, but this session is declared headless (CI/SHIPFLOW_HEADLESS) — ` + "pass the value as a flag (e.g. --title/--tag).");
+  }
+  const rl = createInterface({ input, output });
+  return new Promise((res, rej) => {
+    let answered = false;
+    rl.question(question, (a) => {
+      answered = true;
+      rl.close();
+      res(a.trim());
+    });
+    rl.once("close", () => {
+      if (!answered) {
+        rej(new UsageError(`"${question.trim().replace(/:\s*$/, "")}" needs input, but stdin closed without an answer — ` + "pass the value as a flag (e.g. --title/--tag) in non-interactive sessions."));
+      }
+    });
+  });
+}
+async function promptSelect(question, options) {
+  console.log(question);
+  options.forEach((o, i) => console.log(`  ${i + 1}. ${o}`));
+  const ans = await promptText(`Choice (1-${options.length}): `);
+  const n = parseInt(ans, 10);
+  if (Number.isNaN(n) || n < 1 || n > options.length) {
+    throw new Error(`Invalid choice: ${ans}`);
+  }
+  return n - 1;
+}
+async function promptYesNo(question, def = false) {
+  const ans = (await promptText(`${question} ${def ? "[Y/n]" : "[y/N]"}: `)).toLowerCase();
+  if (ans === "")
+    return def;
+  return ans === "y" || ans === "yes";
+}
+var init_prompts = __esm(() => {
+  init_helpers();
+});
+
 // src/project.ts
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";
@@ -2994,6 +3046,92 @@ var init_project = __esm(() => {
   init_prompts();
 });
 
+// src/output.ts
+function resolveFormat(flags) {
+  if (flags.json)
+    return "json";
+  if (flags.yaml)
+    return "yaml";
+  return "table";
+}
+function printJson(data, pretty = true) {
+  console.log(pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data));
+}
+function toYamlString(data) {
+  return toYaml(data, 0);
+}
+function printYaml(data) {
+  console.log(toYamlString(data));
+}
+function toYaml(value, indent) {
+  const prefix = "  ".repeat(indent);
+  if (value === null || value === undefined)
+    return "null";
+  if (typeof value === "string")
+    return value.includes(`
+`) ? `|
+${value.split(`
+`).map((l) => prefix + "  " + l).join(`
+`)}` : value;
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0)
+      return "[]";
+    return value.map((item) => {
+      const inner = toYaml(item, indent + 1);
+      if (typeof item === "object" && item !== null && !Array.isArray(item)) {
+        const lines = inner.split(`
+`);
+        return `${prefix}- ${lines[0]}
+${lines.slice(1).map((l) => prefix + "  " + l).join(`
+`)}`;
+      }
+      return `${prefix}- ${inner}`;
+    }).join(`
+`);
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.length === 0)
+      return "{}";
+    return entries.map(([k, v]) => {
+      const inner = toYaml(v, indent + 1);
+      if (typeof v === "object" && v !== null) {
+        return `${prefix}${k}:
+${inner}`;
+      }
+      return `${prefix}${k}: ${inner}`;
+    }).join(`
+`);
+  }
+  return String(value);
+}
+function printTable(headers, rows) {
+  const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] || "").length)));
+  const sep = widths.map((w) => "-".repeat(w + 2)).join("+");
+  const formatRow = (row) => row.map((cell, i) => ` ${(cell || "").padEnd(widths[i])} `).join("|");
+  console.log(formatRow(headers));
+  console.log(sep);
+  rows.forEach((row) => console.log(formatRow(row)));
+}
+function formatOutput(format, data, tableFormatter, { prettyJson = true } = {}) {
+  switch (format) {
+    case "json":
+      printJson(data, prettyJson);
+      break;
+    case "yaml":
+      printYaml(data);
+      break;
+    case "table":
+      tableFormatter();
+      break;
+  }
+}
+function emit(opts, jsonValue, humanPrint, { pretty = false } = {}) {
+  formatOutput(resolveFormat(opts), jsonValue, humanPrint, { prettyJson: pretty });
+}
+
 // src/commands/helpers.ts
 function buildClientAuth(auth, creds) {
   if (auth.kind === "jwt" && creds)
@@ -3081,23 +3219,11 @@ function getApiCtx(cmd) {
 function resolveTarget(ctx, numberStr, opts) {
   return { number: parseInt(numberStr, 10), repo: opts.repo ?? ctx.project.repoFullName };
 }
-function emit(opts, jsonValue, humanPrint, { pretty = false } = {}) {
-  if (opts.json) {
-    console.log(pretty ? JSON.stringify(jsonValue, null, 2) : JSON.stringify(jsonValue));
-    return;
-  }
-  humanPrint();
-}
 function getOrg(cmd) {
   return cmd.optsWithGlobals().org || "default";
 }
 function getFormat(cmd) {
-  const opts = cmd.opts();
-  if (opts.json)
-    return "json";
-  if (opts.yaml)
-    return "yaml";
-  return "table";
+  return resolveFormat(cmd.opts());
 }
 function runAction(fn) {
   return async (...args) => {
@@ -3124,58 +3250,6 @@ var init_helpers = __esm(() => {
   };
 });
 
-// src/prompts.ts
-var exports_prompts = {};
-__export(exports_prompts, {
-  promptYesNo: () => promptYesNo,
-  promptText: () => promptText,
-  promptSelect: () => promptSelect
-});
-import { createInterface } from "node:readline";
-function declaredHeadless() {
-  const ci = (process.env.CI ?? "").toLowerCase();
-  const headless = (process.env.SHIPFLOW_HEADLESS ?? "").toLowerCase();
-  return ci === "1" || ci === "true" || headless === "1" || headless === "true" || (process.env.OPENCLAW_SESSION ?? "") !== "";
-}
-async function promptText(question, input = process.stdin, output = process.stdout) {
-  if (declaredHeadless() && input.isTTY) {
-    throw new UsageError(`"${question.trim().replace(/:\s*$/, "")}" needs interactive input, but this session is declared headless (CI/SHIPFLOW_HEADLESS) — ` + "pass the value as a flag (e.g. --title/--tag).");
-  }
-  const rl = createInterface({ input, output });
-  return new Promise((res, rej) => {
-    let answered = false;
-    rl.question(question, (a) => {
-      answered = true;
-      rl.close();
-      res(a.trim());
-    });
-    rl.once("close", () => {
-      if (!answered) {
-        rej(new UsageError(`"${question.trim().replace(/:\s*$/, "")}" needs input, but stdin closed without an answer — ` + "pass the value as a flag (e.g. --title/--tag) in non-interactive sessions."));
-      }
-    });
-  });
-}
-async function promptSelect(question, options) {
-  console.log(question);
-  options.forEach((o, i) => console.log(`  ${i + 1}. ${o}`));
-  const ans = await promptText(`Choice (1-${options.length}): `);
-  const n = parseInt(ans, 10);
-  if (Number.isNaN(n) || n < 1 || n > options.length) {
-    throw new Error(`Invalid choice: ${ans}`);
-  }
-  return n - 1;
-}
-async function promptYesNo(question, def = false) {
-  const ans = (await promptText(`${question} ${def ? "[Y/n]" : "[y/N]"}: `)).toLowerCase();
-  if (ans === "")
-    return def;
-  return ans === "y" || ans === "yes";
-}
-var init_prompts = __esm(() => {
-  init_helpers();
-});
-
 // src/index.ts
 import { createRequire as createRequire3 } from "node:module";
 
@@ -3197,9 +3271,10 @@ var {
 
 // src/commands/auth.ts
 init_config();
+init_helpers();
 function registerAuthCommands(program2) {
   const auth = program2.command("auth").description("Manage authentication");
-  auth.command("login").description("[deprecated] Authenticate with an API key — prefer `renaiss-shipflow login`").argument("[api-key]", "API key (sfk_...)").action(async (apiKey) => {
+  auth.command("login").description("[deprecated] Authenticate with an API key — prefer `renaiss-shipflow login`").argument("[api-key]", "API key (sfk_...)").action(runAction(async (apiKey) => {
     if (!apiKey) {
       const { promptText: promptText2 } = await Promise.resolve().then(() => (init_prompts(), exports_prompts));
       apiKey = await promptText2("Enter your RenaissShipFlow API key (sfk_...): ");
@@ -3213,12 +3288,12 @@ function registerAuthCommands(program2) {
     saveConfig(config);
     console.log("API key saved. You can now use renaiss-shipflow commands.");
     console.log("Note: `auth login` is deprecated — prefer `renaiss-shipflow login` (GitHub sign-in, works for every command).");
-  });
-  auth.command("logout").description("Clear stored credentials").action(() => {
+  }));
+  auth.command("logout").description("Clear stored credentials").action(runAction(() => {
     clearConfig();
     console.log("Logged out. Stored credentials cleared.");
-  });
-  auth.command("status").description("Show current authentication status").action(() => {
+  }));
+  auth.command("status").description("Show current authentication status").action(runAction(() => {
     const key = resolveApiKey();
     if (key) {
       const masked = key.substring(0, 8) + "..." + key.substring(key.length - 4);
@@ -3231,84 +3306,11 @@ function registerAuthCommands(program2) {
     } else {
       console.log("Not authenticated. Run: renaiss-shipflow login");
     }
-  });
+  }));
 }
 
 // src/commands/repos.ts
 init_helpers();
-
-// src/output.ts
-function printJson(data) {
-  console.log(JSON.stringify(data, null, 2));
-}
-function printYaml(data) {
-  console.log(toYaml(data, 0));
-}
-function toYaml(value, indent) {
-  const prefix = "  ".repeat(indent);
-  if (value === null || value === undefined)
-    return "null";
-  if (typeof value === "string")
-    return value.includes(`
-`) ? `|
-${value.split(`
-`).map((l) => prefix + "  " + l).join(`
-`)}` : value;
-  if (typeof value === "number" || typeof value === "boolean")
-    return String(value);
-  if (Array.isArray(value)) {
-    if (value.length === 0)
-      return "[]";
-    return value.map((item) => {
-      const inner = toYaml(item, indent + 1);
-      if (typeof item === "object" && item !== null && !Array.isArray(item)) {
-        const lines = inner.split(`
-`);
-        return `${prefix}- ${lines[0]}
-${lines.slice(1).map((l) => prefix + "  " + l).join(`
-`)}`;
-      }
-      return `${prefix}- ${inner}`;
-    }).join(`
-`);
-  }
-  if (typeof value === "object") {
-    const entries = Object.entries(value);
-    if (entries.length === 0)
-      return "{}";
-    return entries.map(([k, v]) => {
-      const inner = toYaml(v, indent + 1);
-      if (typeof v === "object" && v !== null) {
-        return `${prefix}${k}:
-${inner}`;
-      }
-      return `${prefix}${k}: ${inner}`;
-    }).join(`
-`);
-  }
-  return String(value);
-}
-function printTable(headers, rows) {
-  const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] || "").length)));
-  const sep = widths.map((w) => "-".repeat(w + 2)).join("+");
-  const formatRow = (row) => row.map((cell, i) => ` ${(cell || "").padEnd(widths[i])} `).join("|");
-  console.log(formatRow(headers));
-  console.log(sep);
-  rows.forEach((row) => console.log(formatRow(row)));
-}
-function formatOutput(format, data, tableFormatter) {
-  switch (format) {
-    case "json":
-      printJson(data);
-      break;
-    case "yaml":
-      printYaml(data);
-      break;
-    case "table":
-      tableFormatter();
-      break;
-  }
-}
 
 // src/term-render.ts
 function meter(n, total) {
@@ -3588,7 +3590,7 @@ By Stage:`);
 // src/commands/trigger.ts
 init_helpers();
 function registerTriggerCommand(program2) {
-  program2.command("trigger").description("Manually trigger a workflow").argument("<workflow-type>", "Workflow type to trigger (e.g. regression_tests)").requiredOption("--repo <repo>", "Repository name").option("--json", "Output JSON").action(runAction(async (workflowType, opts, cmd) => {
+  program2.command("trigger").description("Manually trigger a workflow").argument("<workflow-type>", "Workflow type to trigger (e.g. regression_tests)").requiredOption("--repo <repo>", "Repository name").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (workflowType, opts, cmd) => {
     const { client, org } = getApiCtx(cmd);
     await client.updateWorkflow(org, opts.repo, workflowType, {
       settings: { _trigger: true }
@@ -4530,6 +4532,7 @@ function findSuspiciousEmails(emails, hostname) {
 }
 
 // src/commands/git-identity.ts
+init_helpers();
 var git = (args) => {
   try {
     return execSync3(`git ${args}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
@@ -4538,23 +4541,21 @@ var git = (args) => {
   }
 };
 function registerGitIdentityCommand(program2) {
-  program2.command("git-identity").description("Show (or --fix) the git identity used for commits — a machine-derived user.email gets deployments blocked as unmatched").option("--fix", "Set a REPO-LOCAL user.name/user.email from the GitHub account (login-captured, else live)").option("--email <email>", "Override the email used by --fix").option("--json", "Output JSON").action((opts) => {
+  program2.command("git-identity").description("Show (or --fix) the git identity used for commits — a machine-derived user.email gets deployments blocked as unmatched").option("--fix", "Set a REPO-LOCAL user.name/user.email from the GitHub account (login-captured, else live)").option("--email <email>", "Override the email used by --fix").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((opts) => {
     const effectiveEmail = git("config user.email");
     const effectiveName = git("config user.name");
     const host = hostname();
     const problem = suspiciousCommitEmail(effectiveEmail, host);
     if (!opts.fix) {
-      if (opts.json) {
-        console.log(JSON.stringify({ name: effectiveName || null, email: effectiveEmail || null, suspicious: problem }));
-        return;
-      }
-      console.log(`user.name:  ${effectiveName || "(unset)"}`);
-      console.log(`user.email: ${effectiveEmail || "(unset)"}`);
-      if (problem) {
-        console.log(`⚠️ ${problem} — forges can't match this to a GitHub account (deployments get blocked).`);
-        console.log("Fix with: renaiss-shipflow git-identity --fix");
-        process.exit(1);
-      }
+      emit(opts, { name: effectiveName || null, email: effectiveEmail || null, suspicious: problem }, () => {
+        console.log(`user.name:  ${effectiveName || "(unset)"}`);
+        console.log(`user.email: ${effectiveEmail || "(unset)"}`);
+        if (problem) {
+          console.log(`⚠️ ${problem} — forges can't match this to a GitHub account (deployments get blocked).`);
+          console.log("Fix with: renaiss-shipflow git-identity --fix");
+          process.exit(1);
+        }
+      });
       return;
     }
     const cfg = loadConfig();
@@ -4581,12 +4582,8 @@ function registerGitIdentityCommand(program2) {
     }
     execFileSync("git", ["config", "user.name", name]);
     execFileSync("git", ["config", "user.email", email]);
-    if (opts.json) {
-      console.log(JSON.stringify({ fixed: true, name, email }));
-      return;
-    }
-    console.log(`Repo-local git identity set: ${name} <${email}>`);
-  });
+    emit(opts, { fixed: true, name, email }, () => console.log(`Repo-local git identity set: ${name} <${email}>`));
+  }));
 }
 
 // src/commands/init.ts
@@ -4626,7 +4623,7 @@ function registerInitCommand(program2) {
 // src/commands/status.ts
 init_helpers();
 function registerStatusCommand(program2) {
-  program2.command("status").description("Show ShipFlow status for the current project").option("--json", "Output JSON").action(runAction(async (opts) => {
+  program2.command("status").description("Show ShipFlow status for the current project").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { creds, client, project } = await loadCtx(program2);
     const status = await client.getProjectStatus(creds.org, project.projectId);
     emit(opts, { project, status }, () => {
@@ -4879,7 +4876,7 @@ async function probeServer(apiUrl) {
   }
 }
 function registerVersionCommand(program2, cliVersion2) {
-  program2.command("version").description("Show ShipFlow component versions: CLI, installed plugin/skill, the server build, and CLI drift vs the npm registry's latest").option("--api-url <url>", "Override the server URL for the build probe").option("--check", `Exit ${driftExitCode("stale")} when the installed CLI is BEHIND the registry (0 otherwise) — the loop's drift gate`).option("--json", "Output JSON").action(runAction(async (opts) => {
+  program2.command("version").description("Show ShipFlow component versions: CLI, installed plugin/skill, the server build, and CLI drift vs the npm registry's latest").option("--api-url <url>", "Override the server URL for the build probe").option("--check", `Exit ${driftExitCode("stale")} when the installed CLI is BEHIND the registry (0 otherwise) — the loop's drift gate`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const cli = cliVersion2;
     const plugin = installedPluginVersion();
     const apiUrl = resolveApiUrl(opts.apiUrl);
@@ -5037,7 +5034,7 @@ init_helpers();
 var collect = (v, prev) => prev.concat([v]);
 function registerIssuesCommand(program2) {
   const issues = program2.command("issues").description("Issue listing");
-  issues.command("list").description("List open issues for the current repo, with ShipFlow triage overlay").option("--state <state>", "Issue state", "open").option("--limit <n>", "Max results", "30").option("--json", "Output JSON").action(runAction(async (opts) => {
+  issues.command("list").description("List open issues for the current repo, with ShipFlow triage overlay").option("--state <state>", "Issue state", "open").option("--limit <n>", "Max results", "30").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { project } = await loadCtx(program2);
     const list = ghIssueList(project.repoFullName, opts.state, parseInt(opts.limit, 10));
     emit(opts, { project, issues: list }, () => {
@@ -5390,7 +5387,7 @@ async function loadTriage(ctx, repo, number) {
 }
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
-  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--json", "Output JSON").action(runAction(async (opts) => {
+  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const shots = opts.screenshot ?? [];
     const shotCaptions = opts.screenshotCaption ?? [];
     const shotErr = validateScreenshotSelection(shots, shotCaptions);
@@ -5453,7 +5450,7 @@ ${section}` : section;
     const created = ghIssueCreate(repo, title, body, labels);
     emit(opts, { number: created.number, url: created.url, labels }, () => console.log(created.url));
   }));
-  issue.command("work <number>").description("Exclusively claim an issue (lock + dump context); exits 3 when another agent holds it").option("--repo <fullname>", "Override target repo").option("--agent <name>", "Agent label recorded on the claim (default: $SHIPFLOW_AGENT or hostname)").option("--ttl <minutes>", "Claim lifetime in minutes (default 120)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  issue.command("work <number>").description("Exclusively claim an issue (lock + dump context); exits 3 when another agent holds it").option("--repo <fullname>", "Override target repo").option("--agent <name>", "Agent label recorded on the claim (default: $SHIPFLOW_AGENT or hostname)").option("--ttl <minutes>", "Claim lifetime in minutes (default 120)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const agent = opts.agent ?? process.env.SHIPFLOW_AGENT ?? hostname2();
@@ -5472,9 +5469,9 @@ ${section}` : section;
     }
     const issueData = ghIssueView(repo, number);
     const t = await loadTriage(ctx, repo, number);
-    printIssueContext(issueData, t.triage, repo, ctx.project, opts.json, t.unavailable);
+    printIssueContext(issueData, t.triage, repo, ctx.project, opts, t.unavailable);
   }));
-  issue.command("next").description("Pick & claim the next open, unclaimed issue (for the work loop); exits 4 when none remain").option("--repo <fullname>", "Override target repo").option("--label <label>", "Only consider issues with this label").option("--assignee <login>", "Only consider issues assigned to this user").option("--agent <name>", "Agent label recorded on the claim (default: $SHIPFLOW_AGENT or hostname)").option("--ttl <minutes>", "Claim lifetime in minutes (default 120)").option("--json", "Output JSON").action(runAction(async (opts) => {
+  issue.command("next").description("Pick & claim the next open, unclaimed issue (for the work loop); exits 4 when none remain").option("--repo <fullname>", "Override target repo").option("--label <label>", "Only consider issues with this label").option("--assignee <login>", "Only consider issues assigned to this user").option("--agent <name>", "Agent label recorded on the claim (default: $SHIPFLOW_AGENT or hostname)").option("--ttl <minutes>", "Claim lifetime in minutes (default 120)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const ctx = await loadCtx(program2);
     const repo = opts.repo ?? ctx.project.repoFullName;
     const agent = opts.agent ?? process.env.SHIPFLOW_AGENT ?? hostname2();
@@ -5539,21 +5536,21 @@ ${section}` : section;
       }
       const issueData = ghIssueView(repo, cand.number);
       const t = await loadTriage(ctx, repo, cand.number);
-      printIssueContext(issueData, t.triage, repo, ctx.project, opts.json, t.unavailable);
+      printIssueContext(issueData, t.triage, repo, ctx.project, opts, t.unavailable);
       return;
     }
     const reason = raced === candidates.length && raced > 0 ? "all_candidates_raced" : "no_actionable_issues";
     emit(opts, { issue: null, reason }, () => console.log(reason === "all_candidates_raced" ? `⏳ All ${raced} candidate(s) were claimed by other agents this tick — retry next tick.` : "✅ No actionable issues — every open issue is claimed or filtered out."), { pretty: true });
     process.exit(4);
   }));
-  issue.command("done <number>").description("Release an issue (signal only)").option("--reason <reason>", "Why you're releasing it (e.g. blocked, finished)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  issue.command("done <number>").description("Release an issue (signal only)").option("--reason <reason>", "Why you're releasing it (e.g. blocked, finished)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const reason = opts.reason ?? "";
     await ctx.client.signal(ctx.creds.org, ctx.project.projectId, "issues", number, "release-claim", { repo, reason });
     emit(opts, { number, released: true, reason }, () => console.log(`Released #${number}.`));
   }));
-  issue.command("escalate <number>").description("Hand an issue to a human: label needs-human + comment why. Keeps the work lock so the loop skips it this run.").option("--reason <reason>", "Why it's blocked / what a human must decide", "").option("--category <key>", `Why this class of work is gated on a human — appends the standard rationale. One of: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`).option("--owner <login>", "Accountable human named on the comment (default: signoff-owner config, else the issue author)").option("--update", "Edit the loop's latest \uD83D\uDEA7 escalation comment in place instead of stacking a new one").option("--force", "Skip the reason lint (open question without recommendation / not self-contained / no action section)").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for needs-human)").option("--release", "Also release the ShipFlow claim (default: keep it so the loop won't re-pick it this run)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  issue.command("escalate <number>").description("Hand an issue to a human: label needs-human + comment why. Keeps the work lock so the loop skips it this run.").option("--reason <reason>", "Why it's blocked / what a human must decide", "").option("--category <key>", `Why this class of work is gated on a human — appends the standard rationale. One of: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`).option("--owner <login>", "Accountable human named on the comment (default: signoff-owner config, else the issue author)").option("--update", "Edit the loop's latest \uD83D\uDEA7 escalation comment in place instead of stacking a new one").option("--force", "Skip the reason lint (open question without recommendation / not self-contained / no action section)").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for needs-human)").option("--release", "Also release the ShipFlow claim (default: keep it so the loop won't re-pick it this run)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const reason = (opts.reason ?? "").trim();
     if (opts.category && !(opts.category in ESCALATION_CATEGORIES)) {
       console.error(`Unknown escalation category "${opts.category}" — valid: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`);
@@ -5638,7 +5635,7 @@ ${formatPrecedentSuggestion(precedent)}`;
       precedent: surfaced ? { outcome: precedent.outcome, sourceIssue: precedent.precedent.sourceIssue, answer: precedent.precedent.answer } : null
     }, () => console.log(`\uD83D\uDEA7 #${number} escalated${updated ? " (existing \uD83D\uDEA7 comment updated)" : ""} → labelled "${NEEDS_HUMAN_LABEL}"${owner ? `, owner @${owner}` : ""}${surfaced ? ", precedent on file surfaced" : ""}${released ? " and claim released" : " (claim kept — loop skips it this run)"}.`));
   }));
-  issue.command("wait <number>").description("Park an issue on a dependency: label ⏳ waiting-on + comment. Unlike escalate, no human is needed — issue next skips it while the dependency is open and re-admits it automatically when the dependency merges/closes.").option("--on <ref>", "The blocking issue/PR: #123, 123, owner/repo#123, or a GitHub issue/PR URL").option("--reason <reason>", "One line on why this waits", "").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for ⏳ waiting-on)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  issue.command("wait <number>").description("Park an issue on a dependency: label ⏳ waiting-on + comment. Unlike escalate, no human is needed — issue next skips it while the dependency is open and re-admits it automatically when the dependency merges/closes.").option("--on <ref>", "The blocking issue/PR: #123, 123, owner/repo#123, or a GitHub issue/PR URL").option("--reason <reason>", "One line on why this waits", "").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for ⏳ waiting-on)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     if (!opts.on?.trim()) {
       console.error("--on <ref> is required — the dependency this issue waits for (#123, owner/repo#123, or a GitHub URL).");
       process.exit(1);
@@ -5676,7 +5673,7 @@ ${formatPrecedentSuggestion(precedent)}`;
     const released = await signalBestEffort(ctx, "issues", number, "release-claim", { repo, reason: `waiting on ${dep.repo}#${dep.number}` }, "Parked as waiting, but the release signal failed");
     emit(opts, { number, waiting: true, label: WAITING_ON_LABEL, on: `${dep.repo}#${dep.number}`, released, reason }, () => console.log(`⏳ #${number} waiting on ${depLabel} — labelled "${WAITING_ON_LABEL}"${released ? ", claim released" : ""}; the loop re-admits it when the dependency closes.`));
   }));
-  issue.command("evidence <number>").description("Attach testing evidence. Screenshots must show the fix: --before AND --after pairs, one per changed surface, named with --label (reporter thread + a PR comment, or the issue if no --pr)").option("--before <path...>", "Screenshot(s) BEFORE the fix — before[i] pairs with after[i]").option("--after <path...>", "Screenshot(s) AFTER the fix — one per --before").option("--label <text...>", 'Name for each pair, by position (e.g. --label "Mode row" "Grade ladder") — a multi-surface change attaches one labeled pair per surface').option("--before-caption <text...>", "Caption for each --before shot, by position — describes what THAT shot shows (keeps a summary from over-claiming)").option("--after-caption <text...>", "Caption for each --after shot, by position").option("--image-caption <text...>", "Caption for each supplementary --image/--file, by position").option("--touched <name...>", "Touched feature names — the evidence gallery renders a red gap card for each one without a matching proof pair").option("--image <path...>", "Extra screenshot file(s) — prefer --before/--after").option("--file <path...>", "Supplementary media — a screen recording (mp4/mov/webm) or extra files").option("--pr <n>", "Related PR number — when set, the evidence comment lands on the PR instead of the issue").option("--preview-url <url>", "Testing site URL").option("--caption <text>", "Short note shown with the evidence").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  issue.command("evidence <number>").description("Attach testing evidence. Screenshots must show the fix: --before AND --after pairs, one per changed surface, named with --label (reporter thread + a PR comment, or the issue if no --pr)").option("--before <path...>", "Screenshot(s) BEFORE the fix — before[i] pairs with after[i]").option("--after <path...>", "Screenshot(s) AFTER the fix — one per --before").option("--label <text...>", 'Name for each pair, by position (e.g. --label "Mode row" "Grade ladder") — a multi-surface change attaches one labeled pair per surface').option("--before-caption <text...>", "Caption for each --before shot, by position — describes what THAT shot shows (keeps a summary from over-claiming)").option("--after-caption <text...>", "Caption for each --after shot, by position").option("--image-caption <text...>", "Caption for each supplementary --image/--file, by position").option("--touched <name...>", "Touched feature names — the evidence gallery renders a red gap card for each one without a matching proof pair").option("--image <path...>", "Extra screenshot file(s) — prefer --before/--after").option("--file <path...>", "Supplementary media — a screen recording (mp4/mov/webm) or extra files").option("--pr <n>", "Related PR number — when set, the evidence comment lands on the PR instead of the issue").option("--preview-url <url>", "Testing site URL").option("--caption <text>", "Short note shown with the evidence").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const before = opts.before ?? [];
     const after = opts.after ?? [];
     const labels = opts.label ?? [];
@@ -5727,11 +5724,10 @@ ${formatPrecedentSuggestion(precedent)}`;
     }
   }));
 }
-function printIssueContext(issueData, triage, repo, project, json, triageUnavailable = false) {
-  if (json) {
-    console.log(JSON.stringify({ issue: issueData, triage, triageUnavailable, project }, null, 2));
-    return;
-  }
+function printIssueContext(issueData, triage, repo, project, fmt = {}, triageUnavailable = false) {
+  emit(fmt, { issue: issueData, triage, triageUnavailable, project }, () => printIssueContextHuman(issueData, triage, repo, triageUnavailable), { pretty: true });
+}
+function printIssueContextHuman(issueData, triage, repo, triageUnavailable) {
   console.log(`Issue #${issueData.number} — "${issueData.title}"`);
   const facts = [
     ["Repo", repo],
@@ -5927,7 +5923,7 @@ var STATE_ICONS = {
   awaiting_review: "·"
 };
 function registerInboxCommand(program2) {
-  program2.command("inbox").description("Reconciler view: open PRs (by state: conflict / ci_failing / changes_requested / approved_ready / stale …) and in-progress issues with new comments. With the OPT-IN repo-wide conflict sweep (`config set conflict-sweep true`, or --conflict-sweep) it also lists conflicted PRs by other authors — trusted same-repo heads only (issue #393)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Force the repo-wide foreign-PR conflict sweep on for this run (default: the `conflict-sweep` config key, which is off)").option("--json", "Output JSON").action(runAction(async (opts) => {
+  program2.command("inbox").description("Reconciler view: open PRs (by state: conflict / ci_failing / changes_requested / approved_ready / stale …) and in-progress issues with new comments. With the OPT-IN repo-wide conflict sweep (`config set conflict-sweep true`, or --conflict-sweep) it also lists conflicted PRs by other authors — trusted same-repo heads only (issue #393)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Force the repo-wide foreign-PR conflict sweep on for this run (default: the `conflict-sweep` config key, which is off)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { project } = await loadCtx(program2);
     const repo = opts.repo ?? project.repoFullName;
     const me = ghCurrentLogin();
@@ -6037,7 +6033,7 @@ function registerInboxCommand(program2) {
 // src/commands/features.ts
 init_helpers();
 function registerFeaturesCommand(program2) {
-  program2.command("features").description("ShipFlow's feature map for this project (features → file paths/test info) — the reviewer's whole-system view").option("--json", "Output the raw feature map").option("--category <name>", "Filter to one category").action(runAction(async (opts) => {
+  program2.command("features").description("ShipFlow's feature map for this project (features → file paths/test info) — the reviewer's whole-system view").option("--json", "Output the raw feature map").option("--yaml", "Output YAML").option("--category <name>", "Filter to one category").action(runAction(async (opts) => {
     const { creds, client, project } = await loadCtx(program2);
     const fm = await client.getFeatureMapping(creds.org, project.projectId);
     const features = fm.features ?? {};
@@ -6143,7 +6139,7 @@ function loadPrioritiesDoc(root = repoRoot()) {
 
 // src/commands/priorities.ts
 function registerPrioritiesCommand(program2) {
-  program2.command("priorities").description(`Standing priorities doc (${PRIORITIES_DOC_RELPATH}) consulted at loop intake — greenlit work classes + WIP share (human-edited only)`).option("--json", "Output the parsed doc as JSON").action(runAction(async (opts) => {
+  program2.command("priorities").description(`Standing priorities doc (${PRIORITIES_DOC_RELPATH}) consulted at loop intake — greenlit work classes + WIP share (human-edited only)`).option("--json", "Output the parsed doc as JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const doc = loadPrioritiesDoc();
     emit(opts, doc, () => {
       if (!doc.found) {
@@ -6167,6 +6163,7 @@ Greenlit class + normal slice → intake may proceed; deploy-blast-radius work A
 
 // src/commands/config.ts
 init_config();
+init_helpers();
 var MERGE_POLICIES2 = ["manual", "auto-on-green", "auto-timeout"];
 var SETTINGS = [
   {
@@ -6282,7 +6279,7 @@ function unknownKey(key, json) {
 }
 function registerConfigCommand(program2) {
   const config = program2.command("config").description("Get/set ShipFlow CLI preferences");
-  config.command("set <key> <value>").description(`Set a preference. Keys: ${KEYS.join(", ")}`).option("--json", "Output JSON").action((key, value, opts) => {
+  config.command("set <key> <value>").description(`Set a preference. Keys: ${KEYS.join(", ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((key, value, opts) => {
     const s = byKey.get(key) ?? unknownKey(key, opts.json);
     const cfg = loadConfig();
     let echo;
@@ -6297,42 +6294,32 @@ function registerConfigCommand(program2) {
       process.exit(1);
     }
     saveConfig(cfg);
-    if (opts.json) {
-      console.log(JSON.stringify({ [s.field]: s.effective() ?? null }));
-      return;
-    }
-    console.log(`${key} = ${echo}`);
-  });
-  config.command("get <key>").description("Read a preference (env vars override stored config)").option("--json", "Output JSON").action((key, opts) => {
+    emit(opts, { [s.field]: s.effective() ?? null }, () => console.log(`${key} = ${echo}`));
+  }));
+  config.command("get <key>").description("Read a preference (env vars override stored config)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((key, opts) => {
     const s = byKey.get(key) ?? unknownKey(key, opts.json);
     const v = s.effective();
-    if (opts.json) {
-      console.log(JSON.stringify({ [s.field]: v ?? null }));
-      return;
-    }
-    console.log(v === undefined ? "unset" : String(v));
-  });
-  config.command("list").description("Show all preferences (effective values)").option("--json", "Output JSON").action((opts) => {
-    if (opts.json) {
-      const obj = {};
-      for (const s of SETTINGS)
-        obj[s.field] = s.effective() ?? null;
-      console.log(JSON.stringify(obj, null, 2));
-      return;
-    }
-    const rows = SETTINGS.map((s) => {
-      const v = s.effective();
-      return [s.key, v === undefined ? "unset" : String(v)];
-    });
-    for (const l of renderTable(["Key", "Value"], rows))
-      console.log(l);
-  });
+    emit(opts, { [s.field]: v ?? null }, () => console.log(v === undefined ? "unset" : String(v)));
+  }));
+  config.command("list").description("Show all preferences (effective values)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((opts) => {
+    const obj = {};
+    for (const s of SETTINGS)
+      obj[s.field] = s.effective() ?? null;
+    emit(opts, obj, () => {
+      const rows = SETTINGS.map((s) => {
+        const v = s.effective();
+        return [s.key, v === undefined ? "unset" : String(v)];
+      });
+      for (const l of renderTable(["Key", "Value"], rows))
+        console.log(l);
+    }, { pretty: true });
+  }));
 }
 
 // src/commands/claims.ts
 init_helpers();
 function registerClaimsCommand(program2) {
-  program2.command("claims").description("List active agent claims (who is working on what)").option("--json", "Output JSON").action(runAction(async (opts) => {
+  program2.command("claims").description("List active agent claims (who is working on what)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { creds, client, project } = await loadCtx(program2);
     const claims = await client.listClaims(creds.org, project.projectId);
     emit(opts, { claims }, () => {
@@ -6358,7 +6345,7 @@ var CAPABILITY_CLASSES = ["capability", "access", "secret", "policy"];
 var CAPABILITY_STATUSES = ["open", "granted", "declined"];
 function registerCapabilityCommand(program2) {
   const capability = program2.command("capability").description("Standing queue for capabilities/access/secrets/policy the agent can't grant itself");
-  capability.command("request").description("File a capability request into the standing queue").requiredOption("--class <class>", `One of: ${CAPABILITY_CLASSES.join(" | ")}`).requiredOption("--title <title>", "Short summary of the ask").requiredOption("--why <why>", "Why the agent needs it (the blocker it unblocks)").option("--issue <number>", "Escalating issue number this ask came from").option("--repo <fullname>", "Repo the ask is scoped to (default: the active project's)").option("--json", "Output JSON").action(runAction(async (opts) => {
+  capability.command("request").description("File a capability request into the standing queue").requiredOption("--class <class>", `One of: ${CAPABILITY_CLASSES.join(" | ")}`).requiredOption("--title <title>", "Short summary of the ask").requiredOption("--why <why>", "Why the agent needs it (the blocker it unblocks)").option("--issue <number>", "Escalating issue number this ask came from").option("--repo <fullname>", "Repo the ask is scoped to (default: the active project's)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     if (!CAPABILITY_CLASSES.includes(opts.class)) {
       throw new Error(`invalid --class ${opts.class}; expected one of ${CAPABILITY_CLASSES.join(", ")}`);
     }
@@ -6377,7 +6364,7 @@ function registerCapabilityCommand(program2) {
       console.log(`Filed ${created.class} request ${created.id} (${created.status}): ${created.title}`);
     }, { pretty: true });
   }));
-  capability.command("list").description("List capability requests in the standing queue (newest first)").option("--status <status>", `Filter by status: ${CAPABILITY_STATUSES.join(" | ")}`).option("--json", "Output JSON").action(runAction(async (opts) => {
+  capability.command("list").description("List capability requests in the standing queue (newest first)").option("--status <status>", `Filter by status: ${CAPABILITY_STATUSES.join(" | ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     if (opts.status && !CAPABILITY_STATUSES.includes(opts.status)) {
       throw new Error(`invalid --status ${opts.status}; expected one of ${CAPABILITY_STATUSES.join(", ")}`);
     }
@@ -7332,7 +7319,7 @@ function unresolvedThreadsOrBlock(repo, number) {
 }
 function registerPRCommand(program2) {
   const pr = program2.command("pr").description("Pull request actions");
-  pr.command("create").description("Open a PR; prepends ShipFlow context to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (added under ShipFlow header)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR)", "warn").option("--json", "Output JSON").action(runAction(async (opts) => {
+  pr.command("create").description("Open a PR; prepends ShipFlow context to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (added under ShipFlow header)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR)", "warn").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     if (!opts.allowSuspiciousEmail) {
       const bad = findSuspiciousEmails(branchAuthorEmails(), hostname3());
       if (bad.length) {
@@ -7376,7 +7363,7 @@ ${opts.body ?? ""}`;
     }, "PR opened but ShipFlow signal failed");
     emit(opts, created, () => console.log(created.url));
   }));
-  pr.command("merge <number>").description("Merge a PR; signals ShipFlow (no downstream cascade)").option("--mode <mode>", "squash | merge | rebase", "squash").option("--keep-branch", "Don't delete the head branch").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("merge <number>").description("Merge a PR; signals ShipFlow (no downstream cascade)").option("--mode <mode>", "squash | merge | rebase", "squash").option("--keep-branch", "Don't delete the head branch").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const result = ghPRMerge(repo, number, opts.mode, !opts.keepBranch);
@@ -7388,7 +7375,7 @@ ${opts.body ?? ""}`;
     }, "Merged but ShipFlow signal failed");
     emit(opts, { number, merged: true, mergedSha: result.mergedSha, mode: opts.mode, signalOk }, () => console.log(`merged: ${result.mergedSha}`));
   }));
-  pr.command("ready <number>").description("Report whether a PR is mergeable under the active merge policy (read-only — used by the loop)").option("--policy <p>", "Override merge policy: manual | auto-on-green | auto-timeout").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("ready <number>").description("Report whether a PR is mergeable under the active merge policy (read-only — used by the loop)").option("--policy <p>", "Override merge policy: manual | auto-on-green | auto-timeout").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const policy = opts.policy ?? resolveMergePolicy();
@@ -7419,7 +7406,7 @@ ${opts.body ?? ""}`;
         console.log(`  [ ] ${b}`);
     }, { pretty: true });
   }));
-  pr.command("automerge <number>").description("Merge a PR only if policy + CI + approval allow it; otherwise no-op and exit 5. The loop's safe auto-merge.").option("--policy <p>", "Override merge policy: manual | auto-on-green | auto-timeout").option("--mode <mode>", "squash | merge | rebase", "squash").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("automerge <number>").description("Merge a PR only if policy + CI + approval allow it; otherwise no-op and exit 5. The loop's safe auto-merge.").option("--policy <p>", "Override merge policy: manual | auto-on-green | auto-timeout").option("--mode <mode>", "squash | merge | rebase", "squash").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const policy = opts.policy ?? resolveMergePolicy();
@@ -7465,7 +7452,7 @@ ${opts.body ?? ""}`;
     }
     emit(opts, { number, merged: true, mergedSha: result.mergedSha, policy, closedIssues: closed }, () => console.log(`✅ Merged PR #${number} (${result.mergedSha}) under policy=${policy}${closed.length ? ` — closes #${closed.join(", #")}` : ""}.`));
   }));
-  pr.command("sync <number>").description("Rebase the PR's branch onto its (moved) base; aborts cleanly on conflict (or leaves it in progress with --keep-conflicts) so the loop can resolve or escalate. Run on the PR's checked-out branch.").option("--repo <fullname>", "Override target repo").option("--no-push", "Don't force-with-lease push after a clean rebase").option("--keep-conflicts", "On conflict, leave the rebase in progress and list the conflicted files instead of aborting — the agentic-resolution entry point (issue #393)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("sync <number>").description("Rebase the PR's branch onto its (moved) base; aborts cleanly on conflict (or leaves it in progress with --keep-conflicts) so the loop can resolve or escalate. Run on the PR's checked-out branch.").option("--repo <fullname>", "Override target repo").option("--no-push", "Don't force-with-lease push after a clean rebase").option("--keep-conflicts", "On conflict, leave the rebase in progress and list the conflicted files instead of aborting — the agentic-resolution entry point (issue #393)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const prView = ghPRView(repo, number);
@@ -7548,7 +7535,7 @@ ${opts.body ?? ""}`;
     }
     emit(opts, { number, rebased: true, conflict: false, base, pushed }, () => console.log(`\uD83D\uDD00 PR #${number}: rebased "${head}" onto ${base}${pushed ? " and pushed" : ""}.`));
   }));
-  pr.command("conflict-check").description("Fail if the working tree still has unmerged paths or leftover conflict markers — the gate to run BEFORE `git rebase --continue` and before any force-with-lease push (exit 8 = not clean). Local only, no network.").option("--base <ref>", "Also scan every file this branch changed against <ref> (e.g. origin/main) — additive, never a replacement. Omitted, the base is resolved automatically: the in-flight rebase's `onto`, else origin/HEAD, else the repo default branch. Every ref actually scanned is listed in the JSON `bases`").option("--json", "Output JSON").action(runAction(async (opts) => {
+  pr.command("conflict-check").description("Fail if the working tree still has unmerged paths or leftover conflict markers — the gate to run BEFORE `git rebase --continue` and before any force-with-lease push (exit 8 = not clean). Local only, no network.").option("--base <ref>", "Also scan every file this branch changed against <ref> (e.g. origin/main) — additive, never a replacement. Omitted, the base is resolved automatically: the in-flight rebase's `onto`, else origin/HEAD, else the repo default branch. Every ref actually scanned is listed in the JSON `bases`").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const resolved = resolveScanBase({
       onto: rebaseOnto(),
       originHead: originHeadRef(),
@@ -7606,7 +7593,7 @@ ${opts.body ?? ""}`;
     if (!clean)
       process.exit(8);
   }));
-  pr.command("packet <number>").description("Emit the pre-baked review packet for a PR: spec/brief, description, CI, unresolved threads, evidence, and a noise-filtered budgeted diff — everything the loop reviewer needs in one call").option("--repo <fullname>", "Override target repo").option("--json", "Emit the packet as a structured object instead of markdown").action(runAction(async (numberStr, opts) => {
+  pr.command("packet <number>").description("Emit the pre-baked review packet for a PR: spec/brief, description, CI, unresolved threads, evidence, and a noise-filtered budgeted diff — everything the loop reviewer needs in one call").option("--repo <fullname>", "Override target repo").option("--json", "Emit the packet as a structured object instead of markdown").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const degraded = [...ctx.degraded];
@@ -7671,16 +7658,12 @@ ${opts.body ?? ""}`;
       console.warn(featureMapSkippedWarning(skipCause));
     else if (featureMapNotApplicable)
       console.warn(featureMapNotApplicableNote(featureMapNotApplicable));
-    if (opts.json) {
-      console.log(JSON.stringify({
-        ...withProvenance(buildReviewPacketData({ pr: prView, threads, diff, issue, features, threadsUnavailable, specUnavailable, specNotReadable, featureMapSkipCause: skipCause, featureMapNotApplicable })),
-        ...degradedField({ degraded })
-      }, null, 2));
-      return;
-    }
-    console.log(buildReviewPacket({ pr: prView, threads, diff, issue, features, threadsUnavailable, specUnavailable, specNotReadable, featureMapSkipCause: skipCause, featureMapNotApplicable }));
+    emit(opts, {
+      ...withProvenance(buildReviewPacketData({ pr: prView, threads, diff, issue, features, threadsUnavailable, specUnavailable, specNotReadable, featureMapSkipCause: skipCause, featureMapNotApplicable })),
+      ...degradedField({ degraded })
+    }, () => console.log(buildReviewPacket({ pr: prView, threads, diff, issue, features, threadsUnavailable, specUnavailable, specNotReadable, featureMapSkipCause: skipCause, featureMapNotApplicable })), { pretty: true });
   }));
-  pr.command("diff <number>").description("Capture a PR's FULL unfiltered diff from GitHub to a file — the security scan's input. Never reads local git, so a detached or stale worktree cannot empty it; exits 9 when the diff has zero files, unconditionally, and writes nothing at all in that case").requiredOption("--out <path>", "File to write the raw diff bytes to").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("diff <number>").description("Capture a PR's FULL unfiltered diff from GitHub to a file — the security scan's input. Never reads local git, so a detached or stale worktree cannot empty it; exits 9 when the diff has zero files, unconditionally, and writes nothing at all in that case").requiredOption("--out <path>", "File to write the raw diff bytes to").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const diff = ghPRDiffText(repo, number);
@@ -7712,7 +7695,7 @@ ${opts.body ?? ""}`;
     writeCapture(opts.out, diff);
     emit(opts, { ...out, ok: true }, () => console.log(`files=${files} lines=${lines} sha256=${sha256}`));
   }));
-  pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", "1-2 sentence verdict summary").option("--verdict <v>", "approve | comment | request_changes | reject", "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...]}); '-' or omitted reads stdin").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to post --verdict approve on a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the review body").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", "1-2 sentence verdict summary").option("--verdict <v>", "approve | comment | request_changes | reject", "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...]}); '-' or omitted reads stdin").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to post --verdict approve on a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the review body").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const rawFindings = opts.findings && opts.findings !== "-" ? readFileSync5(opts.findings, "utf8") : opts.findings === "-" ? await readStdin2() : "";
@@ -7768,7 +7751,7 @@ ${opts.body ?? ""}`;
     const foldedCount = findings.length - inlineCount;
     emit(opts, { number, verdict, posted: true, inline: inlineCount, folded: foldedCount, scan: scanField, ...degradedField({ degraded: [...ctx.degraded, ...scan.degraded] }) }, () => console.log(`Posted ${verdict} review on #${number}: ${inlineCount} inline finding(s) on the diff${foldedCount ? `, ${foldedCount} folded into the body` : ""}.`));
   }));
-  pr.command("approve <number>").description("Record the loop reviewer's approval: adds the shipflow-approved label (the automerge approval source) + an optional comment").option("--comment <text>", "Reviewer summary to post on the PR").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to approve a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the approval comment").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--force", "Approve even with unresolved review threads (not recommended)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("approve <number>").description("Record the loop reviewer's approval: adds the shipflow-approved label (the automerge approval source) + an optional comment").option("--comment <text>", "Reviewer summary to post on the PR").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to approve a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the approval comment").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--force", "Approve even with unresolved review threads (not recommended)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const unresolved = ghReviewThreads(repo, number).filter((t) => !t.isResolved);
@@ -7821,7 +7804,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
     emit(opts, { number, approved: true, label: APPROVED_LABEL, scan: scanField, ...degradedField(ctx) }, () => console.log(`✅ PR #${number} approved — labelled "${APPROVED_LABEL}" (automerge can proceed under an auto-* policy).
    ${scanAttestationLine(scan, opts.scanReport, opts.scanDigest)}`));
   }));
-  pr.command("reviews <number>").description("External review state: unresolved review threads (incl. bot reviewers) the loop must fix before approving").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("reviews <number>").description("External review state: unresolved review threads (incl. bot reviewers) the loop must fix before approving").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const me = ghCurrentLogin();
@@ -7849,7 +7832,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
         console.log(`  ${l}`);
     }, { pretty: true });
   }));
-  pr.command("resolve <number>").description("Resolve review threads the loop has addressed (all unresolved, or specific --thread ids)").option("--thread <id...>", "Specific thread node-id(s) to resolve (default: all unresolved)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  pr.command("resolve <number>").description("Resolve review threads the loop has addressed (all unresolved, or specific --thread ids)").option("--thread <id...>", "Specific thread node-id(s) to resolve (default: all unresolved)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const unresolved = ghReviewThreads(repo, number).filter((t) => !t.isResolved);
@@ -8114,8 +8097,9 @@ function syncEntryGuard(i) {
 init_project();
 import { existsSync as existsSync5, readFileSync as readFileSync6 } from "node:fs";
 import { join as join6 } from "node:path";
+init_helpers();
 function registerTestCommand(program2) {
-  program2.command("test").description("Run the project's local test command (auto-detected)").option("--json", "Emit a machine-readable summary line (runner + exit code); test output still streams").allowUnknownOption().action((opts) => {
+  program2.command("test").description("Run the project's local test command (auto-detected)").option("--json", "Emit a machine-readable summary line (runner + exit code); test output still streams").option("--yaml", "Output YAML").allowUnknownOption().action((opts) => {
     const root = getCwdRepoRoot();
     if (!root) {
       if (opts.json)
@@ -8133,12 +8117,10 @@ function registerTestCommand(program2) {
       process.exit(2);
     }
     const command = [runner.cmd, ...runner.args].join(" ");
-    if (!opts.json)
+    if (!opts.json && !opts.yaml)
       console.log(`> ${command}`);
     const code = runRunner(runner, root);
-    if (opts.json) {
-      console.log(JSON.stringify({ runner: command, source: runner.source, exitCode: code, passed: code === 0 }));
-    }
+    emit(opts, { runner: command, source: runner.source, exitCode: code, passed: code === 0 }, () => {});
     process.exit(code);
   });
 }
@@ -8276,6 +8258,8 @@ async function fetchAndReport(client, org, execId, opts = {}) {
   const res = await client.getExecutionResult(org, execId);
   if (opts.json)
     log(JSON.stringify(res));
+  else if (opts.yaml)
+    log(toYamlString(res));
   else
     log(formatResultSummary(res));
   return exitCodeForStatus(String(res.result?.status ?? ""));
@@ -8290,6 +8274,8 @@ async function waitAndReport(client, org, execId, opts) {
   });
   if (opts.json) {
     log(JSON.stringify(result));
+  } else if (opts.yaml) {
+    log(toYamlString(result));
   } else {
     log(formatResultSummary(result));
     if (timedOut) {
@@ -8303,7 +8289,7 @@ async function waitAndReport(client, org, execId, opts) {
   return exitCodeForStatus(String(result.result?.status ?? ""));
 }
 function registerRegressionCommand(program2) {
-  const regression = program2.command("regression").description("Trigger ShipFlow's server-side regression test_runner. Exercises the project's " + "configured test environment (per-branch testing needs preview deploys — a separate server change).").option("--ref <sha>", "Ref to test (defaults to current HEAD)").option("--preview-url <url>", "Preview-deploy URL to run against (must match the environment previewUrlPatterns allowlist)").option("--wait", "Poll until the run finishes; exit non-zero on failure or timeout").option("--timeout <sec>", "Max seconds to wait with --wait", "600").option("--json", "Output JSON").action(runAction(async (opts) => {
+  const regression = program2.command("regression").description("Trigger ShipFlow's server-side regression test_runner. Exercises the project's " + "configured test environment (per-branch testing needs preview deploys — a separate server change).").option("--ref <sha>", "Ref to test (defaults to current HEAD)").option("--preview-url <url>", "Preview-deploy URL to run against (must match the environment previewUrlPatterns allowlist)").option("--wait", "Poll until the run finishes; exit non-zero on failure or timeout").option("--timeout <sec>", "Max seconds to wait with --wait", "600").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { creds, client } = loadJwtCtx(program2);
     let ref;
     try {
@@ -8323,18 +8309,19 @@ function registerRegressionCommand(program2) {
       return;
     }
     const timeoutSec = Number(opts.timeout) > 0 ? Number(opts.timeout) : 600;
-    if (!opts.json)
+    if (!opts.json && !opts.yaml)
       console.log(`Regression run queued: ${execId} — waiting up to ${timeoutSec}s...`);
     const code = await waitAndReport(client, creds.org, execId, {
       json: opts.json,
+      yaml: opts.yaml,
       timeoutMs: timeoutSec * 1000,
       intervalMs: 5000
     });
     process.exit(code);
   }));
-  regression.command("status <executionId>").description("Fetch and print the result of a prior regression run (non-zero exit on failure)").option("--json", "Output JSON").action(runAction(async (executionId, opts) => {
+  regression.command("status <executionId>").description("Fetch and print the result of a prior regression run (non-zero exit on failure)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (executionId, opts) => {
     const { creds, client } = loadJwtCtx(program2);
-    const code = await fetchAndReport(client, creds.org, executionId, { json: opts.json });
+    const code = await fetchAndReport(client, creds.org, executionId, { json: opts.json, yaml: opts.yaml });
     process.exit(code);
   }));
 }
@@ -8344,7 +8331,7 @@ init_prompts();
 init_helpers();
 import { execSync as execSync6 } from "node:child_process";
 function registerReleaseCommand(program2) {
-  program2.command("release").description("Trigger a ShipFlow release (patch_notes + regression + downstream workflows)").option("--tag <tag>", "Release tag (e.g. v0.7.3)").option("--base-tag <tag>", "Previous tag (auto-detect if omitted)").option("--env <env>", "Target environment (staging|prod)").option("--wait", "Block and stream status until terminal").option("--json", "Output JSON").action(runAction(async (opts) => {
+  program2.command("release").description("Trigger a ShipFlow release (patch_notes + regression + downstream workflows)").option("--tag <tag>", "Release tag (e.g. v0.7.3)").option("--base-tag <tag>", "Previous tag (auto-detect if omitted)").option("--env <env>", "Target environment (staging|prod)").option("--wait", "Block and stream status until terminal").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { creds, client, project } = await loadCtx(program2);
     const tag = opts.tag ?? await promptText("Tag (e.g. v0.7.3): ");
     const baseTag = opts.baseTag ?? safeLatestTag();
@@ -8373,6 +8360,7 @@ function safeLatestTag() {
 
 // src/commands/profile.ts
 init_config();
+init_helpers();
 function rows() {
   const active = activeProfile();
   return ["", ...listProfiles()].map((name) => {
@@ -8387,33 +8375,31 @@ function rows() {
   });
 }
 function registerProfilesCommand(program2) {
-  const profiles = program2.command("profiles").description("List config profiles (isolated credentials per tenant)").option("--json", "Output JSON").action((opts) => {
+  const profiles = program2.command("profiles").description("List config profiles (isolated credentials per tenant)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((opts) => {
     const active = activeProfile();
     const data = rows();
-    if (opts.json) {
-      console.log(JSON.stringify({ active: active || null, dir: configDir(), profiles: data }, null, 2));
-      return;
-    }
-    console.log(`Active profile: ${active || "(default)"}`);
-    console.log(`Config dir:     ${configDir()}`);
-    console.log("");
-    const tableRows = data.map((r) => [
-      `${r.active ? "*" : " "} ${r.profile || "(default)"}`,
-      r.signedIn ? "yes" : "no",
-      r.org || "—",
-      r.tenantId || "—"
-    ]);
-    for (const l of renderTable(["Profile", "Signed in", "Org", "Tenant"], tableRows))
-      console.log(l);
-    if (data.filter((r) => r.signedIn).length < 2) {
+    emit(opts, { active: active || null, dir: configDir(), profiles: data }, () => {
+      console.log(`Active profile: ${active || "(default)"}`);
+      console.log(`Config dir:     ${configDir()}`);
       console.log("");
-      console.log("Add a tenant in its own store:");
-      console.log("  renaiss-shipflow --profile <name> login   (or SHIPFLOW_PROFILE=<name> renaiss-shipflow login)");
-    }
-  });
-  profiles.command("dir").description("Print the active config directory (honors --profile / SHIPFLOW_PROFILE / SHIPFLOW_CONFIG_DIR)").action(() => {
+      const tableRows = data.map((r) => [
+        `${r.active ? "*" : " "} ${r.profile || "(default)"}`,
+        r.signedIn ? "yes" : "no",
+        r.org || "—",
+        r.tenantId || "—"
+      ]);
+      for (const l of renderTable(["Profile", "Signed in", "Org", "Tenant"], tableRows))
+        console.log(l);
+      if (data.filter((r) => r.signedIn).length < 2) {
+        console.log("");
+        console.log("Add a tenant in its own store:");
+        console.log("  renaiss-shipflow --profile <name> login   (or SHIPFLOW_PROFILE=<name> renaiss-shipflow login)");
+      }
+    }, { pretty: true });
+  }));
+  profiles.command("dir").description("Print the active config directory (honors --profile / SHIPFLOW_PROFILE / SHIPFLOW_CONFIG_DIR)").action(runAction(() => {
     console.log(configDir());
-  });
+  }));
 }
 
 // src/index.ts
