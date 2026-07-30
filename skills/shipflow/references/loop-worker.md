@@ -87,7 +87,9 @@ also mean "irrelevant".
    pure-CSS changes or when the project genuinely has no test framework (note it in
    the return). An autonomous fix with no regression test silently regresses later.
 5. **PR** — commit by **invoking the `smart-commit` skill** (Skill tool →
-   `smart-commit`; it splits the diff into atomic conventional commits) — see
+   **`shipflow:smart-commit`**, plugin-qualified — a bare name can resolve to
+   another plugin's copy, issue #544; it splits the diff into atomic
+   conventional commits) — see
    loop-mode.md § "Commit messages": no AI-attribution trailer, and skip the
    skill's human-confirm gate (execute its plan directly — no human to answer).
    Then push, `renaiss-shipflow pr create --json --lint=strict`.

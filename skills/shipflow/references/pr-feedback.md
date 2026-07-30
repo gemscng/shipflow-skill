@@ -33,7 +33,7 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments \
 
 Check out the PR's branch (`gh pr checkout <n>` or `git checkout <headRefName>`),
 make the changes for **all** actionable comments together, run the project's tests
-and the browser check (loop step 5), commit by **invoking the `smart-commit`
+and the browser check (loop step 5), commit by **invoking the `shipflow:smart-commit`
 skill** (per loop-mode.md § "Commit messages" — no AI-attribution trailer, skip
 the human-confirm gate), and push.
 

@@ -63,7 +63,9 @@ Use a **single** worktree, reused for every iteration (not one per issue):
 to exist. If the repo has **no test framework** (no `*.config`, no `test/`/`spec/`),
 dispatch a worker to bootstrap one before the cycle: research the right framework for
 the stack, install it, write 3–5 real tests for the most-changed files, wire a CI
-workflow, commit `chore: bootstrap test framework`. Skip if tests already exist or the
+workflow, commit via `shipflow:smart-commit` like every other loop commit — the
+skill categorizes and splits the bootstrap into atomic conventional commits.
+Skip if tests already exist or the
 user opted out. **The CI workflow half is not optional when `require-ci` is on**
 (default): a repo whose CI never runs on PRs can never satisfy the gate and will
 deadlock every PR at merge time (issue #305) — bootstrap a PR-triggered workflow
@@ -916,7 +918,15 @@ checklist (element 5) still closes a bug body — minimally
 ### Commit messages: invoke the smart-commit skill
 
 **Create every loop commit by INVOKING the bundled `smart-commit` skill** — the
-Skill tool with `smart-commit` (`skills/smart-commit`), not a hand-written
+Skill tool with the PLUGIN-QUALIFIED name **`shipflow:smart-commit`** (issue
+#544: a bare `smart-commit` can resolve to another plugin's same-named skill —
+the same ambiguity class as the fully-qualified `/shipflow:shipflow-loop`
+command rule). On a harness with no Skill tool or plugin namespace (the Codex
+installation clones the plugin files), read and follow the skill file directly
+from the **plugin clone** — `~/.shipflow-skill/skills/smart-commit/SKILL.md` on
+Codex (`references/codex.md`), i.e. plugin-relative `skills/smart-commit/SKILL.md`,
+never the loop worktree (the project repo has no such file) and never a bare
+skill name. Not a hand-written
 `git commit`. The skill analyzes the staged diff, splits it into atomic logical
 units, and writes an Angular conventional message for each. Run it; let it do
 the categorize / split / format. This is the one authoritative copy;
