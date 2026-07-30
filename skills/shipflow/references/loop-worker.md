@@ -98,6 +98,9 @@ also mean "irrelevant".
    table/checklist/bullets) with exit 2 and creates nothing — restructure the
    body per the Message style contract and re-run; never drop the flag to
    sneak a body through.
+   Never bump versions in the PR or state them in the body — the auto-bump
+   workflow versions main after merge (issue #548); a PR holds no version
+   changes.
    **Readable-body contract (issue #464)** — a body full of tables can still be
    an unreadable wall. The HEADLINE (what renders un-collapsed) is at most ~25
    visible lines: TLDR (≤4 sentences — what/why/risk), "What changed" (≤3
