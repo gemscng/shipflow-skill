@@ -430,9 +430,25 @@ day they also mean "irrelevant", they stop meaning anything.
    echo '[{"path":"src/x.ts","line":42,"severity":"high","effort":"quick",
      "issue":"<=15 words","why":"mechanism + consequence","fix":"<=20 words",
      "suggestion":"exact replacement line (optional)"}]' \
-   | renaiss-shipflow pr post-review <n> --verdict request_changes \
+   | renaiss-shipflow pr post-review <n> --verdict request_changes --findings - \
        --summary "1-2 sentences: what the PR does + overall risk"
    ```
+
+   ⛔ **`--findings -` is not optional on the pipe form (issue #427).** stdin is
+   read **only** on an explicit `--findings -`; the `!isTTY` fallback was removed
+   in #219 so a headless approve could not hang on an inherited pipe. Omit the
+   flag and the command still **exits 0 and prints `0 inline finding(s)`** — your
+   entire review is discarded silently, and the PR shows a summary with no
+   threads. Two forms work, and nothing else does:
+
+   | Form | Invocation | Result |
+   |---|---|---|
+   | pipe | `… \| pr post-review <n> --findings -` | findings anchored |
+   | file | `pr post-review <n> --findings /tmp/pr-<n>.findings.json` | findings anchored |
+   | ⛔ bare pipe | `… \| pr post-review <n>` | `inline: 0` — **all findings dropped** |
+
+   Prefer the **file** form when the payload is large or you want it kept as an
+   artifact; the pipe form needs `--findings -` every time.
    Severity is `critical|high|medium|low` (`references/bug-taxonomy.md`); keep it
    terse — one finding per real point, most severe first.
    **Fix-suggestion hygiene (issue #528)** — a suggested fix must fail CLOSED.
@@ -444,8 +460,9 @@ day they also mean "irrelevant", they stop meaning anything.
    swallow you exist to flag, introduced by your own suggestion. Prefer an
    explicit typed error preserving the cause. Sibling consistency never
    justifies a fail-open pattern — a fail-open sibling is itself a finding,
-   not a template. No findings → post with
-   an empty array and `--verdict approve` + a one-line summary.
+   not a template. No findings → **omit `--findings` entirely** and post
+   `--verdict approve` + a one-line summary; omitting the flag is exactly what
+   "no findings" means to this command.
 
    Then record the gate decision with a short status stamp:
    ```
