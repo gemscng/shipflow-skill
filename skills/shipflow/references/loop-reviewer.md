@@ -434,7 +434,17 @@ day they also mean "irrelevant", they stop meaning anything.
        --summary "1-2 sentences: what the PR does + overall risk"
    ```
    Severity is `critical|high|medium|low` (`references/bug-taxonomy.md`); keep it
-   terse — one finding per real point, most severe first. No findings → post with
+   terse — one finding per real point, most severe first.
+   **Fix-suggestion hygiene (issue #528)** — a suggested fix must fail CLOSED.
+   Never suggest substituting a default for a failed operation
+   (`.catch(() => ({}))`, `catch { return [] }`) unless the substituted value
+   CANNOT be accepted downstream: `null` into a `z.object` always rejects
+   (fine); `{}` into an all-optional schema VALIDATES, so the client's failed
+   intent silently becomes a different successful operation — the exact silent
+   swallow you exist to flag, introduced by your own suggestion. Prefer an
+   explicit typed error preserving the cause. Sibling consistency never
+   justifies a fail-open pattern — a fail-open sibling is itself a finding,
+   not a template. No findings → post with
    an empty array and `--verdict approve` + a one-line summary.
 
    Then record the gate decision with a short status stamp:
