@@ -89,6 +89,14 @@ Read them with `renaiss-shipflow config list`; set with `config set <key> <v>`
 | `require-review` | `true` | route every issue (intake) and PR (pre-merge) through the reviewer subagent first |
 | `cli-drift-poll-seconds` | `180` | how long the post-merge CLI drift check waits for npm to publish before continuing degraded (§0) |
 
+Not a loop policy, but set on the same surface: **`app-slug`** — your
+deployment's ShipFlow GitHub App slug, the one identity trusted to record an
+intent-gate clearance. Resolution is `SHIPFLOW_APP_SLUG` → `GITHUB_APP_SLUG` →
+`config set app-slug` → the contract default. Leave it wrong on a dev /
+self-hosted App and every reporter-confirmed PR re-arms `needs-reporter-review`
+forever (the CLI logs the login it saw vs. the slug it expected). It fails
+STUCK, never open — there is no "any bot" value.
+
 The real merge guard is the repo's **GitHub branch protection** — even `auto-on-green`
 can't merge what GitHub blocks. Approval = a GitHub review approval **or** the
 `shipflow-approved` label — which is exactly what the **reviewer** adds via
