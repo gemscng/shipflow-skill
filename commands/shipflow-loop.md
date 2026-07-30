@@ -43,7 +43,21 @@ nothing `needsAttention`:
   general + inline comment, push, **reply on the PR**; note the issue if scope shifts).
 - `approved_ready` → `renaiss-shipflow pr automerge <n> --json` (merges only if
   `merge-policy` + CI + approval allow; exits 5 and parks otherwise — on `manual`
-  it always parks, which is correct). On merge it auto-cleans the branch — remote
+  it always parks, which is correct). **"behind base" as the ONLY blocker is
+  WORK, not a park** (#530 — merges always rebase first): dispatch a worker to
+  checkout the branch, `renaiss-shipflow pr sync <n> --no-push` (rebase onto the
+  moved base), run the tests, and **only then** `git push --force-with-lease` —
+  a clean textual rebase can still break the build, and `pr sync` pushes by
+  default, so `--no-push` is what keeps an untested head off the PR. CI re-runs
+  on the rebased head and the merge lands on a later tick. **Any other blocker
+  alongside it → park/handle that first**: under `manual` policy (or with red
+  CI, unresolved threads, an unconfirmed interpretation) the rebase cannot lead
+  to a merge, so dispatching one just rewrites the branch and re-runs CI on
+  every base advance, forever. `"unsatisfiable": true` next to a freshness
+  blocker = escalate once, never re-poll. Same dispatch shape as `conflict`,
+  minus the conflict protocol unless the rebase actually conflicts (then exit 6
+  hands you `--keep-conflicts` + `references/conflict-resolution.md` as usual).
+  On merge it auto-cleans the branch — remote
   via gh `--delete-branch`, local via a force-prune (detaches HEAD if the loop
   worktree is sitting on it) — so no stale `fix/issue-*` branches pile up.
 - `conflict` → a **worker** resolves it agentically on its branch:

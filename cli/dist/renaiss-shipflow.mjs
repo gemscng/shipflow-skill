@@ -3946,6 +3946,17 @@ function mergeDecision(pr, me, opts) {
     blockers.push(`${opts.unresolvedThreads} unresolved review thread(s) — address + resolve them first`);
   if ((pr.mergeable ?? "").toUpperCase() === "CONFLICTING")
     blockers.push("merge conflict with base (run: pr sync)");
+  if (opts.behindBy === null) {
+    if (opts.freshnessUnresolvable) {
+      if (opts.policy !== "manual")
+        unsatisfiable = true;
+      blockers.push("base comparison impossible — the head ref does not resolve for compare (deleted branch/fork, or a cross-repo head with no owner); never merge on unknown freshness");
+    } else {
+      blockers.push("base comparison unavailable — never merge on unknown freshness; retry next tick");
+    }
+  } else if (opts.behindBy !== undefined && opts.behindBy > 0) {
+    blockers.push(`behind base by ${opts.behindBy} commit(s) — rebase first (run: pr sync) so CI re-runs on the rebased head`);
+  }
   if (opts.policy === "auto-on-green" && !cl.approved) {
     blockers.push("not approved (needs a GitHub review approval or a shipflow-approved label)");
   }
@@ -4160,6 +4171,32 @@ function ghPRMergedByHead(repo, branch) {
   const rows = JSON.parse(out);
   const pr = rows[0];
   return pr && typeof pr.number === "number" && typeof pr.headRefOid === "string" ? { number: pr.number, headRefOid: pr.headRefOid } : null;
+}
+function ghCompareHead(repo, pr) {
+  const baseOwner = repo.split("/")[0] ?? "";
+  const headOwner = pr.headRepositoryOwner?.login;
+  const crossRepo = pr.isCrossRepository === true || headOwner != null && headOwner.toLowerCase() !== baseOwner.toLowerCase();
+  if (!crossRepo)
+    return pr.headRefName;
+  return headOwner ? `${headOwner}:${pr.headRefName}` : null;
+}
+function ghPRFreshness(repo, pr) {
+  const base = pr.baseRefName;
+  if (!base)
+    return { behindBy: null, unresolvable: true };
+  const head = ghCompareHead(repo, pr);
+  if (head === null)
+    return { behindBy: null, unresolvable: true };
+  try {
+    const out = _exec(`gh api repos/${shellQuote(repo)}/compare/${shellQuote(base)}...${shellQuote(head)} -q .behind_by`, { stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+    const n = parseInt(out, 10);
+    return Number.isNaN(n) ? { behindBy: null } : { behindBy: n };
+  } catch (e) {
+    const err = e;
+    const detail = `${String(err.stderr ?? "")}
+${err.message ?? ""}`;
+    return /HTTP 404|\bNot Found\b/i.test(detail) ? { behindBy: null, unresolvable: true } : { behindBy: null };
+  }
 }
 function ghPRView(repo, number) {
   const out = _exec(`gh pr view ${number} --repo ${shellQuote(repo)} --json ${PR_FIELDS}`).toString();
@@ -7429,7 +7466,8 @@ ${opts.body ?? ""}`;
     const threads = unresolvedThreadsOrBlock(repo, number);
     const unresolvedThreads = threads.count;
     const gate = evalIntentGate(repo, number, prView);
-    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy });
+    const freshness = ghPRFreshness(repo, prView);
+    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy, behindBy: freshness.behindBy, freshnessUnresolvable: freshness.unresolvable });
     const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
     const wouldMerge = decision.wouldMerge && !threads.unavailable;
     const out = {
@@ -7459,7 +7497,8 @@ ${opts.body ?? ""}`;
     const threads = unresolvedThreadsOrBlock(repo, number);
     const unresolvedThreads = threads.count;
     const gate = await freshProbeIntentGate(evalIntentGate(repo, number, prView), liveIntentGateFreshReads(repo, number));
-    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy });
+    const freshness = ghPRFreshness(repo, prView);
+    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy, behindBy: freshness.behindBy, freshnessUnresolvable: freshness.unresolvable });
     const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
     const wouldMerge = decision.wouldMerge && !threads.unavailable;
     if (!wouldMerge) {
