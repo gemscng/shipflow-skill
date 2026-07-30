@@ -3744,6 +3744,22 @@ function intentGate(i) {
   const applyLabel = i.signal && !i.hasLabel && !i.everCleared;
   return { blocked, applyLabel };
 }
+function intentGateBlockedBy(i) {
+  const label = i.hasLabel;
+  const signal = i.signal && !i.everCleared;
+  if (label && signal)
+    return "both";
+  if (label)
+    return "label";
+  if (signal)
+    return "signal";
+  return;
+}
+var INTENT_BLOCKED_BY_DETAIL = {
+  label: "blocking input: the `needs-reporter-review` label",
+  signal: "blocking input: the PR body's interpretation/deviation signal (no label to remove)",
+  both: "blocking input: both the `needs-reporter-review` label and the PR body's interpretation/deviation signal"
+};
 var INTENT_GATE_AUDIT_MARKER = SHIPFLOW_CONTRACT.markers.intentGateCleared;
 var INTENT_GATE_AUDIT_LINE = new RegExp(`^${INTENT_GATE_AUDIT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} by=\\S+ -->$`);
 function lastMeaningfulLine(body) {
@@ -3936,8 +3952,9 @@ function mergeDecision(pr, me, opts) {
   if (opts.policy === "auto-timeout" && !cl.approved && cl.ageHours < opts.staleHours) {
     blockers.push(`awaiting approval or the ${opts.staleHours}h timeout (age ${Math.round(cl.ageHours)}h)`);
   }
-  if (opts.intentBlocked)
-    blockers.push(INTENT_BLOCKER);
+  if (opts.intentBlocked) {
+    blockers.push(opts.intentBlockedBy ? `${INTENT_BLOCKER} (${INTENT_BLOCKED_BY_DETAIL[opts.intentBlockedBy]})` : INTENT_BLOCKER);
+  }
   return { policy: opts.policy, wouldMerge: blockers.length === 0, blockers, ...unsatisfiable ? { unsatisfiable: true } : {} };
 }
 var TRUSTED_AUTHOR_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
@@ -7091,8 +7108,34 @@ function evalIntentGate(repo, number, prView) {
   const hasLabel = (prView.labels ?? []).some((l) => l.name === REPORTER_REVIEW_LABEL);
   const signal = resolveIntentGateMode() === "trusted" ? hasExplicitInterpretationSignal(prView.body ?? "") : hasInterpretationSignal(prView.body ?? "");
   const everCleared = signal && !hasLabel ? intentGateEverCleared(ghIntentGateClearance(repo, number, REPORTER_REVIEW_LABEL)) : false;
-  return intentGate({ signal, hasLabel, everCleared });
+  const facts = { signal, hasLabel, everCleared };
+  return { ...intentGate(facts), blockedBy: intentGateBlockedBy(facts) };
 }
+var FRESH_PROBE_BACKOFF_MS = 3000;
+async function freshProbeIntentGate(first, reads) {
+  if (!first.applyLabel)
+    return first;
+  await reads.sleep(FRESH_PROBE_BACKOFF_MS);
+  let hasLabel = false;
+  try {
+    hasLabel = reads.hasLabel();
+  } catch {
+    hasLabel = false;
+  }
+  let everCleared = false;
+  try {
+    everCleared = intentGateEverCleared(reads.clearance());
+  } catch {
+    everCleared = false;
+  }
+  const facts = { signal: true, hasLabel, everCleared };
+  return { ...intentGate(facts), blockedBy: intentGateBlockedBy(facts) };
+}
+var liveIntentGateFreshReads = (repo, number) => ({
+  hasLabel: () => (ghPRView(repo, number).labels ?? []).some((l) => l.name === REPORTER_REVIEW_LABEL),
+  clearance: () => ghIntentGateClearance(repo, number, REPORTER_REVIEW_LABEL),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms))
+});
 function stampLoopReview(body) {
   const marker = SHIPFLOW_CONTRACT.markers.loopReview;
   return body.includes(marker) ? body : `${body.replace(/\s+$/, "")}
@@ -7386,7 +7429,7 @@ ${opts.body ?? ""}`;
     const threads = unresolvedThreadsOrBlock(repo, number);
     const unresolvedThreads = threads.count;
     const gate = evalIntentGate(repo, number, prView);
-    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked });
+    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy });
     const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
     const wouldMerge = decision.wouldMerge && !threads.unavailable;
     const out = {
@@ -7415,8 +7458,8 @@ ${opts.body ?? ""}`;
     const prView = ghPRView(repo, number);
     const threads = unresolvedThreadsOrBlock(repo, number);
     const unresolvedThreads = threads.count;
-    const gate = evalIntentGate(repo, number, prView);
-    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked });
+    const gate = await freshProbeIntentGate(evalIntentGate(repo, number, prView), liveIntentGateFreshReads(repo, number));
+    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy });
     const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
     const wouldMerge = decision.wouldMerge && !threads.unavailable;
     if (!wouldMerge) {
