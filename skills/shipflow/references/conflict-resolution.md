@@ -28,7 +28,7 @@ finishing 579/579 green.
    `<<<<<<<`, and `add -A` clears exactly that. The paths the gate prints are
    **repo-root-relative**, so from a subdirectory use the anchored form
    `git -C <repo-root> add -- <file>…` — which is exactly what `pr sync
-   --keep-conflicts` and `pr conflict-check` now print for you. Then, before
+   --keep-conflicts` and the `conflict-check` gate now print for you. Then, before
    every `git rebase --continue`:
 
    ```bash
