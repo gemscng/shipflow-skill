@@ -16,7 +16,10 @@ substantial work land un-tracked, without creating duplicate issues.
    anything touching logic, data, or user-facing behavior.
 1. **Summarize the work** in a sentence or two — from the user's description, the
    branch name, and/or `git diff` / recent commits. That intent is the query.
-2. **List candidates:** `renaiss-shipflow issues list --json`.
+2. **List candidates:** `renaiss-shipflow issues list --json --limit 1000`.
+   **Not the default `--limit 30`** — that is a newest-first slice which
+   structurally cannot contain an older duplicate, which is how #579 restated
+   #427 three days later (issue #580).
 3. **Match (you do this — it's semantic).** Compare the work against each open
    issue's title + body. Be conservative: only call it a match when the work
    plainly implements or fixes that issue.
@@ -30,6 +33,13 @@ substantial work land un-tracked, without creating duplicate issues.
      report which issue you opened, and continue — **don't ask**.
    - **`autoIssue: false`** (default) → **ask** first: "No open issue covers this
      — want me to open one? (proposed title: …)". Create only on a yes.
+   - **Either way, `issue create` may exit 12** — its own near-verbatim
+     duplicate guard found an open issue that restates your title, and created
+     nothing (issue #580). Treat that as a step-3 **Match**, not a failure:
+     surface the candidates it printed and offer `issue work <n>`, or re-run
+     with `--allow-duplicate` when the work is genuinely separate. The guard
+     catches restatements only — your semantic step-3 pass is still the check
+     that catches paraphrases.
 
    Either way the body follows the **issue-body ladder**
    (`loop-mode.md` § "Message style"; demo: issue #387): status-header

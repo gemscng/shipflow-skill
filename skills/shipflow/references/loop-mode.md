@@ -408,9 +408,18 @@ every tick — a session that opened 5 PRs yesterday is not "at cap" today, and
    Reviewer rejects (invalid / duplicate / needs a human) → `issue escalate` and
    pick the next. **If the brief is a partial slice with deferred parts, file each as
    a follow-up sub-issue now** — `renaiss-shipflow issue create --title "…" --body
-   "Part of #<n>: …"` — *before* dispatching the worker, so deferred scope is tracked,
+   "Part of #<n>: …" --json` — *before* dispatching the worker, so deferred scope is tracked,
    not dropped — each body per the **issue-body ladder** (§ "Message style"),
    its status header sourcing `Part of #<n>`. See `references/loop-reviewer.md`.
+   **Handle exit 12 on every one of those filings.** Deferral sub-issues are
+   deliberately parallel-titled (`… guard to pr create as well` / `… to issue
+   edit as well`) — the shape the duplicate guard comes closest to refusing. A
+   bare non-zero exit here reads as a failed command, and the deferred scope is
+   then **silently dropped**: the dropped-scope failure the reviewer contract
+   exists to catch. On exit **12** read `{blocked: true, candidates: […]}` and
+   either link the existing issue as the follow-up (it already tracks that
+   scope) or re-file with **`--allow-duplicate`** when it genuinely does not.
+   Never read 12 as "filed", and never read it as "the command broke".
    **Post the brief's "Unknowns & assumptions" section on the issue** as a comment
    ending with `<!-- shipflow:loop -->` (so it never trips the needs-human
    auto-unblock) before dispatching the worker: every assumption the reviewer
@@ -491,14 +500,81 @@ needs action), don't stop yet. If `bug-hunt` is on (`config get bug-hunt`, defau
    — a score drop since last sweep means something regressed. Screenshot anything broken.
 2. **File genuine bugs as issues** — for each bug you can **actually reproduce**
    (retry once to confirm), classified with a **severity + category** from the
-   taxonomy, and not already an open issue (dedupe via `renaiss-shipflow issues list
-   --json` — match by title/area; skip anything labelled `auto-qa` you already filed):
+   taxonomy, and not already an open issue (**dedupe is enforced by `issue create`
+   itself** — see below; skip anything labelled `auto-qa` you already filed):
    `renaiss-shipflow issue create --title "<bug>" --body "<issue-body ladder>"
    --label bug --label auto-qa --label "severity:<…>" --label "area:<…>" --json`
    (`bug-taxonomy.md` §3; body = the **issue-body ladder** in § "Message style" —
    status header sourcing `auto-qa sweep`, Repro core, acceptance checklist). Attach evidence with `issue evidence <n> --file <shot>`,
    and update the baseline. **Only file what you reproduced** — no speculative or
    duplicate issues.
+
+   **Near-verbatim duplicate filing is blocked in code (issue #580) — but the
+   check is narrow, so keep searching.** `issue create` scans **every** open
+   issue (`--limit 1000`) and refuses only a **near-verbatim restatement**: same
+   type and scope, same numbers and negations, and every word of the shorter
+   title present in the longer. A **paraphrase slips straight through** — #404
+   and #569 describe one defect and score ~0.38. So still search the open set by
+   keyword before filing; just never rely on `renaiss-shipflow issues list
+   --json` alone, whose default `--limit 30` is a newest-first slice that
+   structurally cannot contain an older duplicate — exactly how #579 restated
+   #427 three days later. Pass `--limit 1000` when you use it for this.
+
+   **The rule cuts both ways — know the shape it refuses.** "Every word of the
+   shorter title is in the longer one" means a **strict superset is refused
+   100% of the time**, no matter how much it adds: the median title here is 10
+   tokens and the Dice floor still admits up to **8 added content words**. So a
+   narrower issue that quotes an open title and extends it — `… drops findings
+   on stdin` → `… drops findings on stdin under a piped heredoc` (measured:
+   refused at 0.833) — **will be refused**, and that is by design, not a bug to
+   work around silently. Keep such an example digit-free and negation-free: an
+   extension like `… exceeds 64 KB` adds `64`, which the discriminator gate
+   treats as a must-match-exactly token, so that filing goes through — as the
+   third row of the table below says. Not a regression either (the bare-Dice
+   first cut refused the same shape, plus most legitimate siblings). Two ways
+   through, both explicit:
+
+   | Your filing vs the open issue | Do this |
+   |---|---|
+   | Genuinely the same defect, stated more precisely | Comment the extra detail on the open issue — don't file |
+   | A distinct defect that merely shares the wording | Re-file with **`--allow-duplicate`**, and say why in the body |
+   | Different numbers or a negation (`exits 5`→`7`, `is`→`isn't`) | Files cleanly — the discriminator gate sees the difference. **But it cannot tell a real number from a `#N` citation** — known bypass below |
+
+   **Known limit — citing the issue you are restating bypasses the guard
+   entirely (open issue #587).** The discriminator gate treats every
+   digit-bearing token as must-match-exactly, and an issue *reference* is
+   digits. A restatement that cites the issue it restates therefore scores
+   `{427}` against `{}`, gate 3 rejects the pair before containment ever runs,
+   and **a genuine duplicate files clean**:
+
+   | Title filed while #427 is open | discriminators | Outcome |
+   |---|---|---|
+   | #579's title, verbatim | `{}` | **refused** at 0.875 — the catch #580 exists for |
+   | the same title + ` (#427 regression)` | `{427}` | **files clean** — zero candidates |
+
+   One appended citation, opposite outcome. This is a **bypass, not a feature**,
+   and it bites exactly where duplicates are most likely: citing the original is
+   the first thing a filer does when restating it. Three live fixture rows
+   already carry the shape (#461, #479, #551).
+
+   | Deferred to #587, not dismissed | |
+   |---|---|
+   | Fails **open** | permits a filing, never refuses one |
+   | The fix tightens gate 3 | can only push the false-positive rate **up** |
+   | It invalidates every measured rate | needs its own measured round, not a tail-end patch |
+   | Pre-#580 status quo | caught 0% of duplicates — cited or not |
+
+   **Until #587 lands, a `#N` in your title means the duplicate check did not
+   run.** Search the open set by keyword yourself, or move the citation out of
+   the title and into the body.
+
+   | Outcome | Exit | What you do |
+   |---|---|---|
+   | No match | 0 | Filed — carry on (a clean exit is **not** proof there's no duplicate; see above) |
+   | Match, `--json` / `--yaml` | **12** | Read `{blocked: true, candidates: […]}` and **comment on the existing issue** instead — nothing was created |
+   | Match, genuinely a different bug | **12** | Re-run with **`--allow-duplicate`** (it echoes what it overrode) |
+   | Scan window came back FULL | 0 | Filed, with a loud `window is FULL` warning — the older issues were never scanned; check by hand |
+   | Open-issue fetch failed | 0 | Warned + filed anyway — a GitHub outage never blocks a filing; dedupe by hand |
 3. **Feed the loop**: if the sweep filed ≥1 new issue → **go back to A** (the loop
    now fixes the bugs it just found). If it found **nothing new** (clean, or only
    dupes) → *that's* the real stop.
@@ -606,9 +682,13 @@ Silence still parks forever.
   resort**, not the default for "this is big." For an item that's merely large,
   open-ended, or ambiguous, **carve a bounded, value-adding slice** and defer the
   rest as follow-up sub-issues — the **orchestrator** files those with
-  `renaiss-shipflow issue create` linked to the parent (`Part of #N`) at admit time,
-  bodies per the issue-body ladder (§ "Message style"),
+  `renaiss-shipflow issue create --json` linked to the parent (`Part of #N`) at admit
+  time, bodies per the issue-body ladder (§ "Message style"),
   before the slice PR opens — rather than handing the whole thing to a human.
+  These titles run in parallel by design, so **exit 12 (duplicate) is an
+  expected outcome on this path, not a failure**: read the candidates, link the
+  existing issue or re-file with `--allow-duplicate`, and never let a non-zero
+  exit drop the deferred scope (Phase B, step 2).
   Reserve `issue escalate` for a genuine **hard blocker** — missing
   secrets/credentials or external setup the loop can't do, a security-/trust-critical
   surface that can't be validated autonomously, an absent spec/design doc the issue

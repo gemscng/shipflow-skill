@@ -37,6 +37,20 @@ Compact example body:
 - [ ] Empty name shows inline error; no 500
 ```
 
+**Exit 12 means duplicate, not failure.** `issue create` runs a duplicate
+pre-flight over every open issue and refuses a **near-verbatim restatement**,
+creating nothing (issue #580). On exit 12:
+
+| What it printed | What you do |
+|---|---|
+| `⛔ … #N <title> (0.88)` + `--allow-duplicate` | Report the match and offer `renaiss-shipflow issue work N` |
+| Same, but the work is genuinely a different defect | Re-run with `--allow-duplicate` and say why in the body |
+| `--json` / `--yaml` caller | Read `{blocked: true, candidates: […]}` from stdout |
+
+Never report the issue as unfiled without surfacing the candidates, and never
+read 12 as "the command broke". A **clean exit 0 is not proof there is no
+duplicate** either — the guard catches restatements, not paraphrases.
+
 A screenshot is worth more than prose: when the report describes something visible (a broken layout, a wrong render, an error dialog) and a screenshot or recording file is available — or you can capture one with the browser tools — attach it with `--screenshot <path...>` (repeatable; add `--screenshot-caption "<what this shot shows>"` per shot, by position). The files are hosted and embedded in the issue body — reference them from the evidence table. If the upload fails the issue is NOT created — retry, or create without `--screenshot` and attach via `issue evidence --image` afterwards.
 
 <!-- Codex CLI custom prompt (generated from .claude/commands/shipflow-new-issue.md).

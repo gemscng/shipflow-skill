@@ -147,12 +147,17 @@ step a subagent):
 **C. Bug sweep — when the queue is empty** (B's `issue next` exits 4 **and** A is
 clean): if `bug-hunt` is on (default), run `renaiss-shipflow test` + `regression
 --json` + a real-browser QA sweep (`references/browser-testing.md`). For each bug
-you **reproduce** that isn't already an open issue (dedupe via `issues list
---json`), file it: `renaiss-shipflow issue create --title "…" --body "<ladder body>"
---label bug --label auto-qa --json` (+ attach evidence) — body per the
-issue-body ladder (`references/loop-mode.md` § "Message style"). Filed ≥1 new issue → back
-to **A**; nothing new → real stop. Cap: `bug-hunt-cap` (default 5); reproduced bugs
-only, never duplicates.
+you **reproduce**, file it: `renaiss-shipflow issue create --title "…" --body
+"<ladder body>" --label bug --label auto-qa --json` (+ attach evidence) — body per
+the issue-body ladder (`references/loop-mode.md` § "Message style"). **Near-verbatim
+dedupe is enforced by `issue create` itself** (issue #580): it scans every open
+issue and exits **12** with `{blocked: true, candidates: […]}`, creating nothing,
+when the title restates an open one — comment on that issue instead, or pass
+`--allow-duplicate` if it is genuinely a different bug. It catches restatements
+only, so **still search by keyword first** — just never with a default `issues
+list --json`, whose `--limit 30` window cannot see an older duplicate. Filed ≥1
+new issue → back to **A**; nothing new → real stop. Cap: `bug-hunt-cap`
+(default 5); reproduced bugs only, never duplicates.
 
 **D. Repeat** A→B→C until PRs-opened-this-pass hits `cap`, **or** the queue is
 empty and the bug sweep found nothing new (or `bug-hunt` is off). An empty queue

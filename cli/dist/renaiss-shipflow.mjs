@@ -5277,6 +5277,207 @@ function lintBodyLength(body) {
   ];
 }
 
+// src/issue-similarity.ts
+var STOPWORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "and",
+  "or",
+  "but",
+  "of",
+  "to",
+  "in",
+  "on",
+  "at",
+  "by",
+  "for",
+  "from",
+  "with",
+  "as",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "it",
+  "its",
+  "this",
+  "that",
+  "these",
+  "those",
+  "there",
+  "here",
+  "when",
+  "while",
+  "via",
+  "if",
+  "then",
+  "than",
+  "so",
+  "such",
+  "into",
+  "onto",
+  "over",
+  "under",
+  "about",
+  "after",
+  "before",
+  "during",
+  "between",
+  "across",
+  "per",
+  "each",
+  "any",
+  "all",
+  "some",
+  "more",
+  "most",
+  "less",
+  "least",
+  "only",
+  "just",
+  "also",
+  "still",
+  "yet",
+  "does",
+  "do",
+  "did",
+  "doing",
+  "done",
+  "has",
+  "have",
+  "had",
+  "having",
+  "can",
+  "could",
+  "should",
+  "would",
+  "may",
+  "might",
+  "must",
+  "will",
+  "shall",
+  "we",
+  "you",
+  "i",
+  "they",
+  "he",
+  "she",
+  "them",
+  "us",
+  "me",
+  "my",
+  "your",
+  "our",
+  "their",
+  "his",
+  "her",
+  "own",
+  "same",
+  "too",
+  "very",
+  "now"
+]);
+var NEGATIONS = new Set(["not", "no", "nor", "without", "never", "non"]);
+var CONTRACTIONS = [
+  [/\bcannot\b/g, "can not"],
+  [/\bcan'?t\b/g, "can not"],
+  [/\bwon'?t\b/g, "will not"],
+  [/\bshan'?t\b/g, "shall not"],
+  [/\b([a-z]+)n't\b/g, "$1 not"],
+  [/\b(is|are|was|were|do|does|did|has|have|had|could|would|should|must|need|ai)nt\b/g, "$1 not"]
+];
+function expandContractions(s) {
+  let out = s.replace(/[‘’ʼ´`]/g, "'");
+  for (const [re, to] of CONTRACTIONS)
+    out = out.replace(re, to);
+  return out;
+}
+var CONVENTIONAL_PREFIX = /^(fix|feat|chore|ci|docs|refactor|test|perf|decide|triage|epic|cli|security)(?:\(([^)]*)\))?:\s*/;
+var DUPLICATE_THRESHOLD = 0.7;
+var DUPLICATE_SCAN_LIMIT = 1000;
+var MIN_TOKENS_FOR_MATCH = 3;
+function normalizeTitle(title) {
+  let s = expandContractions((title ?? "").toLowerCase().trim());
+  let type = null;
+  let area = null;
+  const m = CONVENTIONAL_PREFIX.exec(s);
+  if (m) {
+    type = m[1];
+    area = (m[2] ?? "").trim() || null;
+    s = s.slice(m[0].length);
+  }
+  const tokens = (s.match(/[\p{L}\p{N}][\p{L}\p{N}-]*/gu) ?? []).map((t) => t.replace(/^-+|-+$/g, "")).filter((t) => t.length > 0 && !(t.length === 1 && /[a-z]/.test(t))).filter((t) => !STOPWORDS.has(t));
+  return { type, area, tokens };
+}
+function discriminators(tokens) {
+  return new Set(tokens.filter((t) => /\p{N}/u.test(t) || NEGATIONS.has(t)));
+}
+function sameSet(a, b) {
+  if (a.size !== b.size)
+    return false;
+  for (const x of a)
+    if (!b.has(x))
+      return false;
+  return true;
+}
+function similarity(a, b) {
+  const A = new Set(normalizeTitle(a).tokens);
+  const B = new Set(normalizeTitle(b).tokens);
+  if (A.size === 0 || B.size === 0)
+    return 0;
+  let shared = 0;
+  for (const t of A)
+    if (B.has(t))
+      shared++;
+  return 2 * shared / (A.size + B.size);
+}
+function contains(shorter, longer) {
+  for (const t of shorter)
+    if (!longer.has(t))
+      return false;
+  return true;
+}
+function findDuplicateCandidates(title, openIssues, opts = {}) {
+  const threshold = opts.threshold ?? DUPLICATE_THRESHOLD;
+  const limit = opts.limit ?? 5;
+  const mine = normalizeTitle(title);
+  const mineSet = new Set(mine.tokens);
+  if (mineSet.size === 0)
+    return [];
+  const mineDisc = discriminators(mine.tokens);
+  const out = [];
+  for (const issue of openIssues) {
+    if (opts.excludeNumber !== undefined && issue.number === opts.excludeNumber)
+      continue;
+    const theirs = normalizeTitle(issue.title);
+    const theirSet = new Set(theirs.tokens);
+    if (theirSet.size === 0)
+      continue;
+    if (mine.area && theirs.area && mine.area !== theirs.area)
+      continue;
+    if (mine.type && theirs.type && mine.type !== theirs.type)
+      continue;
+    if (!sameSet(mineDisc, discriminators(theirs.tokens)))
+      continue;
+    const [shorter, longer] = mineSet.size <= theirSet.size ? [mineSet, theirSet] : [theirSet, mineSet];
+    if (shorter.size < MIN_TOKENS_FOR_MATCH) {
+      if (!sameSet(shorter, longer))
+        continue;
+    } else if (!contains(shorter, longer))
+      continue;
+    const score = similarity(title, issue.title);
+    if (score >= threshold) {
+      out.push({ number: issue.number, title: issue.title, score: Math.round(score * 1000) / 1000 });
+    }
+  }
+  out.sort((a, b) => b.score - a.score || a.number - b.number);
+  return out.slice(0, limit);
+}
+
 // src/commands/issue.ts
 init_config();
 
@@ -5487,9 +5688,52 @@ async function loadTriage(ctx, repo, number) {
     return { triage: null, unavailable: true };
   }
 }
+var EXIT_DUPLICATE_ISSUE = 12;
+function duplicatePreflight(repo, title, opts) {
+  let open;
+  try {
+    open = ghIssueList(repo, "open", DUPLICATE_SCAN_LIMIT);
+  } catch (e) {
+    console.warn(`⚠️  duplicate pre-flight SKIPPED — could not list open issues in ${repo}: ${e.message}`);
+    console.warn("⚠️  Filing anyway (a GitHub outage must not block a bug report) — check for a duplicate by hand.");
+    return [];
+  }
+  if (open.length >= DUPLICATE_SCAN_LIMIT) {
+    console.warn(`⚠️  duplicate pre-flight window is FULL (${open.length} open issues) — anything older than the newest ${DUPLICATE_SCAN_LIMIT} was NOT scanned; check by hand.`);
+  }
+  const candidates = findDuplicateCandidates(title, open);
+  if (candidates.length === 0)
+    return [];
+  const lines = candidates.map((c) => `#${c.number} — "${c.title}" (${c.score.toFixed(2)})`);
+  if (opts.allowDuplicate) {
+    console.warn(`⚠️  --allow-duplicate: filing anyway despite ${candidates.length} near-duplicate(s) at ≥${DUPLICATE_THRESHOLD}:`);
+    for (const l of lines)
+      console.warn(`   ${l}`);
+    return candidates;
+  }
+  if (opts.json || opts.yaml) {
+    emit(opts, { blocked: true, reason: "duplicate", candidates, threshold: DUPLICATE_THRESHOLD }, () => {});
+  } else {
+    console.error(`⛔ Not filed — ${candidates.length} open issue(s) already look like this:`);
+    for (const l of lines)
+      console.error(`   ${l}`);
+    console.error("");
+    console.error("Comment on the existing issue instead, or re-run with --allow-duplicate if it is genuinely a different bug.");
+  }
+  process.exit(EXIT_DUPLICATE_ISSUE);
+}
+function createIssueGuarded(args, opts, { skipPreflight = false } = {}) {
+  const { repo, title, body, labels } = args;
+  if (!skipPreflight)
+    duplicatePreflight(repo, title, opts);
+  for (const l of labels)
+    ghEnsureLabel(repo, l);
+  const created = ghIssueCreate(repo, title, body, labels);
+  emit(opts, { number: created.number, url: created.url, labels }, () => console.log(created.url));
+}
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
-  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const shots = opts.screenshot ?? [];
     const shotCaptions = opts.screenshotCaption ?? [];
     const shotErr = validateScreenshotSelection(shots, shotCaptions);
@@ -5503,6 +5747,7 @@ function registerIssueCommand(program2) {
     let body = opts.body === "-" ? await readStdin() : opts.body ?? "";
     for (const p of [...lintMessageBody(body), ...lintBodyLength(body)])
       console.warn(`⚠️  body lint: ${p}`);
+    duplicatePreflight(repo, title, opts);
     if (shots.length > 0) {
       for (const p of shots) {
         const size = statSync(p).size;
@@ -5546,11 +5791,7 @@ function registerIssueCommand(program2) {
 
 ${section}` : section;
     }
-    const labels = opts.label ?? [];
-    for (const l of labels)
-      ghEnsureLabel(repo, l);
-    const created = ghIssueCreate(repo, title, body, labels);
-    emit(opts, { number: created.number, url: created.url, labels }, () => console.log(created.url));
+    createIssueGuarded({ repo, title, body, labels: opts.label ?? [] }, opts, { skipPreflight: true });
   }));
   issue.command("work <number>").description("Exclusively claim an issue (lock + dump context); exits 3 when another agent holds it").option("--repo <fullname>", "Override target repo").option("--agent <name>", "Agent label recorded on the claim (default: $SHIPFLOW_AGENT or hostname)").option("--ttl <minutes>", "Claim lifetime in minutes (default 120)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
