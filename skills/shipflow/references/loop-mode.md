@@ -538,35 +538,31 @@ needs action), don't stop yet. If `bug-hunt` is on (`config get bug-hunt`, defau
    |---|---|
    | Genuinely the same defect, stated more precisely | Comment the extra detail on the open issue — don't file |
    | A distinct defect that merely shares the wording | Re-file with **`--allow-duplicate`**, and say why in the body |
-   | Different numbers or a negation (`exits 5`→`7`, `is`→`isn't`) | Files cleanly — the discriminator gate sees the difference. **But it cannot tell a real number from a `#N` citation** — known bypass below |
+   | Different numbers or a negation (`exits 5`→`7`, `is`→`isn't`) | Files cleanly — the discriminator gate sees the difference |
 
-   **Known limit — citing the issue you are restating bypasses the guard
-   entirely (open issue #587).** The discriminator gate treats every
-   digit-bearing token as must-match-exactly, and an issue *reference* is
-   digits. A restatement that cites the issue it restates therefore scores
-   `{427}` against `{}`, gate 3 rejects the pair before containment ever runs,
-   and **a genuine duplicate files clean**:
+   **Citing an issue: which citation excuses you, and which does not (#587).**
+   The discriminator gate treats every digit-bearing token as
+   must-match-exactly, and an issue *reference* is digits — so citing the issue
+   you were restating used to skip the check entirely. It no longer does. The
+   rule is per-candidate:
 
-   | Title filed while #427 is open | discriminators | Outcome |
+   | Title filed while #427 is open | vs #427 | vs every OTHER open issue |
    |---|---|---|
-   | #579's title, verbatim | `{}` | **refused** at 0.875 — the catch #580 exists for |
-   | the same title + ` (#427 regression)` | `{427}` | **files clean** — zero candidates |
+   | #579's title + ` (#427 regression)` | **refused** at 0.778 — `427` is dropped from gate 3, but the citation tokens stay in Dice, so 0.875 deflates to 0.778 | `427` still discriminates in full |
+   | #579's title + ` (#999 regression)` | files clean — `999` still discriminates | `999` still discriminates |
+   | `owner/repo#427` anywhere in the title | files clean — a cross-repo ref is not a citation | unchanged |
+   | `427` used bare *and* cited (`retried 427 times, see #427`) | files clean — one bare use is enough | unchanged |
 
-   One appended citation, opposite outcome. This is a **bypass, not a feature**,
-   and it bites exactly where duplicates are most likely: citing the original is
-   the first thing a filer does when restating it. Three live fixture rows
-   already carry the shape (#461, #479, #551).
-
-   | Deferred to #587, not dismissed | |
-   |---|---|
-   | Fails **open** | permits a filing, never refuses one |
-   | The fix tightens gate 3 | can only push the false-positive rate **up** |
-   | It invalidates every measured rate | needs its own measured round, not a tail-end patch |
-   | Pre-#580 status quo | caught 0% of duplicates — cited or not |
-
-   **Until #587 lands, a `#N` in your title means the duplicate check did not
-   run.** Search the open set by keyword yourself, or move the citation out of
-   the title and into the body.
+   Read it as: **a citation of the issue you are restating no longer excuses
+   you; a citation of any OTHER issue still does.** Measured on the live
+   122-title fixture: every one of 488 self-citing restatements is now caught
+   (0 before), and 0 of 488 titles citing an unrelated open issue is refused.
+   Dropping *every* cited number is deliberately NOT the rule — parked at #590
+   with 3 new false refusals and no extra catch. The paraphrase false negative
+   above (#404 / #569, ~0.38) is untouched — keep searching by keyword.
+   **The margin is thin**: 0.778 sits **0.078** above the 0.70 floor — measured,
+   three more content words in that filing (0.778 → 0.737 → 0.700 → clean) tip
+   the refusal into a clean file. That is the thin-margin risk tracked at #588.
 
    | Outcome | Exit | What you do |
    |---|---|---|

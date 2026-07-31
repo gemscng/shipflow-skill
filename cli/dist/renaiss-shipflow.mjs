@@ -5400,8 +5400,27 @@ var CONVENTIONAL_PREFIX = /^(fix|feat|chore|ci|docs|refactor|test|perf|decide|tr
 var DUPLICATE_THRESHOLD = 0.7;
 var DUPLICATE_SCAN_LIMIT = 1000;
 var MIN_TOKENS_FOR_MATCH = 3;
+var CITATION = /(?<![\w/])#(\d+)\b/g;
+var STANDALONE_NUMBER = /(?<!\w)(\d+)\b/g;
+function citedOnlyNumbers(raw) {
+  const cited = new Map;
+  for (const m of raw.matchAll(CITATION))
+    cited.set(m[1], (cited.get(m[1]) ?? 0) + 1);
+  if (cited.size === 0)
+    return new Set;
+  const seen = new Map;
+  for (const m of raw.matchAll(STANDALONE_NUMBER))
+    seen.set(m[1], (seen.get(m[1]) ?? 0) + 1);
+  const out = new Set;
+  for (const [n, count] of cited)
+    if (seen.get(n) === count)
+      out.add(n);
+  return out;
+}
 function normalizeTitle(title) {
-  let s = expandContractions((title ?? "").toLowerCase().trim());
+  const raw = (title ?? "").toLowerCase().trim();
+  const citations = citedOnlyNumbers(raw);
+  let s = expandContractions(raw);
   let type = null;
   let area = null;
   const m = CONVENTIONAL_PREFIX.exec(s);
@@ -5411,10 +5430,10 @@ function normalizeTitle(title) {
     s = s.slice(m[0].length);
   }
   const tokens = (s.match(/[\p{L}\p{N}][\p{L}\p{N}-]*/gu) ?? []).map((t) => t.replace(/^-+|-+$/g, "")).filter((t) => t.length > 0 && !(t.length === 1 && /[a-z]/.test(t))).filter((t) => !STOPWORDS.has(t));
-  return { type, area, tokens };
+  return { type, area, tokens, citations };
 }
-function discriminators(tokens) {
-  return new Set(tokens.filter((t) => /\p{N}/u.test(t) || NEGATIONS.has(t)));
+function discriminators(tokens, exclude) {
+  return new Set(tokens.filter((t) => (/\p{N}/u.test(t) || NEGATIONS.has(t)) && !(exclude !== undefined && exclude.has(t))));
 }
 function sameSet(a, b) {
   if (a.size !== b.size)
@@ -5448,7 +5467,6 @@ function findDuplicateCandidates(title, openIssues, opts = {}) {
   const mineSet = new Set(mine.tokens);
   if (mineSet.size === 0)
     return [];
-  const mineDisc = discriminators(mine.tokens);
   const out = [];
   for (const issue of openIssues) {
     if (opts.excludeNumber !== undefined && issue.number === opts.excludeNumber)
@@ -5461,7 +5479,9 @@ function findDuplicateCandidates(title, openIssues, opts = {}) {
       continue;
     if (mine.type && theirs.type && mine.type !== theirs.type)
       continue;
-    if (!sameSet(mineDisc, discriminators(theirs.tokens)))
+    const self = String(issue.number);
+    const selfExclude = mine.citations.has(self) || theirs.citations.has(self) ? new Set([self]) : undefined;
+    if (!sameSet(discriminators(mine.tokens, selfExclude), discriminators(theirs.tokens, selfExclude)))
       continue;
     const [shorter, longer] = mineSet.size <= theirSet.size ? [mineSet, theirSet] : [theirSet, mineSet];
     if (shorter.size < MIN_TOKENS_FOR_MATCH) {
