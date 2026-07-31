@@ -494,7 +494,8 @@ held until the *human reporter* confirms the worker's reading. Your review runs
 | Rule | Detail |
 | --- | --- |
 | **Every comment you post carries a marker** | `pr post-review` and `pr approve --comment` stamp `<!-- shipflow:loop-review -->`. Post a bare `gh pr comment` and you post as a *human* |
-| **You never release the gate** | only the reporter does, with a reply that is ONLY `confirmed` / `/confirm` / `approved` / `yes` / `lgtm` / `ship it` / `+1` / 👍 and nothing else. Exact token, whole reply — prose that reads as consent (`Confirmed — ship it`), or a token with a correction or a thank-you after it, does not clear it |
+| **You never release the gate** | only the reporter does, with a reply that is ONLY `confirmed` / `confirm` / `/confirm` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / `+1` / 👍 and nothing else. Exact token, whole reply — prose that reads as consent (`Confirmed — ship it`), or a token with a correction or a thank-you after it, does not clear it |
+| **A second, narrower door exists** | a numbered `N: answer` decision reply can also release it, under four preconditions. Rule and preconditions live in **`loop-mode.md` § `needs-reporter-review`** (which points at `contracts/shipflow-contract.json` → `intentGate.$comment`) — read them there, not from a copy here. You use neither door |
 | **Approving does not clear it** | `shipflow-approved` + a cleared intent gate are separate conditions; approve normally and let the PR park |
 | **A vanished label with no audit comment is a BUG** | every server-side removal posts `✅ needs-reporter-review cleared` naming the actor. No comment, no confirmation — say so in your verdict |
 

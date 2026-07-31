@@ -808,7 +808,8 @@ Silence still parks forever.
   | On a `needs-reporter-review` PR | Rule |
   | --- | --- |
   | **Any comment the loop posts** | MUST carry a `<!-- shipflow:` marker — `pr approve --comment` and `pr post-review` stamp `<!-- shipflow:loop-review -->` for you; a hand-written `gh pr comment` does not |
-  | **Releasing the gate** | only the reporter, with a reply that is ONLY `confirmed` / `/confirm` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / `+1` / 👍 and nothing else — never the loop |
+  | **Releasing the gate** | only the reporter, with a reply that is ONLY `confirmed` / `confirm` / `/confirm` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / `+1` / 👍 and nothing else — never the loop |
+  | **Releasing it the other way** — the numbered `N: answer` door | a decision reply to an escalation ALSO releases it, under **four** preconditions, every one required: the block is the whole quote-stripped reply; **every** line of that block is itself a decision line; **every** answer is a `confirmationTokens` entry; and the thread carries an escalation banner. That fourth one is weaker than it sounds — `escalationOutstanding` returns true on the **first banner found anywhere in the comment history**, with no answered/resolved/superseded check, so a **stale** banner still opens this door (#486). The rule is single-sourced in `contracts/shipflow-contract.json` → `intentGate.$comment` — read it there; do **not** restate the matcher here (two hand-written copies is how #411 happened) |
   | **Correcting the reading** | leaves the gate ON, by design: rework the PR — the loop now DOES, via `reporter_corrected` (see below) |
   | **A QUALIFIED yes** | also leaves it ON — `yes but change the copy first` is a correction, not consent |
   | **Prose that reads as consent** | also leaves it ON — even `Confirmed — ship it`, because it is not the token |
@@ -826,6 +827,27 @@ Silence still parks forever.
   phrasing nobody enumerated; this refuses when anything follows without ever
   inspecting it. A reply that misses gets **one** nudge on the PR naming every
   token and pointing commentary at a separate comment.
+
+  Both rows above describe the **contract and the code** — where the rule lives.
+  Whether a given deployment *runs* it is a **version question, and it has a
+  readable answer**: both doors shipped in server **0.28.2** (`a3b3d9c`, PR
+  #441), so a build at or above that has them and an older one does not. Never
+  state it either way from this doc — deployed versions drift, and a doc that
+  freezes one answer is #411's root cause again. **Read the version:**
+
+  | Check | Command |
+  | --- | --- |
+  | Deployed server build (plus CLI/plugin drift) | `renaiss-shipflow version` |
+  | The server directly | `GET /api/v1/version` on the API host |
+
+  **Why the CLI notice (`renderIntentGateNotice`) and the server nudge
+  (`renderIntentGateNudge`) deliberately say NOTHING about the numbered door —
+  leave it that way:** it grants no capability a bare `confirmed` doesn't (its
+  answers must all be `confirmationTokens` anyway), its fourth precondition
+  isn't knowable at label time so the notice would advertise a door that is
+  usually shut, and on a near-miss the nudge's existing advice is already the
+  correct advice. Both surfaces stay token-only on purpose; adding the numbered
+  door to them is a regression, not a fix.
 
   The loop **never** clears this gate on the reporter's behalf. Every removal
   the server performs posts an attributable audit comment naming the actor and
