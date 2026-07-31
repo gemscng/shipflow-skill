@@ -3241,6 +3241,8 @@ class ShipFlowClient {
       form.append("beforeCaption", c);
     for (const c of opts.afterCaptions ?? [])
       form.append("afterCaption", c);
+    for (const c of opts.actualCaptions ?? [])
+      form.append("actualCaption", c);
     for (const c of opts.imageCaptions ?? [])
       form.append("imageCaption", c);
     for (const tf of opts.touched ?? [])
@@ -3251,6 +3253,7 @@ class ShipFlowClient {
     };
     appendAll("before", opts.before);
     appendAll("after", opts.after);
+    appendAll("actual", opts.actual);
     appendAll("images", opts.images);
     const res = await this.fetchWithRefresh(`${this.baseUrl}/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/issues/${number}/evidence`, { method: "POST", body: form });
     if (!res.ok) {
@@ -5824,9 +5827,19 @@ function evidenceThreadVerdict(status, threadNotified, threadError) {
       };
   }
 }
-function validateEvidenceSelection(before, after, misc, labels = [], beforeCaptions = [], afterCaptions = [], imageCaptions = []) {
+function validateEvidenceSelection(before, after, misc, labels = [], beforeCaptions = [], afterCaptions = [], imageCaptions = [], actual = [], actualCaptions = []) {
   const hasBefore = before.length > 0;
   const hasAfter = after.length > 0;
+  const hasActual = actual.length > 0;
+  if (hasActual && (hasBefore || hasAfter)) {
+    return "--actual is for a bug with no fix yet — it can't be combined with --before/--after. Once a fix exists, attach the pair instead.";
+  }
+  if (hasActual) {
+    const nonImage = actual.filter((p) => !isImagePath(p));
+    if (nonImage.length) {
+      return `--actual takes screenshot(s) of the broken state — ${nonImage.join(", ")} is not an image. Attach video/other media with --file.`;
+    }
+  }
   if (hasBefore !== hasAfter) {
     return "Provide BOTH --before and --after: a screenshot before the fix and one after, so the fix's effect is visible.";
   }
@@ -5845,15 +5858,18 @@ function validateEvidenceSelection(before, after, misc, labels = [], beforeCapti
   if (afterCaptions.length > after.length) {
     return `${afterCaptions.length} --after-caption(s) for ${after.length} --after shot(s) — captions describe shots by position, at most one per screenshot.`;
   }
+  if (actualCaptions.length > actual.length) {
+    return `${actualCaptions.length} --actual-caption(s) for ${actual.length} --actual shot(s) — captions describe shots by position, at most one per screenshot.`;
+  }
   if (imageCaptions.length > misc.length) {
     return `${imageCaptions.length} --image-caption(s) for ${misc.length} supplementary file(s) — captions describe files by position, at most one per --image/--file.`;
   }
-  if (!hasBefore && !hasAfter) {
+  if (!hasBefore && !hasAfter && !hasActual) {
     if (misc.some(isImagePath)) {
-      return "Screenshot evidence must show the fix — pass --before <img> and --after <img>. (--file is only for video or extra media.)";
+      return "Screenshot evidence must show the fix — pass --before <img> and --after <img>, or --actual <img> for a bug with no fix yet. (--file is only for video or extra media.)";
     }
     if (misc.length === 0) {
-      return "Nothing to attach. Provide --before and --after screenshots (and optionally --file for a screen recording).";
+      return "Nothing to attach. Provide --before and --after screenshots, or --actual for a bug report (and optionally --file for a screen recording).";
     }
   }
   return null;
@@ -6306,15 +6322,17 @@ ${formatPrecedentSuggestion(precedent)}`;
     const released = await signalBestEffort(ctx, "issues", number, "release-claim", { repo, reason: `waiting on ${dep.repo}#${dep.number}` }, "Parked as waiting, but the release signal failed");
     emit(opts, { number, waiting: true, label: WAITING_ON_LABEL, on: `${dep.repo}#${dep.number}`, released, reason }, () => console.log(`⏳ #${number} waiting on ${depLabel} — labelled "${WAITING_ON_LABEL}"${released ? ", claim released" : ""}; the loop re-admits it when the dependency closes.`));
   }));
-  issue.command("evidence <number>").description("Attach testing evidence. Screenshots must show the fix: --before AND --after pairs, one per changed surface, named with --label (reporter thread + a PR comment, or the issue if no --pr)").option("--before <path...>", "Screenshot(s) BEFORE the fix — before[i] pairs with after[i]").option("--after <path...>", "Screenshot(s) AFTER the fix — one per --before").option("--label <text...>", 'Name for each pair, by position (e.g. --label "Mode row" "Grade ladder") — a multi-surface change attaches one labeled pair per surface').option("--before-caption <text...>", "Caption for each --before shot, by position — describes what THAT shot shows (keeps a summary from over-claiming)").option("--after-caption <text...>", "Caption for each --after shot, by position").option("--image-caption <text...>", "Caption for each supplementary --image/--file, by position").option("--touched <name...>", "Touched feature names — the evidence gallery renders a red gap card for each one without a matching proof pair").option("--image <path...>", "Extra screenshot file(s) — prefer --before/--after").option("--file <path...>", "Supplementary media — a screen recording (mp4/mov/webm) or extra files").option("--pr <n>", "Related PR number — when set, the evidence comment lands on the PR instead of the issue").option("--preview-url <url>", "Testing site URL").option("--caption <text>", "Short note shown with the evidence").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  issue.command("evidence <number>").description("Attach testing evidence. Screenshots must show the fix: --before AND --after pairs, one per changed surface, named with --label — or --actual alone when filing a bug that has no fix yet (reporter thread + a PR comment, or the issue if no --pr)").option("--before <path...>", "Screenshot(s) BEFORE the fix — before[i] pairs with after[i]").option("--after <path...>", "Screenshot(s) AFTER the fix — one per --before").option("--actual <path...>", "Screenshot(s) of the BROKEN state for a bug report — legal alone (no fix exists yet, so there is nothing to pair); can't be combined with --before/--after").option("--label <text...>", 'Name for each pair, by position (e.g. --label "Mode row" "Grade ladder") — a multi-surface change attaches one labeled pair per surface').option("--before-caption <text...>", "Caption for each --before shot, by position — describes what THAT shot shows (keeps a summary from over-claiming)").option("--after-caption <text...>", "Caption for each --after shot, by position").option("--actual-caption <text...>", "Caption for each --actual shot, by position — what THAT shot shows is broken").option("--image-caption <text...>", "Caption for each supplementary --image/--file, by position").option("--touched <name...>", "Touched feature names — the evidence gallery renders a red gap card for each one without a matching proof pair").option("--image <path...>", "Extra screenshot file(s) — prefer --before/--after").option("--file <path...>", "Supplementary media — a screen recording (mp4/mov/webm) or extra files").option("--pr <n>", "Related PR number — when set, the evidence comment lands on the PR instead of the issue").option("--preview-url <url>", "Testing site URL").option("--caption <text>", "Short note shown with the evidence").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const before = opts.before ?? [];
     const after = opts.after ?? [];
+    const actual = opts.actual ?? [];
     const labels = opts.label ?? [];
     const beforeCaptions = opts.beforeCaption ?? [];
     const afterCaptions = opts.afterCaption ?? [];
+    const actualCaptions = opts.actualCaption ?? [];
     const imageCaptions = opts.imageCaption ?? [];
     const misc = [...opts.file ?? [], ...opts.image ?? []];
-    const selErr = validateEvidenceSelection(before, after, misc, labels, beforeCaptions, afterCaptions, imageCaptions);
+    const selErr = validateEvidenceSelection(before, after, misc, labels, beforeCaptions, afterCaptions, imageCaptions, actual, actualCaptions);
     if (selErr) {
       console.error(selErr);
       process.exit(1);
@@ -6334,6 +6352,8 @@ ${formatPrecedentSuggestion(precedent)}`;
       afterCaptions,
       imageCaptions,
       touched: opts.touched ?? [],
+      actual: actual.map(toImg),
+      actualCaptions,
       images: misc.map(toImg)
     });
     const verdict = evidenceThreadVerdict(res.threadStatus, res.threadNotified, res.threadError);

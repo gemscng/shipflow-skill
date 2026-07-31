@@ -415,7 +415,7 @@ day they also mean "irrelevant", they stop meaning anything.
    - **Preview-deploy regression gate (when available).** If the PR has a
      preview deploy (deploy-bot comment / GitHub deployment) and the test_runner
      environment has `previewUrlPatterns` configured, run
-     `renaiss-shipflow regression run --ref <head-sha> --preview-url <preview-url> --wait`
+     `renaiss-shipflow regression --ref <head-sha> --preview-url <preview-url> --wait` (no `run` verb — the bare command IS the trigger, #417)
      and treat a non-zero exit as a blocking finding (cite the failing cases from
      its report). No preview deploy or no allowlist → skip; the worker's branch
      browser pass remains the per-PR E2E evidence.

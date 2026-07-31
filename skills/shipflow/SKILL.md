@@ -68,7 +68,7 @@ requests to the same CLI calls.
 | "set the default sign-off owner" | `renaiss-shipflow config set signoff-owner <github-login>` |
 | "set / check the git commit email" / "deployment blocked: unmatched commit email" | `renaiss-shipflow git-identity --fix` (repo-local identity from the GitHub account; captured at `login`) |
 | "I'm done with #42" / "release issue 42" | `renaiss-shipflow issue done 42` |
-| "attach a screenshot to #42" / "post test evidence" | `renaiss-shipflow issue evidence 42 --pr <pr> --before <b.png…> --after <a.png…> --label "<surface>…" --caption "..."` — one labeled pair per changed surface; `--file` only for video |
+| "attach a screenshot to #42" / "post test evidence" | `renaiss-shipflow issue evidence 42 --pr <pr> --before <b.png…> --after <a.png…> --label "<surface>…" --caption "..."` — one labeled pair per changed surface; `--file` only for video. Filing a bug (no fix yet, nothing to pair) → `--actual <broken.png>` instead |
 | "open a PR" / "send for review" | `renaiss-shipflow pr create --json` (after committing) |
 | "is PR 87 mergeable" / "can this auto-merge" | `renaiss-shipflow pr ready 87 --json` |
 | "any open review comments on 87" / "external reviews" | `renaiss-shipflow pr reviews 87 --json` (unresolved threads incl. bots) |
@@ -160,8 +160,9 @@ never bloats across items. Each tick (A) drives every owned PR/issue toward
 `merged`, then (B) admits new work under the `wip-limit`; when the queue empties,
 (C) a **bug sweep** files issues for reproduced bugs (`bug-hunt`, self-sustaining).
 **Every issue (intake) and every PR (pre-merge) passes through the reviewer first**
-(`require-review`) — a subagent that pulls `renaiss-shipflow features --json` (the
-feature map) for a whole-system review and approves via `pr approve`. Governed by
+(`require-review`) — a subagent that reviews against the whole system, not just the
+diff: `renaiss-shipflow features --json` (the feature map) at intake, and the
+single-call `renaiss-shipflow pr packet <n>` at PR review, approving via `pr approve`. Governed by
 the policy knobs in `config list` (`merge-policy` defaults to `manual`).
 
 Loop references: `references/loop-mode.md` (full playbook), `loop-worker.md` /

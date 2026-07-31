@@ -3,7 +3,9 @@
 The orchestrator dispatches one **worker** per work item via the Task tool. The
 worker runs in its **own context** and returns a compact payload — its code
 reading, edits, and test output never reach the orchestrator. Run inside the loop
-worktree (sequential) or a dedicated worktree (parallel mode).
+worktree when you're the only worker; in **parallel mode** you get your own
+worktree (`shipflow-loop-<n>`) — never share one with another worker, since a
+worktree can hold only one checked-out branch (`loop-mode.md` § Setup).
 
 ## Input the orchestrator passes
 - `issue` number + the `triage` payload (relatedFiles / relatedCommits / features)
@@ -72,8 +74,10 @@ also mean "irrelevant".
      branch's* code (local dev server) — it's the always-available per-PR gate.
      ShipFlow's server-side **regression test_runner** additionally supports
      per-branch runs when the PR has a **preview deploy** (Vercel etc.): run
-     `renaiss-shipflow regression run --ref <head-sha> --preview-url <preview-url> --wait`
-     and gate on its exit code. The preview host must match the environment's
+     `renaiss-shipflow regression --ref <head-sha> --preview-url <preview-url> --wait`
+     and gate on its exit code. (`regression` takes no subcommand — a stray
+     `run` exits with *"too many arguments for 'regression'"*; the only
+     subcommand is `regression status <executionId>`.) The preview host must match the environment's
      `previewUrlPatterns` allowlist (test_runner settings) or the run fails
      loudly — ask the operator to add the pattern once, don't retry blindly.
      Find the preview URL on the PR (deploy-bot comment / GitHub deployment).
@@ -159,6 +163,9 @@ also mean "irrelevant".
    Screenshots **must** be before+after pairs — `before[i]` pairs with
    `after[i]`, `--label` names each pair — and the command rejects a lone shot
    or mismatched counts. `--file` is only for a supplementary screen recording.
+   (`--actual` exists for the one case with no pair: **filing** a bug, where no
+   fix exists yet. A worker attaching *fix* evidence never uses it — the CLI
+   refuses to mix it with a pair.)
    Pass `--touched "<feature>"…` (the features your diff touches, from the
    map) — the hosted evidence gallery renders a red gap card for any touched
    feature lacking a proof pair, so coverage holes are visible before review.

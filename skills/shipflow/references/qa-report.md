@@ -36,9 +36,17 @@ After the E2E pass verifies a fix, compute the score for the affected page(s) an
 post the delta with the screenshot, so reviewer + merge gate see a number, not a vibe:
 
 ```bash
-renaiss-shipflow issue evidence <n> --pr <pr> --file "$EV/after.png" \
+renaiss-shipflow issue evidence <n> --pr <pr> \
+  --before "$EV/<surface>-before.png" --after "$EV/<surface>-after.png" \
+  --label "<surface>" \
   --caption "Verified: <what> · health <before>→<after> (Δ<+/-N>) · 0 new console errors"
 ```
+
+Fix evidence goes through `--before`/`--after` **pairs** (one per changed surface),
+never `--file`: the CLI rejects an image passed as `--file`, which is reserved for
+supplementary media (a screen recording). The one case with no pair is a **bug
+report**, which has no fix yet — that uses `--actual` (`bug-taxonomy.md` §3).
+Full contract: `references/loop-worker.md` §6.
 
 The **reviewer** reads the delta: a PR whose score *drops* is a regression signal —
 don't approve a negative delta unless it's an intentional, explained tradeoff. The
@@ -50,21 +58,39 @@ Persist a per-project baseline so the loop can tell a *new* bug from a known one
 catch what a fix broke in a **neighbouring feature** (the ones sharing paths in
 `features --json`).
 
-Store under the loop state dir (gitignored), keyed by project:
+Store it **outside the loop worktree**, in the CLI's own state dir, keyed by repo:
 
 ```json
-// .worktrees/shipflow-loop/.shipflow/qa-baseline.json
+// ~/.config/renaissshipflow/qa-baseline-<owner>-<repo>.json
 { "date": "YYYY-MM-DD", "healthScore": 86,
+  "headSha": "<origin/<default> HEAD at sweep time>",
+  "lastSweepAt": "YYYY-MM-DDTHH:MM:SSZ",
   "categoryScores": { "console": 100, "functional": 80, "...": 0 },
   "issues": [ { "id": "auto-qa-#123", "severity": "high", "area": "functional" } ] }
 ```
+
+`headSha` + `lastSweepAt` are what make the sweep **skippable**: nothing merged
+since the last sweep and it ran recently means a re-sweep can only find what it
+already found. Continuous mode ticks every ~15 min, so without them an idle repo
+burns a full E2E + browser QA pass ~96×/day. The skip rule lives in
+`loop-mode.md` §C.
+
+**Never inside the worktree.** The loop tears its worktree down at run end
+(Setup, `loop-mode.md`), so a baseline written to `.worktrees/shipflow-loop/…`
+is deleted with it — every sweep then reads "no baseline" and the whole
+regression half of Phase C silently no-ops. The path also moves under you:
+`EnterWorktree` (the *preferred* setup path) creates
+`.claude/worktrees/shipflow-loop`, not `.worktrees/`. `~/.config/renaissshipflow/`
+is stable across runs, worktrees, and branches, and already holds the CLI's
+credentials/config — nothing to gitignore.
 
 Each bug-sweep run, after scoring:
 - **score dropped vs baseline** → something regressed since last sweep. Surface it
   prominently; if you can attribute it to a recent merge, file it `severity:high`.
 - **issue in baseline now gone** → fixed; note it.
 - **new issue not in baseline** → file it (per `bug-taxonomy.md` §3), add to baseline.
-- Rewrite the baseline at the end of the sweep (current score + open issues).
+- Rewrite the baseline at the end of the sweep — current score + open issues,
+  **plus a fresh `headSha` and `lastSweepAt`**, or the next idle tick can't skip.
 
 When a worker fixes one issue, it re-scores the affected page **and its neighbours**
 (shared-path features from the map). A neighbour whose score dropped = the fix
