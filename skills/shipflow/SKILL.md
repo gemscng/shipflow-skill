@@ -64,7 +64,7 @@ requests to the same CLI calls.
 | "what features exist" / "feature map" / "system map" | `renaiss-shipflow features --json` |
 | "what work is greenlit" / "standing priorities" / "show the priorities doc" | `renaiss-shipflow priorities --json` (parses `docs/PRIORITIES.md` — human-edited only; loop intake consults it, see `references/loop-reviewer.md` Mode 1) |
 | "loop through issues and fix them" / "auto-fix issues" / `/shipflow-loop` | Loop mode — read `references/loop-mode.md` |
-| "this issue needs a human" / "block / escalate #42" | `renaiss-shipflow issue escalate 42 --reason "..." --category <money-write\|prod-config\|security\|missing-secret\|external-dependency\|invalid>` (names an owner: `--owner` → `signoff-owner` config → issue author; `--update` edits the live 🚧 comment; the reason is linted — questions need a `**Recommendation:**`) |
+| "this issue needs a human" / "block / escalate #42" | `renaiss-shipflow issue escalate 42 --reason "..." --category <money-write\|prod-config\|security\|missing-secret\|external-dependency\|invalid>` (names an owner: `--owner` → `signoff-owner` config → issue author; `--update` edits the live 🚧 comment; the reason is linted — questions need a `**Recommendation:**`). From an `escalateOnce` inbox row add `--for-pr <pr> --once-reason <escalateOnceReason>` — the once-key, without which the PR re-escalates every tick |
 | "set the default sign-off owner" | `renaiss-shipflow config set signoff-owner <github-login>` |
 | "set / check the git commit email" / "deployment blocked: unmatched commit email" | `renaiss-shipflow git-identity --fix` (repo-local identity from the GitHub account; captured at `login`) |
 | "I'm done with #42" / "release issue 42" | `renaiss-shipflow issue done 42` |

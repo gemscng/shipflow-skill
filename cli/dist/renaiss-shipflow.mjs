@@ -2164,7 +2164,7 @@ var init_shipflow_contract_data = __esm(() => {
       }
     },
     markers: {
-      $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. MATCHING SEMANTICS (issue #411 changed these deliberately — the note above used to read `Do NOT change these matching semantics`): `commentIsLoopMachinery` no longer denylists three specific markers, it matches `markerPrefix` — ANY `<!-- shipflow:` token — because a denylist of known shapes guarding an unbounded set of free-form agent prose fails OPEN on every new shape the loop invents (measured on PRs #401 and #405, which cleared a merge blocker nobody confirmed). `markerPrefix` is the OPEN token every ShipFlow marker starts with; a comment carrying any of them is machinery and can never stand in for a human decision. `loopReview` stamps the loop reviewer's verdict comment (CLI review-contract.ts renderFindingBody + `pr approve --comment`) — it was a CLI-local const the server could not see, which is exactly how #405 cleared its own gate. `intentGateCleared` is the OPEN token on the server's attributable audit comment posted on EVERY `needs-reporter-review` removal, rendered as `<!-- shipflow:intent-gate-cleared by=<login> -->`; the CLI's intent gate reads it as the clearance artifact instead of trusting the bare `unlabeled` timeline event (see the `intentGate` section) — and reads it ANCHORED (own line, `by=<login> -->` shape) and ONLY from a bot/trusted-association author, because a bare Contains over every comment let anyone who can quote the literal disarm the gate permanently. `intentGateHint` stamps the server's one-time nudge posted when a human reply on a gated thread misses the release grammar; its presence is also how the nudge stays one-time (fail-stuck was previously invisible — the miss path only logged). `reworkFrom` is the OPEN-TOKEN a rework worker stamps on the comment it posts after acting on a reporter's CORRECTION of an intent-gated PR (issue #442), rendered as `<!-- shipflow:rework-from id=<comment-id> -->` — the `id=` attribute convention mirrors `precedentApplied`'s `pid=`. The CLI's `reporterCorrectionOn` reads the id back so suppression is EXACT (that comment has been answered) rather than timestamp-ordered, and counts the markers to enforce the rework ceiling; the server needs no accessor because `markerPrefix` already makes any comment carrying it machinery. It is the anti-self-loop backstop: without it a loop comment on a gated PR reads as a fresh reporter correction and the loop reworks in response to itself. Only the literals are single-sourced — each consumer still owns its own matching semantics.",
+      $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. MATCHING SEMANTICS (issue #411 changed these deliberately — the note above used to read `Do NOT change these matching semantics`): `commentIsLoopMachinery` no longer denylists three specific markers, it matches `markerPrefix` — ANY `<!-- shipflow:` token — because a denylist of known shapes guarding an unbounded set of free-form agent prose fails OPEN on every new shape the loop invents (measured on PRs #401 and #405, which cleared a merge blocker nobody confirmed). `markerPrefix` is the OPEN token every ShipFlow marker starts with; a comment carrying any of them is machinery and can never stand in for a human decision. `loopReview` stamps the loop reviewer's verdict comment (CLI review-contract.ts renderFindingBody + `pr approve --comment`) — it was a CLI-local const the server could not see, which is exactly how #405 cleared its own gate. `intentGateCleared` is the OPEN token on the server's attributable audit comment posted on EVERY `needs-reporter-review` removal, rendered as `<!-- shipflow:intent-gate-cleared by=<login> -->`; the CLI's intent gate reads it as the clearance artifact instead of trusting the bare `unlabeled` timeline event (see the `intentGate` section) — and reads it ANCHORED (own line, `by=<login> -->` shape) and ONLY from a bot/trusted-association author, because a bare Contains over every comment let anyone who can quote the literal disarm the gate permanently. `intentGateHint` stamps the server's one-time nudge posted when a human reply on a gated thread misses the release grammar; its presence is also how the nudge stays one-time (fail-stuck was previously invisible — the miss path only logged). `reworkFrom` is the OPEN-TOKEN a rework worker stamps on the comment it posts after acting on a reporter's CORRECTION of an intent-gated PR (issue #442), rendered as `<!-- shipflow:rework-from id=<comment-id> -->` — the `id=` attribute convention mirrors `precedentApplied`'s `pid=`. The CLI's `reporterCorrectionOn` reads the id back so suppression is EXACT (that comment has been answered) rather than timestamp-ordered, and counts the markers to enforce the rework ceiling; the server needs no accessor because `markerPrefix` already makes any comment carrying it machinery. It is the anti-self-loop backstop: without it a loop comment on a gated PR reads as a fresh reporter correction and the loop reworks in response to itself. `escalateOnce` is the OPEN-TOKEN the CLI stamps INSIDE the escalation banner when `issue escalate` is given `--for-pr <n> --once-reason <r>`, rendered as `<!-- shipflow:escalate-once pr=<n> reason=<r> -->` — the `pr=`/`reason=` attribute convention mirrors `precedentContext`'s `cat=`/`q=`. It is the PERMANENT once-key for `inbox`'s `escalateOnce` row (issue #488): the key USED to be the parent issue's live `needs-human` label, but the server's UnblockNeedsHuman removes that label on any non-bot, non-machinery comment BY DESIGN, so the only once-key was erased the moment a human replied and the row re-escalated every tick forever. A comment marker cannot be erased by a reply, and unlike a label it CARRIES THE REASON — so the invariant it enforces is `at most one escalation per (PR, reason), EVER`: a new reason on the same PR earns exactly one more, and the PR is capped at one escalation per `ESCALATE_ONCE_REASONS` entry, forever. The CLI reads it back from the PARENT issue's comments under THREE filters, ALL required, because each of the first two was measured insufficient on its own: (1) only comments the CLI's own account authored (`viewerDidAuthor`); (2) only ANCHORED — alone on its line, starting at COLUMN 0, no leading whitespace — because a quoted marker is a claim, not evidence; those two are the intent-gate audit record's rule (#411). (3) only from comments that ARE an escalation banner (`isEscalationBanner`, the same `escalationBannerHeading` prefix `findLatestEscalationComment` selects on) — added in PR #489 round 4. Filters 1+2 alone accepted an anchored marker from ANY CLI-authored comment on the parent, and the CLI writes many comments that are not banners: `issue wait --reason <text>` posts one on that very issue with LLM-composed text interpolated raw, on the path loop-mode.md mandates. That reason forged a permanent key and silently spent the one escalation the (PR, reason) pair ever earns — issue #488's exact harm through the adjacent door. Scoping the READ was chosen over neutralizing yet another writer: rounds 2 and 3 each hardened one side of this boundary and left the other open, whereas a key that counts ONLY where the single writer of a key (`formatEscalationBody`) puts one means adding a new CLI comment can never create a new forgery surface. The harvester `extractEscalateOnceMarkers` is scoped by the same predicate one hop earlier, so an unscoped harvest cannot LAUNDER a forged key out of a non-banner comment and into a banner via the `--update` carry-forward. Neutralization below stays defence in depth, not the wall. The anchor tolerated leading indentation until PR #489 round 3; that tolerance bought nothing (the renderer always emits a marker at column 0) and cost a forgery route, since four leading spaces is exactly how markdown spells a code block. Trailing whitespace and CRLF ARE tolerated — opposite polarity: a real key that fails to match reads as never-filed and re-opens the storm, and trailing space cannot smuggle a marker in. NEUTRALIZATION (the other half, PR #489 round 3): every banner is a comment the CLI's OWN account authors, so ANY free-form string folded into one is a forgery vector — an own-line marker in it reads back as a filed key and permanently suppresses an escalation a human is waiting on. So EVERY operator- or server-supplied string reaching a banner has its `<!-- shipflow:` tokens escaped to `&lt;!-- shipflow:` (readable, unmatchable): the free-text `--reason`, `--owner`, and the echoed precedent `answer`/`author`/`sourceUrl`/`category`/`fingerprint`/`id`. Round 2 neutralized the precedent answer ALONE and left `--reason` beside it raw; that asymmetry was itself the defect, so the rule is positional now — nothing free-form reaches a banner un-neutralized. The escaped replacement is DERIVED from `markerPrefix` (only the leading `<` is escaped), never a hand-written twin, so the two halves cannot drift. Whitespace collapsing runs BEFORE escaping (PR #489 round 4): the other order left a token already split across a line break unmatched, then REBUILT it into a live one — inert only because every call site happens to prefix the field, a positional accident rather than a property of the neutralizer. The two `PrecedentMatch` numerics folded into a banner (`sourceIssue`, `reuseCount`) are coerced with `Number()` at the render site: that response is an unchecked cast over server JSON, so `number` is a compile-time claim, not a fact about the bytes. Single-line fields additionally have newlines collapsed, or a value could BREAK OUT of the line the renderer composed for it and land a marker at column 0 anyway (`pid=`/`cat=` are interpolated into a marker line themselves). The RAW reason is still what `precedentContext` encodes — the server fingerprints that text — so the two must not be conflated. WRITE SIDE: `issue escalate --update` REPLACES a banner body in place, and `findLatestEscalationComment` matches ANY CLI-authored comment opening with the banner heading — which the escalate-once banner is — so the CLI carries every anchored marker on the edited body FORWARD (`preserveEscalateOnceMarkers`). Without that, an ordinary UNKEYED re-escalation of the same parent (the path the escalation contract MANDATES: `Shrink, don't stack — one live escalation per issue`) erased the key and handed that (PR, reason) back its per-tick storm forever. Related: a keyed escalation SKIPS the precedent lookup entirely. The reason it must never auto-apply is that the server's undo retires the precedent but cannot un-write a permanent marker, so an undone auto-application would park the row forever with its promised fresh escalation never arriving. PR #489 round 2 achieved that by DEMOTING the `apply` verdict after the call; round 3 moved it before, because `precedents/match` increments the reuse count and writes an `Applied` event BEFORE it returns — so demoting downstream still left the server having booked a reuse that never happened, advancing take-rate metrics and pushing the precedent toward premature re-confirmation. Not asking is the only way not to be counted. Consequence: a keyed escalation shows no `Precedent on file` suggestion; restoring that needs a non-mutating surface-only match on the SERVER. Do NOT key this off `escalationOutstanding`/`findLatestEscalationComment`: those ask whether an escalation is OUTSTANDING (issue #486), the opposite polarity of whether one was EVER FILED, and sharing a helper between the two reintroduces this bug. The server needs no accessor — `markerPrefix` already makes any comment carrying it machinery. Only the literals are single-sourced — each consumer still owns its own matching semantics.",
       triaged: "<!-- shipflow:triaged -->",
       loop: "<!-- shipflow:loop -->",
       loopReview: "<!-- shipflow:loop-review -->",
@@ -2178,7 +2178,8 @@ var init_shipflow_contract_data = __esm(() => {
       precedentContext: "<!-- shipflow:precedent-context",
       precedentApplied: "<!-- shipflow:precedent-applied",
       intentGateHint: "<!-- shipflow:intent-gate-hint -->",
-      reworkFrom: "<!-- shipflow:rework-from"
+      reworkFrom: "<!-- shipflow:rework-from",
+      escalateOnce: "<!-- shipflow:escalate-once"
     },
     intentGate: {
       $comment: "The release rule for the #190 intent gate (`needs-reporter-review`), single-sourced so the server's matcher, the CLI's ping comment and the skill docs cannot drift (issue #411 — the doc promised a rule the code did not implement). POLARITY: the label is a merge blocker held until a human CONFIRMS, so this is an AUTHORIZATION control, not a sentiment classifier. THE RULE: the quote-stripped body must reduce to EXACTLY ONE meaningful line — blank lines and pure-decoration lines (a `---` rule) are scaffolding, but a fenced block and everything in it COUNT as content — and that line, with leading/trailing markdown decoration and punctuation trimmed, must EQUAL one of `confirmationTokens` (case-insensitive, emoji skin-tone/variation modifiers normalised away). Nothing else clears the gate: the token is the WHOLE reply, or it does not confirm. WHY THE WHOLE BODY (PR #441, third review pass): whole-line equality judged `block[0]` and ignored everything after it, so a bare token on line 1 confirmed whatever followed. Measured through the real handler, all of `Confirmed`+`But scope it to the CLI only`, `\uD83D\uDC4D`+`not this implementation though`, `yes`+`Actually no, revert it`, `LGTM`+`hold the merge, this is wrong`, `confirmed`+`- but only the CLI half` CLEARED, and so did the blank-line forms `confirmed`+`Actually no, revert it` and `Yes`+`Actually no, revert it`. Every one is #411's exact harm: a merge on a reading the reporter had just narrowed. A SINGLE newline was enough, and that settles the scoping question — the rule ALREADY refuses extra words on the token's own line (`Confirmed — ship it` is armed), so accepting arbitrary text one newline later is incoherent: the same act, the same ambiguity, the opposite answer. Drawing the boundary at the line or at the paragraph only moves the hole down; this defect has now appeared at three granularities. Requiring the whole body is NOT the denylist the veto list was — it never inspects what follows, it refuses when anything follows. THE PRICE: `confirmed` plus a thank-you parks too. Accepted — commentary goes in a separate comment, costing one extra reply, never a wrong merge. A pasted fenced block counts as content here (unlike in the `N: answer` block parser, which skips fences whole so a fence's inner line can never be promoted to the judged line): `/confirm` over a fenced `no` was measured clearing, and a token with an attachment is not a token alone. WHY AN EXACT TOKEN AND NOT A GRAMMAR (PR #441, second review pass): the previous design matched an affirmative OPENING WORD and then vetoed a list of negations and contrastives found later in the paragraph. That is a denylist of known shapes guarding an unbounded set of free-form natural language — the exact anti-pattern this issue exists to close, re-earned inside its own fix. Negation-after-affirmative has no finite enumeration: `Confirmed the bug still repros`, `Yes, change the copy first` and `ok 1 - test passed` all survived a 27-word veto list, and each one FAILED OPEN — it merged a reading nobody confirmed. An exact token has the correct failure polarity for EVERY input, not merely for the inputs somebody remembered to enumerate: anything that is not the token leaves the gate armed, which one more reply fixes. Tokens must be unambiguous ALONE, as a whole line — that is what excludes `ok`, `sure`, `agreed`, `correct` and every bare imperative (`ship`, `merge`, `approve`, `proceed`), which read as consent or as an instruction depending on the sentence they open. The `N: answer` reply protocol also releases the gate, but it is held to the SAME stands-alone invariant as the token path (PR #441, fourth review pass): the decision block must BE the whole quote-stripped reply (no meaningful line outside it, a pasted fence included), EVERY line of that block must itself be a decision line, EVERY answer must be a `confirmationTokens` entry, and an escalation banner must actually be outstanding on the thread. Both positional checks are load-bearing and neither alone suffices — measured by ablation, the length test alone leaves `1: yes` + NEWLINE + `Actually no, revert it` clearing (same paragraph, so the counts match) and the per-line test alone leaves `1: yes` + BLANK LINE + `revert it` clearing (a later paragraph the block never reached). Reading the answers had fixed WHAT the block said but not WHERE it stopped, so this door stayed fail-OPEN at both granularities after the token path had closed both — and the escalation-outstanding guard does not mitigate it, because answering `N:` is exactly what a reporter does on an escalated thread — a content-agnostic `^\\\\d+:` match let `1: no, redo it` clear the blocker it was rejecting, and a pasted stack-trace line `10: undefined is not a function` do it by accident. FAIL-STUCK IS THE PRICE, and it is paid deliberately in two places, BOTH of which must state that the token is the whole reply or a reporter cannot discover it: `releaseHint` is the exact sentence the CLI puts on the PR when it APPLIES the label, and the server posts a one-time `intentGateHint` nudge naming the tokens whenever a human reply misses — including when the commenter's `author_association` is untrusted, which was the one branch that failed stuck in silence. Both render the token list FROM `confirmationTokens`, never from a hand-written copy, so neither can drift from the matcher — preserve that. Removing the label by hand stays the human override. Do NOT re-add a free-text grammar here to make it friendlier — narrowing the openers is safe, widening them is how this control dies. AUDIT AUTHOR (issue #537): `auditAuthorSlug` is the GitHub App slug that posts the `intentGateCleared` audit comment — the ONE bot identity the CLI's `isIntentGateAuditComment` trusts. It exists because the reader had to move to REST to see botness at all: `gh issue view --json comments` is GraphQL, where a Bot's `login` carries NO `[bot]` suffix and a GitHub App's `authorAssociation` is `NONE`, so the `[bot]`-suffix test the CLI shipped could never fire and the #411 clearance path was dead from the day it landed (measured on PR #489, gh 2.95.0). REST's `user.type == \"Bot\"` restores the signal — but botness ALONE is not identity: `gemini-code-assist[bot]` and `chatgpt-codex-connector[bot]` are also `type: Bot` and comment on these very PRs, so trusting any bot would trade a dead control for a forgeable one. The CLI therefore requires `user.type == \"Bot\"` AND the login, normalised (trailing `[bot]` stripped, case-folded), to EQUAL this slug. It is a ONE-ENTRY ALLOWLIST on purpose: this is an authorization predicate on a merge gate, and the failure mode of a wrong entry must be fail-STUCK (one more reporter reply, or a hand removal of the label — the standing human override), never fail-OPEN. A self-hosted deployment that installs the App under a different slug edits THIS key — never a literal in the CLI, and never by widening the rule to \"any bot\". The `[bot]` suffix is stripped rather than required because the two APIs disagree about it; the suffix is a rendering detail of REST, not an identity. A PAT-backed machine user has `type: \"User\"` and keeps clearing through the OWNER/MEMBER/COLLABORATOR association branch, which this key does not touch.",
@@ -2204,225 +2205,9 @@ var init_shipflow_contract_data = __esm(() => {
   };
 });
 
-// src/escalation-format.ts
-function bulletizeReason(reason) {
-  if (reason.includes(`
-`))
-    return reason;
-  return enumerateReason(reason, /\s*\((\d+)\)\s*/, "1", (m, text) => `${m}. ${text}`) ?? enumerateReason(reason, /\s*\(([a-z])\)\s*/, "a", (_m, text) => `- ${text}`) ?? reason;
-}
-function enumerateReason(reason, marker, firstMarker, line) {
-  const parts = reason.split(marker);
-  if (parts.length < 5)
-    return null;
-  const lead = parts[0].trim();
-  if (parts[1] !== firstMarker)
-    return null;
-  const items = [];
-  for (let i = 1;i + 1 < parts.length; i += 2) {
-    const itemText = parts[i + 1].replace(/[;.\s]+$/, "").trim();
-    if (!itemText)
-      continue;
-    items.push(line(parts[i], itemText));
-  }
-  if (items.length < 2)
-    return null;
-  return lead ? `${lead}
-
-${items.join(`
-`)}` : items.join(`
-`);
-}
-function isActionHeading(heading) {
-  return /action\s+needed/i.test(heading);
-}
-function foldSecondarySections(reason) {
-  if (!/^###\s/m.test(reason))
-    return reason;
-  const sections = [{ heading: null, lines: [] }];
-  for (const line of reason.split(`
-`)) {
-    if (/^###\s/.test(line))
-      sections.push({ heading: line.replace(/^#+\s*/, "").trim(), lines: [] });
-    else
-      sections[sections.length - 1].lines.push(line);
-  }
-  const anyAction = sections.some((s) => s.heading && isActionHeading(s.heading));
-  let firstHeaded = true;
-  const rendered = sections.map((s) => {
-    const body = s.lines.join(`
-`).trim();
-    if (s.heading === null)
-      return body;
-    const visible = anyAction ? isActionHeading(s.heading) : firstHeaded;
-    firstHeaded = false;
-    if (visible)
-      return `### ${s.heading}
-${body}`;
-    return `<details>
-<summary><b>${s.heading}</b></summary>
-
-${body}
-
-</details>`;
-  }).filter(Boolean);
-  return rendered.join(`
-
-`);
-}
-function normalizeOwner(raw) {
-  const login = (raw ?? "").trim().replace(/^@/, "");
-  return login || undefined;
-}
-function proseWordCount(text) {
-  return text.replace(/`[^`]+`/g, "code").split(/\s+/).filter(Boolean).length;
-}
-function overlongActionLines(reason) {
-  const offenders = [];
-  let inActionSection = false;
-  let inFence = false;
-  for (const line of reason.split(`
-`)) {
-    if (/^\s*```/.test(line.trim())) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence)
-      continue;
-    if (/^###\s/.test(line)) {
-      inActionSection = isActionHeading(line);
-      continue;
-    }
-    if (!inActionSection)
-      continue;
-    const t = line.trim();
-    if (t.startsWith("|")) {
-      const cells = t.replace(/^\|/, "").replace(/\|$/, "").split("|");
-      if (cells.some((cell) => proseWordCount(cell) > ACTION_LINE_WORD_LIMIT))
-        offenders.push(t);
-      continue;
-    }
-    if (proseWordCount(line) > ACTION_LINE_WORD_LIMIT)
-      offenders.push(t);
-  }
-  return offenders;
-}
-function lintEscalationReason(reason) {
-  const r = reason.trim();
-  const problems = [];
-  if (!r)
-    return ["no reason given — state the decision or action the human must take"];
-  if (/\?\s*$/m.test(r) && !/\*\*recommendation:?\*\*/i.test(r)) {
-    problems.push(`contains an open question ("?") but no **Recommendation:** line — every question put to a human must carry the loop's recommended answer`);
-  }
-  if (/see the issue body/i.test(r)) {
-    problems.push('says "see the issue body" — an escalation must be self-contained; inline the substance');
-  }
-  if (r.includes(`
-`) && !r.split(`
-`).some((l) => /^###\s/.test(l) && isActionHeading(l))) {
-    problems.push('structured reason is missing the "### \uD83D\uDC64 Action needed" section — lead with the concrete steps');
-  }
-  for (const line of overlongActionLines(r)) {
-    problems.push(`"Action needed" line over ${ACTION_LINE_WORD_LIMIT} words ("${line.slice(0, 60)}…") — ` + `a step (or table cell) must read in one breath; move the detail to "### Why it's blocked" (it renders folded)`);
-  }
-  return problems;
-}
-function encodePrecedentContext(category, reason) {
-  const q = Buffer.from(reason, "utf8").toString("base64");
-  return `${SHIPFLOW_CONTRACT.markers.precedentContext} cat=${category} q=${q} -->`;
-}
-function formatPrecedentSuggestion(m) {
-  const p = m.precedent;
-  if (!p)
-    return "";
-  const note = m.classDemoted ? "This class was demoted after reversals — it is never auto-applied." : m.outcome === "reconfirm" ? "It is due for re-confirmation — confirm it still holds." : "This class is never auto-applied — reply to reuse it or answer fresh.";
-  return [
-    "<details>",
-    "<summary><b>Precedent on file — you answered this before</b></summary>",
-    "",
-    `On #${p.sourceIssue}, @${p.author} answered: "${p.answer}" ([original reply](${p.sourceUrl})).`,
-    `Reply \`same\` to reuse it, or answer fresh. ${note}`,
-    "",
-    "</details>"
-  ].join(`
-`);
-}
-function formatPrecedentDisclosure(m) {
-  const p = m.precedent;
-  if (!p)
-    return "";
-  return [
-    `\uD83D\uDD01 **Auto-resolved per your #${p.sourceIssue} decision** — reply \`undo\` to reverse it.`,
-    "",
-    `**Decision reused:** "${p.answer}" — @${p.author}, [original reply](${p.sourceUrl})`,
-    "",
-    "<details>",
-    `<summary><b>What was auto-applied — ${m.category}</b></summary>`,
-    "",
-    `**Matched precedent:** \`${m.fingerprint}\` · reuse ${p.reuseCount} · expires ${p.expiresAt.slice(0, 10)}`,
-    "**Undo:** one reply `undo` (or `no`) reverses this, retires the precedent, and re-escalates the question to you.",
-    "",
-    "</details>",
-    `${SHIPFLOW_CONTRACT.markers.precedentApplied} pid=${p.id} cat=${m.category} -->`
-  ].join(`
-`);
-}
-function findLatestEscalationComment(comments) {
-  for (let i = comments.length - 1;i >= 0; i--) {
-    const c = comments[i];
-    if (c.viewerDidAuthor === false)
-      continue;
-    if (c.body.trimStart().startsWith(SHIPFLOW_CONTRACT.markers.escalationBannerHeading))
-      return c;
-  }
-  return null;
-}
-function formatEscalationBody(reason, opts = {}) {
-  if (opts.category && !(opts.category in ESCALATION_CATEGORIES)) {
-    throw new Error(`Unknown escalation category "${opts.category}" — valid: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`);
-  }
-  const why = foldSecondarySections(bulletizeReason(reason.trim())) || "_No reason given._";
-  const owner = normalizeOwner(opts.owner);
-  return [
-    ESCALATION_BANNER,
-    "",
-    ...owner ? [`**Owner:** @${owner}`, ""] : [],
-    why,
-    "",
-    ...opts.category ? [
-      "<details>",
-      `<summary><b>Why a human must decide — ${opts.category}</b></summary>`,
-      "",
-      ESCALATION_CATEGORIES[opts.category],
-      "",
-      "</details>",
-      ""
-    ] : [],
-    "---",
-    `<sub>Reply with your decision (\`1: <answer>\` per numbered item works) — the **\`${SHIPFLOW_CONTRACT.labels.names.needsHuman}\`** label clears automatically and the loop resumes.</sub>`,
-    ...opts.category ? [encodePrecedentContext(opts.category, reason.trim())] : []
-  ].join(`
-`);
-}
-var ESCALATION_CATEGORIES, ACTION_LINE_WORD_LIMIT, ESCALATION_BANNER;
-var init_escalation_format = __esm(() => {
-  init_shipflow_contract_data();
-  ESCALATION_CATEGORIES = {
-    "money-write": "Enabling this writes real money-bearing values (prices, payouts, billing) to live systems. " + "A bad value reaches customers immediately, and transactions made at a wrong value can't be " + "undone by reverting data. The loop never self-authorizes money writes — a human owns the go/no-go.",
-    "prod-config": "This changes production configuration (env vars, flags, infrastructure) whose blast radius " + "spans everything behind it; a mistake can take production down or silently change live " + "behavior. The loop never applies production config itself.",
-    security: "This touches a security- or trust-critical surface (authn/authz, secrets, injection-prone " + "parsing) where a mistake is exploitable and autonomous validation can't establish safety.",
-    "missing-secret": "The work is blocked on a credential, secret, or account only a human can provision. Nothing " + "is wrong with the code — the loop lacks access it cannot grant itself.",
-    "external-dependency": "Blocked on an external system or third party (vendor approval, DNS, a service outside this " + "repo) that the loop cannot drive.",
-    invalid: "The issue looks invalid, duplicate, or out of scope; closing someone's issue is a judgment " + "call the loop leaves to a human."
-  };
-  ACTION_LINE_WORD_LIMIT = SHIPFLOW_CONTRACT.readability.visibleLineWordCap;
-  ESCALATION_BANNER = `${SHIPFLOW_CONTRACT.markers.escalationBannerHeading} — the loop is parked here until you reply.`;
-});
-
 // src/pr-state.ts
-function owesEscalation(cl) {
-  return cl.reasons.some((r) => ESCALATE_ONCE_REASONS.includes(r));
+function escalationReasonsOwed(cl) {
+  return ESCALATE_ONCE_REASONS.filter((r) => cl.reasons.includes(r));
 }
 function ciStateOf(checks) {
   if (!checks || checks.length === 0)
@@ -2793,6 +2578,279 @@ var init_pr_state = __esm(() => {
   CONFIRMATION_TOKENS = new Set(SHIPFLOW_CONTRACT.intentGate.confirmationTokens.map((t) => t.toLowerCase()));
   PART_OF_ISSUE_RE = /Part of #(\d+)/gi;
   TRUSTED_AUTHOR_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+});
+
+// src/escalation-format.ts
+function bulletizeReason(reason) {
+  if (reason.includes(`
+`))
+    return reason;
+  return enumerateReason(reason, /\s*\((\d+)\)\s*/, "1", (m, text) => `${m}. ${text}`) ?? enumerateReason(reason, /\s*\(([a-z])\)\s*/, "a", (_m, text) => `- ${text}`) ?? reason;
+}
+function enumerateReason(reason, marker, firstMarker, line) {
+  const parts = reason.split(marker);
+  if (parts.length < 5)
+    return null;
+  const lead = parts[0].trim();
+  if (parts[1] !== firstMarker)
+    return null;
+  const items = [];
+  for (let i = 1;i + 1 < parts.length; i += 2) {
+    const itemText = parts[i + 1].replace(/[;.\s]+$/, "").trim();
+    if (!itemText)
+      continue;
+    items.push(line(parts[i], itemText));
+  }
+  if (items.length < 2)
+    return null;
+  return lead ? `${lead}
+
+${items.join(`
+`)}` : items.join(`
+`);
+}
+function isActionHeading(heading) {
+  return /action\s+needed/i.test(heading);
+}
+function foldSecondarySections(reason) {
+  if (!/^###\s/m.test(reason))
+    return reason;
+  const sections = [{ heading: null, lines: [] }];
+  for (const line of reason.split(`
+`)) {
+    if (/^###\s/.test(line))
+      sections.push({ heading: line.replace(/^#+\s*/, "").trim(), lines: [] });
+    else
+      sections[sections.length - 1].lines.push(line);
+  }
+  const anyAction = sections.some((s) => s.heading && isActionHeading(s.heading));
+  let firstHeaded = true;
+  const rendered = sections.map((s) => {
+    const body = s.lines.join(`
+`).trim();
+    if (s.heading === null)
+      return body;
+    const visible = anyAction ? isActionHeading(s.heading) : firstHeaded;
+    firstHeaded = false;
+    if (visible)
+      return `### ${s.heading}
+${body}`;
+    return `<details>
+<summary><b>${s.heading}</b></summary>
+
+${body}
+
+</details>`;
+  }).filter(Boolean);
+  return rendered.join(`
+
+`);
+}
+function normalizeOwner(raw) {
+  const login = (raw ?? "").trim().replace(/^@/, "");
+  return login || undefined;
+}
+function proseWordCount(text) {
+  return text.replace(/`[^`]+`/g, "code").split(/\s+/).filter(Boolean).length;
+}
+function overlongActionLines(reason) {
+  const offenders = [];
+  let inActionSection = false;
+  let inFence = false;
+  for (const line of reason.split(`
+`)) {
+    if (/^\s*```/.test(line.trim())) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence)
+      continue;
+    if (/^###\s/.test(line)) {
+      inActionSection = isActionHeading(line);
+      continue;
+    }
+    if (!inActionSection)
+      continue;
+    const t = line.trim();
+    if (t.startsWith("|")) {
+      const cells = t.replace(/^\|/, "").replace(/\|$/, "").split("|");
+      if (cells.some((cell) => proseWordCount(cell) > ACTION_LINE_WORD_LIMIT))
+        offenders.push(t);
+      continue;
+    }
+    if (proseWordCount(line) > ACTION_LINE_WORD_LIMIT)
+      offenders.push(t);
+  }
+  return offenders;
+}
+function lintEscalationReason(reason) {
+  const r = reason.trim();
+  const problems = [];
+  if (!r)
+    return ["no reason given — state the decision or action the human must take"];
+  if (/\?\s*$/m.test(r) && !/\*\*recommendation:?\*\*/i.test(r)) {
+    problems.push(`contains an open question ("?") but no **Recommendation:** line — every question put to a human must carry the loop's recommended answer`);
+  }
+  if (/see the issue body/i.test(r)) {
+    problems.push('says "see the issue body" — an escalation must be self-contained; inline the substance');
+  }
+  if (r.includes(`
+`) && !r.split(`
+`).some((l) => /^###\s/.test(l) && isActionHeading(l))) {
+    problems.push('structured reason is missing the "### \uD83D\uDC64 Action needed" section — lead with the concrete steps');
+  }
+  for (const line of overlongActionLines(r)) {
+    problems.push(`"Action needed" line over ${ACTION_LINE_WORD_LIMIT} words ("${line.slice(0, 60)}…") — ` + `a step (or table cell) must read in one breath; move the detail to "### Why it's blocked" (it renders folded)`);
+  }
+  return problems;
+}
+function encodePrecedentContext(category, reason) {
+  const q = Buffer.from(reason, "utf8").toString("base64");
+  return `${SHIPFLOW_CONTRACT.markers.precedentContext} cat=${category} q=${q} -->`;
+}
+function renderEscalateOnceMarker(pr, reason) {
+  return `${SHIPFLOW_CONTRACT.markers.escalateOnce} pr=${pr} reason=${reason} -->`;
+}
+function parseEscalateOnceKey(forPr, onceReason) {
+  const raw = (forPr ?? "").trim();
+  const reason = (onceReason ?? "").trim();
+  if (!raw && !reason)
+    return;
+  if (!raw || !reason) {
+    return new Error("--for-pr and --once-reason must be given together — a half-written escalate-once key suppresses nothing and the PR re-escalates every tick (issue #488).");
+  }
+  if (!/^#?\d+$/.test(raw) || Number(raw.replace("#", "")) <= 0) {
+    return new Error(`--for-pr ${JSON.stringify(forPr)} is not a PR number.`);
+  }
+  if (!ESCALATE_ONCE_REASONS.includes(reason)) {
+    return new Error(`--once-reason ${JSON.stringify(onceReason)} is not an escalate-once reason — valid: ${ESCALATE_ONCE_REASONS.join(", ")}. Copy it from the inbox row's \`escalateOnceReason\`.`);
+  }
+  return { pr: Number(raw.replace("#", "")), reason };
+}
+function escalateOnceLineRe(pr, reason, flags = "m") {
+  const token = SHIPFLOW_CONTRACT.markers.escalateOnce.replace(RE_ESCAPE, "\\$&");
+  return new RegExp(`^${token}[ \\t]+pr=${pr}[ \\t]+reason=${reason}[ \\t]*-->[ \\t\\r]*$`, flags);
+}
+function isEscalationBanner(body) {
+  return !!body && body.trimStart().startsWith(SHIPFLOW_CONTRACT.markers.escalationBannerHeading);
+}
+function hasEscalateOnceMarker(body, pr, reason) {
+  if (!body || !reason || !isEscalationBanner(body))
+    return false;
+  return escalateOnceLineRe(String(pr), reason.replace(RE_ESCAPE, "\\$&")).test(body);
+}
+function extractEscalateOnceMarkers(body) {
+  if (!body || !isEscalationBanner(body))
+    return [];
+  const found = body.match(escalateOnceLineRe("\\d+", "[^\\s>]+", "gm")) ?? [];
+  return [...new Set(found.map((l) => l.trim()))];
+}
+function preserveEscalateOnceMarkers(next, existing) {
+  const kept = extractEscalateOnceMarkers(existing).filter((m) => !extractEscalateOnceMarkers(next).includes(m));
+  return kept.length ? `${next}
+${kept.join(`
+`)}` : next;
+}
+function neutralizeMarkers(text) {
+  const prefix = SHIPFLOW_CONTRACT.markers.markerPrefix;
+  return String(text ?? "").split(prefix).join(`&lt;${prefix.slice(1)}`);
+}
+function neutralizeInline(text) {
+  return neutralizeMarkers(String(text ?? "").replace(/\s+/g, " ").trim());
+}
+function inlineNumber(value) {
+  return Number(value);
+}
+function formatPrecedentSuggestion(m) {
+  const p = m.precedent;
+  if (!p)
+    return "";
+  const note = m.classDemoted ? "This class was demoted after reversals — it is never auto-applied." : m.outcome === "reconfirm" ? "It is due for re-confirmation — confirm it still holds." : "This class is never auto-applied — reply to reuse it or answer fresh.";
+  return [
+    "<details>",
+    "<summary><b>Precedent on file — you answered this before</b></summary>",
+    "",
+    `On #${inlineNumber(p.sourceIssue)}, @${neutralizeInline(p.author)} answered: "${neutralizeMarkers(p.answer)}" ([original reply](${neutralizeInline(p.sourceUrl)})).`,
+    `Reply \`same\` to reuse it, or answer fresh. ${note}`,
+    "",
+    "</details>"
+  ].join(`
+`);
+}
+function formatPrecedentDisclosure(m) {
+  const p = m.precedent;
+  if (!p)
+    return "";
+  const category = neutralizeInline(m.category);
+  return [
+    `\uD83D\uDD01 **Auto-resolved per your #${inlineNumber(p.sourceIssue)} decision** — reply \`undo\` to reverse it.`,
+    "",
+    `**Decision reused:** "${neutralizeMarkers(p.answer)}" — @${neutralizeInline(p.author)}, [original reply](${neutralizeInline(p.sourceUrl)})`,
+    "",
+    "<details>",
+    `<summary><b>What was auto-applied — ${category}</b></summary>`,
+    "",
+    `**Matched precedent:** \`${neutralizeInline(m.fingerprint)}\` · reuse ${inlineNumber(p.reuseCount)} · expires ${neutralizeInline(String(p.expiresAt ?? "").slice(0, 10))}`,
+    "**Undo:** one reply `undo` (or `no`) reverses this, retires the precedent, and re-escalates the question to you.",
+    "",
+    "</details>",
+    `${SHIPFLOW_CONTRACT.markers.precedentApplied} pid=${neutralizeInline(p.id)} cat=${category} -->`
+  ].join(`
+`);
+}
+function findLatestEscalationComment(comments) {
+  for (let i = comments.length - 1;i >= 0; i--) {
+    const c = comments[i];
+    if (c.viewerDidAuthor === false)
+      continue;
+    if (isEscalationBanner(c.body))
+      return c;
+  }
+  return null;
+}
+function formatEscalationBody(reason, opts = {}) {
+  if (opts.category && !(opts.category in ESCALATION_CATEGORIES)) {
+    throw new Error(`Unknown escalation category "${opts.category}" — valid: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`);
+  }
+  const why = foldSecondarySections(bulletizeReason(neutralizeMarkers(reason.trim()))) || "_No reason given._";
+  const owner = normalizeOwner(opts.owner);
+  return [
+    ESCALATION_BANNER,
+    "",
+    ...owner ? [`**Owner:** @${neutralizeInline(owner)}`, ""] : [],
+    why,
+    "",
+    ...opts.category ? [
+      "<details>",
+      `<summary><b>Why a human must decide — ${opts.category}</b></summary>`,
+      "",
+      ESCALATION_CATEGORIES[opts.category],
+      "",
+      "</details>",
+      ""
+    ] : [],
+    "---",
+    `<sub>Reply with your decision (\`1: <answer>\` per numbered item works) — the **\`${SHIPFLOW_CONTRACT.labels.names.needsHuman}\`** label clears automatically and the loop resumes.</sub>`,
+    ...opts.category ? [encodePrecedentContext(opts.category, reason.trim())] : [],
+    ...opts.once ? [renderEscalateOnceMarker(opts.once.pr, opts.once.reason)] : []
+  ].join(`
+`);
+}
+var ESCALATION_CATEGORIES, ACTION_LINE_WORD_LIMIT, RE_ESCAPE, ESCALATION_BANNER;
+var init_escalation_format = __esm(() => {
+  init_shipflow_contract_data();
+  init_pr_state();
+  ESCALATION_CATEGORIES = {
+    "money-write": "Enabling this writes real money-bearing values (prices, payouts, billing) to live systems. " + "A bad value reaches customers immediately, and transactions made at a wrong value can't be " + "undone by reverting data. The loop never self-authorizes money writes — a human owns the go/no-go.",
+    "prod-config": "This changes production configuration (env vars, flags, infrastructure) whose blast radius " + "spans everything behind it; a mistake can take production down or silently change live " + "behavior. The loop never applies production config itself.",
+    security: "This touches a security- or trust-critical surface (authn/authz, secrets, injection-prone " + "parsing) where a mistake is exploitable and autonomous validation can't establish safety.",
+    "missing-secret": "The work is blocked on a credential, secret, or account only a human can provision. Nothing " + "is wrong with the code — the loop lacks access it cannot grant itself.",
+    "external-dependency": "Blocked on an external system or third party (vendor approval, DNS, a service outside this " + "repo) that the loop cannot drive.",
+    invalid: "The issue looks invalid, duplicate, or out of scope; closing someone's issue is a judgment " + "call the loop leaves to a human."
+  };
+  ACTION_LINE_WORD_LIMIT = SHIPFLOW_CONTRACT.readability.visibleLineWordCap;
+  RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
+  ESCALATION_BANNER = `${SHIPFLOW_CONTRACT.markers.escalationBannerHeading} — the loop is parked here until you reply.`;
 });
 
 // src/config.ts
@@ -5209,6 +5267,7 @@ import { hostname as hostname2 } from "node:os";
 import { readFileSync as readFileSync3, statSync } from "node:fs";
 import { basename as basename2 } from "node:path";
 init_escalation_format();
+init_pr_state();
 
 // src/message-lint.ts
 var TABLE_ROW = /^\s*\|.+\|\s*$/m;
@@ -5913,10 +5972,19 @@ ${section}` : section;
     await ctx.client.signal(ctx.creds.org, ctx.project.projectId, "issues", number, "release-claim", { repo, reason });
     emit(opts, { number, released: true, reason }, () => console.log(`Released #${number}.`));
   }));
-  issue.command("escalate <number>").description("Hand an issue to a human: label needs-human + comment why. Keeps the work lock so the loop skips it this run.").option("--reason <reason>", "Why it's blocked / what a human must decide", "").option("--category <key>", `Why this class of work is gated on a human — appends the standard rationale. One of: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`).option("--owner <login>", "Accountable human named on the comment (default: signoff-owner config, else the issue author)").option("--update", "Edit the loop's latest \uD83D\uDEA7 escalation comment in place instead of stacking a new one").option("--force", "Skip the reason lint (open question without recommendation / not self-contained / no action section)").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for needs-human)").option("--release", "Also release the ShipFlow claim (default: keep it so the loop won't re-pick it this run)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  issue.command("escalate <number>").description("Hand an issue to a human: label needs-human + comment why. Keeps the work lock so the loop skips it this run.").option("--reason <reason>", "Why it's blocked / what a human must decide", "").option("--category <key>", `Why this class of work is gated on a human — appends the standard rationale. One of: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`).option("--owner <login>", "Accountable human named on the comment (default: signoff-owner config, else the issue author)").option("--update", "Edit the loop's latest \uD83D\uDEA7 escalation comment in place instead of stacking a new one").option("--force", "Skip the reason lint (open question without recommendation / not self-contained / no action section)").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for needs-human)").option("--release", "Also release the ShipFlow claim (default: keep it so the loop won't re-pick it this run)").option("--for-pr <number>", "The PR whose inbox row owed this escalation — stamps the permanent once-key. Use WITH --once-reason (issue #488)").option("--once-reason <token>", `The escalate-once reason from the inbox row (\`escalateOnceReason\`). One of: ${ESCALATE_ONCE_REASONS.join(", ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const reason = (opts.reason ?? "").trim();
     if (opts.category && !(opts.category in ESCALATION_CATEGORIES)) {
       console.error(`Unknown escalation category "${opts.category}" — valid: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`);
+      process.exit(1);
+    }
+    const once = parseEscalateOnceKey(opts.forPr, opts.onceReason);
+    if (once instanceof Error) {
+      console.error(once.message);
+      process.exit(1);
+    }
+    if (once && opts.update) {
+      console.error("--update cannot carry an escalate-once key: an escalate-once row gets exactly one escalation, ever, and it must arrive as a new comment a human is notified of (issue #488). Drop --update on an `escalateOnce` row.");
       process.exit(1);
     }
     if (!opts.force) {
@@ -5933,13 +6001,13 @@ ${section}` : section;
     const owner = normalizeOwner(opts.owner ?? resolveSignoffOwner() ?? ghIssueAuthor(repo, number));
     let body;
     try {
-      body = formatEscalationBody(reason, { category: opts.category, owner });
+      body = formatEscalationBody(reason, { category: opts.category, owner, once });
     } catch (e) {
       console.error(e.message);
       process.exit(1);
     }
     let precedent;
-    if (opts.category && !opts.update) {
+    if (opts.category && !opts.update && !once) {
       try {
         precedent = await ctx.client.matchPrecedent(ctx.creds.org, ctx.project.projectId, {
           category: opts.category,
@@ -5959,6 +6027,7 @@ ${section}` : section;
         autoResolved: true,
         reason,
         category: opts.category ?? null,
+        once: once ?? null,
         precedent: { outcome: precedent.outcome, answer: precedent.precedent.answer, sourceIssue: precedent.precedent.sourceIssue }
       }, () => console.log(`\uD83D\uDD01 #${number} auto-resolved from your #${precedent.precedent.sourceIssue} decision — disclosure posted, reply \`undo\` to reverse.`));
       return;
@@ -5976,7 +6045,7 @@ ${formatPrecedentSuggestion(precedent)}`;
     if (opts.update) {
       const existing = findLatestEscalationComment(ghIssueComments(repo, number));
       if (existing) {
-        ghUpdateIssueComment(existing.id, body);
+        ghUpdateIssueComment(existing.id, preserveEscalateOnceMarkers(body, existing.body));
         updated = true;
       }
     }
@@ -5995,6 +6064,7 @@ ${formatPrecedentSuggestion(precedent)}`;
       owner: owner ?? null,
       category: opts.category ?? null,
       updated,
+      once: once ?? null,
       precedent: surfaced ? { outcome: precedent.outcome, sourceIssue: precedent.precedent.sourceIssue, answer: precedent.precedent.answer } : null
     }, () => console.log(`\uD83D\uDEA7 #${number} escalated${updated ? " (existing \uD83D\uDEA7 comment updated)" : ""} → labelled "${NEEDS_HUMAN_LABEL}"${owner ? `, owner @${owner}` : ""}${surfaced ? ", precedent on file surfaced" : ""}${released ? " and claim released" : " (claim kept — loop skips it this run)"}.`));
   }));
@@ -6132,6 +6202,7 @@ async function readStdin() {
 // src/commands/inbox.ts
 init_config();
 init_pr_state();
+init_escalation_format();
 init_shipflow_contract_data();
 init_helpers();
 init_pr_state();
@@ -6173,7 +6244,14 @@ function minePrRow(pr, cl, ctx) {
   const corrections = cl.state === "reporter_corrected" ? reporterCorrectionsOn(pr) : [];
   const closesIssues = (pr.closingIssuesReferences ?? []).map((i) => i.number);
   const parentIssues = linkedIssueNumbers(pr);
-  const escalateOnce = owesEscalation(cl) && parentIssues.length > 0 && !ctx.parentIsEscalated(parentIssues);
+  let escalateOnceUnknown = false;
+  const owedReason = parentIssues.length > 0 ? escalationReasonsOwed(cl).find((r) => {
+    const filed = ctx.parentWasEscalatedFor(parentIssues, pr.number, r);
+    if (filed === "unknown")
+      escalateOnceUnknown = true;
+    return filed === false;
+  }) ?? null : null;
+  const escalateOnce = owedReason !== null;
   return {
     number: pr.number,
     title: pr.title,
@@ -6195,8 +6273,10 @@ function minePrRow(pr, cl, ctx) {
       corrections: corrections.map(reporterCorrectionRow),
       parentNeedsHuman: ctx.parentIsEscalated(parentIssues)
     } : {},
-    ...escalateOnce ? { escalateOnce: true, parentNeedsHuman: false } : {},
-    ...ctx.degraded ? { degraded: true } : {}
+    ...escalateOnce ? { escalateOnce: true, escalateOnceReason: owedReason, parentNeedsHuman: ctx.parentIsEscalated(parentIssues) } : {},
+    ...ctx.degraded ? { threadsDegraded: true } : {},
+    ...escalateOnceUnknown ? { escalateOnceUnknown: true } : {},
+    ...ctx.degraded || escalateOnceUnknown ? { degraded: true } : {}
   };
 }
 function actionableConflicts(prs) {
@@ -6300,6 +6380,33 @@ function registerInboxCommand(program2) {
       escalatedIssues ??= new Set(ghIssueListByLabel(repo, NEEDS_HUMAN_LABEL).map((i) => i.number));
       return issueNumbers.some((n) => escalatedIssues.has(n));
     };
+    const parentMarkers = new Map;
+    const parentReadFailed = new Set;
+    const parentWasEscalatedFor = (issueNumbers, prNumber, reason) => {
+      let unknown = false;
+      const filed = issueNumbers.some((n) => {
+        let bodies = parentMarkers.get(n);
+        if (!bodies) {
+          if (parentReadFailed.has(n)) {
+            unknown = true;
+            return false;
+          }
+          try {
+            bodies = ghIssueComments(repo, n).filter((c) => c.viewerDidAuthor !== false).map((c) => c.body);
+          } catch {
+            parentReadFailed.add(n);
+            unknown = true;
+            console.warn(`⚠️  #${n}: could not read comments for the escalate-once key — PR #${prNumber} holds its escalation until the next tick.`);
+            return false;
+          }
+          parentMarkers.set(n, bodies);
+        }
+        return bodies.some((b) => hasEscalateOnceMarker(b, prNumber, reason));
+      });
+      if (filed)
+        return true;
+      return unknown ? "unknown" : false;
+    };
     const gc = gcMergedLocalBranches(repo);
     for (const c of gc.cleaned) {
       console.warn(`\uD83E\uDDF9 ${c.name}: PR #${c.prNumber} merged externally — local branch/worktree cleaned.`);
@@ -6321,7 +6428,7 @@ function registerInboxCommand(program2) {
       const { count: unresolvedThreads, degraded: degraded2 } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
       const intentBlocked = hasReporterReviewLabel(pr);
       const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks });
-      return minePrRow(pr, cl, { unresolvedThreads, degraded: degraded2, parentIsEscalated });
+      return minePrRow(pr, cl, { unresolvedThreads, degraded: degraded2, parentIsEscalated, parentWasEscalatedFor });
     });
     const issues = ghIssueListByLabel(repo, IN_PROGRESS_LABEL).map((i) => {
       const reply = issueNeedsReply(i.comments ?? [], me);
@@ -6343,6 +6450,11 @@ function registerInboxCommand(program2) {
     }
     const count = (s) => prs.filter((p) => p.state === s).length;
     const degraded = prs.filter((p) => p.degraded).length;
+    const threadsDegraded = prs.filter((p) => p.threadsDegraded).length;
+    const degradedInputs = [
+      ...threadsDegraded ? ["github-graphql"] : [],
+      ...prs.some((p) => p.escalateOnceUnknown) ? ["escalate-once-markers"] : []
+    ];
     const summary = {
       prsNeedingAttention: prs.filter((p) => p.needsAttention).length,
       issuesNeedingAttention: issues.filter((i) => i.needsAttention).length,
@@ -6354,6 +6466,8 @@ function registerInboxCommand(program2) {
       reporterCorrected: actionableCorrections(prs),
       parked: parkedCount(prs),
       degraded,
+      degradedInputs,
+      escalateOnceUnknown: prs.filter((p) => p.escalateOnceUnknown).length,
       conflictSweep: sweepEnabled,
       humanOnlyConflicts: prs.filter((p) => p.humanOnly).length,
       wipActionable: actionableWip(prs),
@@ -6364,8 +6478,11 @@ function registerInboxCommand(program2) {
     emit(opts, withProvenance({ repo, prs, issues, summary, gc }), () => {
       console.log(`\uD83D\uDCE5 Inbox for ${repo}`);
       console.log(`Needs action: ${meter(summary.prsNeedingAttention, prs.length)} PRs · ${meter(summary.issuesNeedingAttention, issues.length)} issues · ✅ ${summary.readyToMerge} ready to merge`);
-      if (degraded)
-        console.log(`⚠️  ${degraded} PR(s) with partial review-thread data (fetch blipped) — marked "degraded".`);
+      if (threadsDegraded)
+        console.log(`⚠️  ${threadsDegraded} PR(s) with partial review-thread data (fetch blipped) — marked "degraded".`);
+      if (summary.escalateOnceUnknown) {
+        console.log(`⚠️  ${summary.escalateOnceUnknown} PR(s) parked on an escalate-once key that could NOT be read — this inbox is INCOMPLETE, re-read before concluding there is no work.`);
+      }
       if (summary.humanOnlyConflicts) {
         console.log(`\uD83D\uDD12 ${summary.humanOnlyConflicts} conflicted PR(s) on an untrusted head (fork / non-collaborator) — reported only, never checked out by the loop.`);
       }
@@ -6376,7 +6493,7 @@ function registerInboxCommand(program2) {
           p.state,
           `ci:${p.ciState}`,
           `${p.ageHours}h`,
-          p.title + (p.correction ? ` \uD83D\uDCE3 @${p.correction.author} corrected the reading` : "") + (p.corrections && p.corrections.length > 1 ? ` (+${p.corrections.length - 1} more unanswered)` : "") + (p.escalateOnce ? " \uD83C\uDD98 escalate once (no rework left)" : "") + (p.parentNeedsHuman ? " (parent is needs-human)" : "") + (p.degraded ? " ⚠️ degraded" : "") + (p.humanOnly ? ` \uD83D\uDD12 ${p.distrust} — human only` : "")
+          p.title + (p.correction ? ` \uD83D\uDCE3 @${p.correction.author} corrected the reading` : "") + (p.corrections && p.corrections.length > 1 ? ` (+${p.corrections.length - 1} more unanswered)` : "") + (p.escalateOnce ? ` \uD83C\uDD98 escalate once (${p.escalateOnceReason})` : "") + (p.parentNeedsHuman ? " (parent is needs-human)" : "") + (p.degraded ? " ⚠️ degraded" : "") + (p.humanOnly ? ` \uD83D\uDD12 ${p.distrust} — human only` : "")
         ]);
         for (const l of renderTable(["PR", "State", "CI", "Age", "Title"], rows))
           console.log(`  ${l}`);

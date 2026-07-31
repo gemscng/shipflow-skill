@@ -319,8 +319,9 @@ collect its return. Loop A until nothing in-flight `needsAttention`:
   a *reply* is what moves it, and a correcting reply arrives as
   `reporter_corrected` above. The **one** exception is a row carrying
   `escalateOnce: true` — the loop hit the rework ceiling, or refused to read the
-  thread — where the whole action is a single `issue escalate` and the row parks
-  again as soon as the parent carries `needs-human`. **It outranks `conflict`** — and
+  thread — where the whole action is a single
+  `issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>`
+  and the row parks again, **forever**, on that (PR, reason). **It outranks `conflict`** — and
   every other state — because each route below it tells a worker to *act on the
   PR*, and acting can destroy the gate: the label is self-clearing (issue #411),
   the loop's own comment strips it, and the `conflict` route *requires* commenting
@@ -333,6 +334,16 @@ collect its return. Loop A until nothing in-flight `needsAttention`:
   loop act at all*.)
 - `stale` → nudge once / escalate if blocked. `ci_pending` / `awaiting_review` →
   **parked, no action** (re-checked next tick; don't busy-wait).
+
+🔴 **`escalateOnceUnknown: true` means the inbox is INCOMPLETE — never stop on
+it.** The CLI could not read the parent's `escalate-once` markers, so whether
+that (PR, reason) was already escalated is *unknown*. The row still parks —
+a duplicate escalation is the expensive direction — but it parks on a gate that
+**did not run**, so `prsNeedingAttention` may undercount. `summary.degradedInputs`
+carries `escalate-once-markers` and `summary.escalateOnceUnknown` counts the rows.
+In a **`once`** pass this is *not* "no work": re-read the inbox before concluding
+the run, or the owed escalation is never filed at all. #482's rule — a gate that
+could not run is never a footnote.
 
 A PR becomes `approved_ready` **only** because the reviewer approved it — never
 hand-add `shipflow-approved`. For each in-progress issue with a `newComment`, a
@@ -616,7 +627,7 @@ Silence still parks forever.
 | `state` | What it means | Action |
 |---|---|---|
 | `reporter_corrected` | still gated, and the reporter replied with a correction | rework per § "A reporter correction IS the human answering" — brief it as settled; the gate stays ON |
-| `awaiting_reporter` | approved + green, interpretation unconfirmed (`needs-reporter-review`) | park — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable`) → `issue escalate` ONCE, nothing else |
+| `awaiting_reporter` | approved + green, interpretation unconfirmed (`needs-reporter-review`) | park — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable`) → `issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` ONCE, nothing else |
 | `ci_failing` | a check is red | fix on branch, push; escalate after `max-fix-attempts` |
 | `changes_requested` | reviewer wants changes | pr-feedback → fix → push → reply |
 | `review_comments` | unaddressed comments | pr-feedback (may already be handled) → reply |
@@ -796,10 +807,32 @@ Silence still parks forever.
   of either — but the row carries **`escalateOnce: true`** and
   `needsAttention: true`, because "escalate once" is an instruction Phase A can
   only follow on a row it actually visits, and Phase A iterates `needsAttention`.
-  Once-ness needs no new state: `issue escalate` puts `needs-human` on the parent
-  issue, which is exactly what makes `escalateOnce` false on the next tick, and
-  the row parks. A PR with no linked issue has nothing to escalate and stays
-  parked. Do ONLY the escalation from such a row — never a rework, never a merge.
+  A PR with no linked issue has nothing to escalate and stays parked. Do ONLY the
+  escalation from such a row — never a rework, never a merge.
+
+  🔴 **Once means ONCE PER (PR, REASON), EVER — and you must pass the key.**
+
+  | | |
+  |---|---|
+  | **Command** | `renaiss-shipflow issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` |
+  | **Both flags, always** | The CLI refuses a half-written key (exit 1, nothing written). Copy `escalateOnceReason` verbatim off the row. |
+  | **Invariant** | At most **one** escalation per (PR, reason), forever. A genuinely NEW reason on the same PR earns exactly one more. A PR is capped at one per `ESCALATE_ONCE_REASONS` entry. |
+  | **Where it lives** | A hidden `escalate-once` marker inside the escalation banner — no extra comment. `inbox` reads it back off the parent's comments. |
+  | **What counts as a key** | Three filters, all required: the CLI's own account authored the comment, the marker stands alone at column 0, and the comment **is an escalation banner**. A marker in any other CLI comment on the parent — an `issue wait --reason`, a loop-progress note — is prose, not a key. |
+  | **`--update`** | Refused **with** a key — this is the one notification that (PR, reason) ever gets, so it must be a new comment. **Without** a key it is safe: an in-place edit carries every marker on the edited banner forward, so an ordinary re-escalation of the same parent can never erase a key already on file. |
+  | **No precedent reuse** | A keyed escalation skips the precedent lookup, so it never auto-applies a stored answer and shows no `Precedent on file` suggestion. The undo cannot un-write a permanent key, so a reused-then-undone answer would park the row forever. |
+  | **Write it plainly** | Marker literals inside a `--reason` are escaped before they reach the banner, **and** a key is only read out of a banner, so quoting one anywhere — an escalation reason, an `issue wait` reason, a progress note — is harmless. Only the real `--for-pr`/`--once-reason` flags file one. |
+
+  ⚠️ **Do not "just re-escalate" — and do not key it off the label.** Once-ness
+  used to be "the parent carries `needs-human`". The server removes that label on
+  **any** non-bot, non-machinery comment — that is how a human answer un-parks the
+  loop — so the key was erased by the first reply and the row escalated **every
+  tick, forever** (issue #488). A human replying is not the condition clearing
+  either: every escalate-once reason is terminal until a specific artifact
+  changes, and none of them is resolved on the *parent* — the blocker is the PR's
+  own `needs-reporter-review`, which only a confirmation token on the **PR
+  thread** clears. Forget `--for-pr`/`--once-reason` and you have re-opened the
+  storm by hand.
 
   🟡 **What counts as "the loop already answered this".** Exactly ONE comment
   suppresses: the worker's **`rework-from`** marker, and it suppresses up to the
