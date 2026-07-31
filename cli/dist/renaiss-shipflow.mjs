@@ -7111,21 +7111,100 @@ function extractEvidenceLines(comments) {
   }
   return lines.slice(0, 12);
 }
-function ownsPath(prefix, path) {
-  const p = prefix.replace(/^\.\//, "");
-  if (!p)
-    return false;
-  return path === p || path.startsWith(p.endsWith("/") ? p : p + "/");
+function matchGlobSegment(pattern, s) {
+  let p = 0, i = 0, star = -1, mark = 0;
+  while (i < s.length) {
+    if (p < pattern.length && (pattern[p] === "?" || pattern[p] === s[i])) {
+      p++;
+      i++;
+    } else if (p < pattern.length && pattern[p] === "*") {
+      star = p++;
+      mark = i;
+    } else if (star >= 0) {
+      p = star + 1;
+      i = ++mark;
+    } else
+      return false;
+  }
+  while (p < pattern.length && pattern[p] === "*")
+    p++;
+  return p === pattern.length;
 }
-function touchedFeatures(diffPaths, features) {
-  const changed = diffPaths.filter((p) => !isNoiseDiffPath(p));
+function matchGlobSegments(pat, seg) {
+  const p = [];
+  for (const s of pat)
+    if (!(s === "**" && p[p.length - 1] === "**"))
+      p.push(s);
+  const width = seg.length + 1;
+  const failed = new Set;
+  const walk = (pi, si) => {
+    const key = pi * width + si;
+    if (failed.has(key))
+      return false;
+    let a = pi, b = si;
+    while (a < p.length) {
+      if (p[a] === "**") {
+        if (a !== pi) {
+          if (walk(a, b))
+            return true;
+          failed.add(key);
+          return false;
+        }
+        for (let k = b;k <= seg.length; k++)
+          if (walk(a + 1, k))
+            return true;
+        failed.add(key);
+        return false;
+      }
+      if (b >= seg.length || !matchGlobSegment(p[a], seg[b])) {
+        failed.add(key);
+        return false;
+      }
+      a++;
+      b++;
+    }
+    if (b !== seg.length) {
+      failed.add(key);
+      return false;
+    }
+    return true;
+  };
+  return walk(0, 0);
+}
+function ownsPath(featurePath, filePath) {
+  const pattern = featurePath.replace(/^\.\//, "");
+  if (!pattern)
+    return false;
+  if (!/[*?]/.test(pattern)) {
+    return filePath === pattern || filePath.startsWith(pattern.endsWith("/") ? pattern : pattern + "/");
+  }
+  return matchGlobSegments(pattern.split("/"), filePath.split("/"));
+}
+function pathCandidates(path, repo) {
+  const out = [path];
+  if (!repo)
+    return out;
+  const parts = repo.split("/");
+  const shortName = parts[parts.length - 1];
+  if (shortName)
+    out.push(`${shortName}/${path}`);
+  if (parts.length === 2 && parts[0])
+    out.push(`${repo}/${path}`);
+  return out;
+}
+function touchedFeatures(diffPaths, features, repo) {
+  const changed = diffPaths.filter((p) => !isNoiseDiffPath(p)).flatMap((p) => pathCandidates(p, repo));
   const out = [];
   for (const f of features) {
-    if ((f.paths ?? []).some((prefix) => changed.some((path) => ownsPath(prefix, path)))) {
+    if ((f.paths ?? []).some((fp) => changed.some((path) => ownsPath(fp, path)))) {
       out.push(f.name || f.key);
     }
   }
   return out;
+}
+var FEATURE_MATCH_NULL_WARNING = "⚠️ Feature map matched NOTHING — the map has features and this diff has non-noise " + "files, but no feature path owns any changed path. `Features touched` is absent " + "because the MATCHER found nothing, not because the PR touches no feature: treat " + "per-feature evidence coverage as UNVERIFIED and suspect stale/mis-prefixed map paths.";
+function featureMatchIsNull(features, diffPaths, touched) {
+  return Boolean(features?.length) && touched.length === 0 && diffPaths.some((p) => !isNoiseDiffPath(p));
 }
 function assessEvidenceCoverage(touched, comments) {
   const evidenceItems = comments.filter((c) => {
@@ -7318,6 +7397,8 @@ function buildReviewPacket(input) {
     }
   }
   const evidence = extractEvidenceLines(pr.comments ?? []);
+  const allDiffPaths = splitUnifiedDiff(diff).map((s) => s.path);
+  const touchedAll = input.features?.length ? touchedFeatures(allDiffPaths, input.features, input.repo) : [];
   b.push(`
 ## Evidence / health`);
   if (input.featureMapSkipCause)
@@ -7325,19 +7406,19 @@ function buildReviewPacket(input) {
   else if (input.featureMapNotApplicable)
     b.push(featureMapNotApplicableNote(input.featureMapNotApplicable));
   if (input.features?.length) {
-    const touched = touchedFeatures(splitUnifiedDiff(diff).map((s) => s.path), input.features);
-    if (touched.length) {
-      b.push(`Features touched (${touched.length}): ${touched.join(", ")}`);
-      const cov = assessEvidenceCoverage(touched, pr.comments ?? []);
+    if (touchedAll.length) {
+      b.push(`Features touched (${touchedAll.length}): ${touchedAll.join(", ")}`);
+      const cov = assessEvidenceCoverage(touchedAll, pr.comments ?? []);
       if (cov.warning)
         b.push(cov.warning);
+    } else if (!input.featureMapSkipCause && !input.featureMapNotApplicable && featureMatchIsNull(input.features, allDiffPaths, touchedAll)) {
+      b.push(FEATURE_MATCH_NULL_WARNING);
     }
   }
   b.push(evidence.length ? evidence.join(`
 `) : "no evidence caption posted");
   if (input.features?.length) {
-    const diffPaths = splitUnifiedDiff(diff).map((s) => s.path);
-    const touchedNames = new Set(touchedFeatures(diffPaths, input.features));
+    const touchedNames = new Set(touchedAll);
     if (touchedNames.size) {
       const touched = input.features.filter((f) => touchedNames.has(f.name || f.key)).slice(0, 12);
       b.push(`
@@ -7412,7 +7493,10 @@ function buildReviewPacketData(input) {
   let features;
   if (input.features?.length) {
     const diffPaths = splitUnifiedDiff(diff).map((s) => s.path);
-    const touchedNames = touchedFeatures(diffPaths, input.features);
+    const touchedNames = touchedFeatures(diffPaths, input.features, input.repo);
+    if (!input.featureMapSkipCause && !input.featureMapNotApplicable && featureMatchIsNull(input.features, diffPaths, touchedNames)) {
+      evidence.featureMatchWarning = FEATURE_MATCH_NULL_WARNING;
+    }
     if (touchedNames.length) {
       evidence.featuresTouched = touchedNames;
       evidence.coverageWarning = assessEvidenceCoverage(touchedNames, pr.comments ?? []).warning;
@@ -8181,9 +8265,9 @@ ${opts.body ?? ""}`;
     else if (featureMapNotApplicable)
       console.warn(featureMapNotApplicableNote(featureMapNotApplicable));
     emit(opts, {
-      ...withProvenance(buildReviewPacketData({ pr: prView, threads, diff, issue, features, threadsUnavailable, specUnavailable, specNotReadable, featureMapSkipCause: skipCause, featureMapNotApplicable })),
+      ...withProvenance(buildReviewPacketData({ pr: prView, threads, diff, issue, features, repo, threadsUnavailable, specUnavailable, specNotReadable, featureMapSkipCause: skipCause, featureMapNotApplicable })),
       ...degradedField({ degraded })
-    }, () => console.log(buildReviewPacket({ pr: prView, threads, diff, issue, features, threadsUnavailable, specUnavailable, specNotReadable, featureMapSkipCause: skipCause, featureMapNotApplicable })), { pretty: true });
+    }, () => console.log(buildReviewPacket({ pr: prView, threads, diff, issue, features, repo, threadsUnavailable, specUnavailable, specNotReadable, featureMapSkipCause: skipCause, featureMapNotApplicable })), { pretty: true });
   }));
   pr.command("diff <number>").description("Capture a PR's FULL unfiltered diff from GitHub to a file — the security scan's input. Never reads local git, so a detached or stale worktree cannot empty it; exits 9 when the diff has zero files, unconditionally, and writes nothing at all in that case").requiredOption("--out <path>", "File to write the raw diff bytes to").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
