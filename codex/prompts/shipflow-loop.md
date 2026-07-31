@@ -87,6 +87,21 @@ nothing `needsAttention`:
   and the `conflict` route *requires* commenting the resolution on the PR. The
   conflict is still reported (`reasons` carries both `needs-reporter-review` and
   `merge_conflict`); only the dispatch waits.
+  - **The one exception: `escalateOnce: true`** — `rework_ceiling`,
+    `correction_unreadable`, or `reporter_gate_stale` (#439: the gate has stood
+    past `stale-pr-hours` with no reply the loop can act on, so it can ride
+    beside the other two; `gateAgeHours` is the wait, anchored on the CURRENT
+    arming — the newest gate notice / rework marker not since cleared — **not**
+    `updatedAt`, which the loop's own machinery keeps resetting, and **not** the
+    PR's first loop comment). The whole action is ONE
+    `renaiss-shipflow issue escalate <parent> --category external-dependency
+    --reason "<one action-first line>"` — `--reason` is **required in practice**:
+    it defaults to `""`, which fails the escalation lint and exits 1 before
+    `needs-human` is applied, turning "escalate once" into a retry loop. And
+    **never a PR comment** — the loop and the reporter share one login, so an
+    unmarked author-side nudge reads back as the reporter answering (#477). The
+    row parks again as soon as the parent carries `needs-human`; a PR with no
+    linked issue has nothing to escalate and stays parked.
 - `stale` → nudge once / escalate if blocked. `ci_pending` / `awaiting_review` →
   park, no action.
 - in-progress issue with a `newComment` → read (`gh issue view <n> --comments`) + act.

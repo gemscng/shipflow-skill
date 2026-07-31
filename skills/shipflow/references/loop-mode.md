@@ -287,10 +287,14 @@ collect its return. Loop A until nothing in-flight `needsAttention`:
   **`"unsatisfiable": true` in the automerge JSON = ESCALATE, do not re-poll**
   (issue #305). It means a blocker can never clear by waiting — today: `require-ci`
   is on but the repo has NO CI configured. Re-running the same tick can only give
-  the same answer, so `issue escalate <issue> --category external-dependency` ONCE
-  with the two remedies as the recommendation (add a workflow that runs on PRs ·
-  `config set require-ci false`), then move on. Never leave a PR spinning on a
-  blocker that has no path to clearing.
+  the same answer, so `issue escalate <issue> --category external-dependency
+  --reason "PR #<n> automerge unsatisfiable: <blocker> can never clear by
+  waiting."` ONCE with the two remedies as the recommendation (add a workflow
+  that runs on PRs · `config set require-ci false`), then move on. `--reason` is
+  not optional here either — an empty reason fails lint and exits 1 *before*
+  `needs-human` lands, turning this ONE escalation back into the unbounded
+  re-poll the rule exists to stop. Never leave a PR spinning on a blocker that
+  has no path to clearing.
 - `conflict` → worker resolves it agentically: `renaiss-shipflow pr sync <n>
   --keep-conflicts` (exit 6 = rebase left mid-flight + conflicted-file list),
   then `references/conflict-resolution.md` — resolve by intent, stage only
@@ -318,10 +322,14 @@ collect its return. Loop A until nothing in-flight `needsAttention`:
   maintainer removing the label) can clear it. Silence parks forever, by design —
   a *reply* is what moves it, and a correcting reply arrives as
   `reporter_corrected` above. The **one** exception is a row carrying
-  `escalateOnce: true` — the loop hit the rework ceiling, or refused to read the
-  thread — where the whole action is a single
+  `escalateOnce: true` — the loop hit the rework ceiling, refused to read the
+  thread, or the gate has simply STOOD past `stale-pr-hours` with no answer at
+  all (`reporter_gate_stale`, #439; the row's `gateAgeHours` says how long) —
+  where the whole action is a single
   `issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>`
-  and the row parks again, **forever**, on that (PR, reason). **It outranks `conflict`** — and
+  and the row parks again, **forever**, on that (PR, reason). **Never a PR
+  comment**: the loop and the reporter share one login, so an unmarked
+  author-side "nudge" reads back as the reporter answering (#477). **It outranks `conflict`** — and
   every other state — because each route below it tells a worker to *act on the
   PR*, and acting can destroy the gate: the label is self-clearing (issue #411),
   the loop's own comment strips it, and the `conflict` route *requires* commenting
@@ -686,7 +694,7 @@ Silence still parks forever.
 | `state` | What it means | Action |
 |---|---|---|
 | `reporter_corrected` | still gated, and the reporter replied with a correction | rework per § "A reporter correction IS the human answering" — brief it as settled; the gate stays ON |
-| `awaiting_reporter` | approved + green, interpretation unconfirmed (`needs-reporter-review`) | park — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable`) → `issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` ONCE, nothing else |
+| `awaiting_reporter` | approved + green, interpretation unconfirmed (`needs-reporter-review`) | park — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable` / `reporter_gate_stale`) → `issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` ONCE, nothing else — **never a PR comment** |
 | `ci_failing` | a check is red | fix on branch, push; escalate after `max-fix-attempts` |
 | `changes_requested` | reviewer wants changes | pr-feedback → fix → push → reply |
 | `review_comments` | unaddressed comments | pr-feedback (may already be handled) → reply |
@@ -859,7 +867,8 @@ Silence still parks forever.
   many words. Nothing did. `awaiting_reporter` only parked, and the inbox row was
   byte-identical with and without their reply — so a reporter who did exactly
   what the system asked got silence, no nudge (`awaiting_reporter` outranks
-  `stale`, #439) and no way out.
+  `stale`, so the gate could never age — closed by `reporter_gate_stale`, #439)
+  and no way out.
 
   `inbox` now classifies such a PR **`reporter_corrected`** — ranked immediately
   above `awaiting_reporter`, `needsAttention: true`, `reasons:
@@ -882,10 +891,12 @@ Silence still parks forever.
   | **Gate** | Untouched. Never remove the label; never post a confirmation on the reporter's behalf. `pr automerge` still refuses with `unconfirmed interpretation`, and the reworked PR re-arms. |
   | **Ceiling** | `max-fix-attempts` reworks per PR (default 3). At the ceiling the row falls back to `awaiting_reporter` carrying `rework_ceiling` in `reasons` → `issue escalate` ONCE, don't re-poll. |
   | **`correction_unreadable`** | The PR has human-shaped comments but NO loop-machinery comment at all, so the detector refuses to read the thread (below). Escalate to a human — never hand-judge it into a rework. |
+  | **`reporter_gate_stale`** | Nobody replied AT ALL and the gate has stood past `stale-pr-hours` (#439). `gateAgeHours` is the wait, anchored on the gate notice — **not** `updatedAt`, which the loop's own machinery keeps resetting. Escalate once; never nudge the PR. |
 
-  🟡 **The two refusals arrive as WORK, once.** `rework_ceiling` and
-  `correction_unreadable` stay `awaiting_reporter` — there is no rework route out
-  of either — but the row carries **`escalateOnce: true`** and
+  🟡 **The three refusals arrive as WORK, once.** `rework_ceiling`,
+  `correction_unreadable` and `reporter_gate_stale` stay `awaiting_reporter` —
+  there is no rework route out of any of them — but the row carries
+  **`escalateOnce: true`** and
   `needsAttention: true`, because "escalate once" is an instruction Phase A can
   only follow on a row it actually visits, and Phase A iterates `needsAttention`.
   A PR with no linked issue has nothing to escalate and stays parked. Do ONLY the

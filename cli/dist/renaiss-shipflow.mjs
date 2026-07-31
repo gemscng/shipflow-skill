@@ -2270,6 +2270,40 @@ function hoursSince(iso, nowMs = Date.now()) {
     return 0;
   return Math.max(0, (nowMs - t) / 3600000);
 }
+function commentArmsGate(c) {
+  const b = stripQuotedLines(c.body);
+  return b.includes(INTENT_GATE_NOTICE_HEADLINE) || b.includes(REWORK_FROM_MARKER);
+}
+function gateOpenedAt(pr) {
+  const comments = pr.comments ?? [];
+  let clearedMs = -Infinity;
+  let clearedIso;
+  for (const c of comments) {
+    if (!isIntentGateAuditComment({
+      body: c.body,
+      authorLogin: c.author?.login,
+      authorAssociation: c.authorAssociation
+    }))
+      continue;
+    const t = commentTs(c.createdAt);
+    if (!Number.isFinite(t) || t <= clearedMs)
+      continue;
+    clearedMs = t;
+    clearedIso = c.createdAt;
+  }
+  let armedMs = -Infinity;
+  let armedIso;
+  for (const c of comments) {
+    if (!commentIsMachinery(c) || !commentArmsGate(c))
+      continue;
+    const t = commentTs(c.createdAt);
+    if (!Number.isFinite(t) || t <= clearedMs || t <= armedMs)
+      continue;
+    armedMs = t;
+    armedIso = c.createdAt;
+  }
+  return armedIso ?? clearedIso ?? pr.createdAt;
+}
 function classifyPR(pr, me, opts = {}) {
   let reasons = prAttentionReasons(pr, me);
   if (opts.unresolvedThreads === 0) {
@@ -2281,10 +2315,12 @@ function classifyPR(pr, me, opts = {}) {
   const staleHours = opts.staleHours ?? 48;
   const conflicting = (pr.mergeable ?? "").toUpperCase() === "CONFLICTING";
   let state;
+  let gateAgeHours;
   if (opts.intentBlocked) {
     const correction = reporterCorrectionOn(pr);
     const spent = reworkAttemptsOn(pr).length;
     const ceiling = opts.maxReworks ?? DEFAULT_MAX_REWORKS;
+    gateAgeHours = hoursSince(gateOpenedAt(pr), opts.nowMs);
     if (correction && spent < ceiling) {
       state = "reporter_corrected";
       reasons = [...reasons, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON];
@@ -2295,6 +2331,8 @@ function classifyPR(pr, me, opts = {}) {
         reasons = [...reasons, REWORK_CEILING_REASON];
       else if (correctionTrailUnreadable(pr))
         reasons = [...reasons, CORRECTION_UNREADABLE_REASON];
+      if (gateAgeHours >= staleHours)
+        reasons = [...reasons, REPORTER_GATE_STALE_REASON];
     }
     if (conflicting && !reasons.includes("merge_conflict"))
       reasons = [...reasons, "merge_conflict"];
@@ -2319,7 +2357,16 @@ function classifyPR(pr, me, opts = {}) {
   const needsAction = state !== "ci_pending" && state !== "awaiting_review" && state !== "awaiting_reporter";
   if (needsAction && reasons.length === 0)
     reasons = [state];
-  return { number: pr.number, state, ciState, approved, ageHours, reasons, needsAction };
+  return {
+    number: pr.number,
+    state,
+    ciState,
+    approved,
+    ageHours,
+    reasons,
+    needsAction,
+    ...gateAgeHours === undefined ? {} : { gateAgeHours }
+  };
 }
 function intentGate(i) {
   const blocked = i.hasLabel || i.signal && !i.everCleared;
@@ -2559,14 +2606,18 @@ function foreignConflictedPRs(mine, all, me, opts = {}) {
     return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
   });
 }
-var FAILING, PENDING, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", ESCALATE_ONCE_REASONS, INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, TRUSTED_AUTHOR_ASSOCIATIONS;
+var FAILING, PENDING, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", ESCALATE_ONCE_REASONS, INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, TRUSTED_AUTHOR_ASSOCIATIONS;
 var init_pr_state = __esm(() => {
   init_shipflow_contract_data();
   FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
   PENDING = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"]);
   APPROVAL_LABELS = new Set([SHIPFLOW_CONTRACT.labels.names.shipflowApproved, "approved", "✅ approved"]);
   REPORTER_REVIEW_REASON = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
-  ESCALATE_ONCE_REASONS = [REWORK_CEILING_REASON, CORRECTION_UNREADABLE_REASON];
+  ESCALATE_ONCE_REASONS = [
+    REWORK_CEILING_REASON,
+    CORRECTION_UNREADABLE_REASON,
+    REPORTER_GATE_STALE_REASON
+  ];
   INTENT_BLOCKED_BY_DETAIL = {
     label: "blocking input: the `needs-reporter-review` label",
     signal: "blocking input: the PR body's interpretation/deviation signal (no label to remove)",
@@ -6488,6 +6539,7 @@ function minePrRow(pr, cl, ctx) {
     ageHours: Math.round(cl.ageHours),
     needsAttention: cl.needsAction || escalateOnce,
     reasons: cl.reasons,
+    ...cl.gateAgeHours !== undefined ? { gateAgeHours: Math.round(cl.gateAgeHours) } : {},
     ...corrections.length ? {
       correction: reporterCorrectionRow(corrections[0]),
       corrections: corrections.map(reporterCorrectionRow),
@@ -6501,6 +6553,16 @@ function minePrRow(pr, cl, ctx) {
 }
 function actionableConflicts(prs) {
   return prs.filter((p) => p.state === "conflict" && !p.humanOnly).length;
+}
+function escalateOnceNote(row) {
+  if (row.reasons.includes(REWORK_CEILING_REASON))
+    return "\uD83C\uDD98 escalate once (no rework left)";
+  if (row.reasons.includes(CORRECTION_UNREADABLE_REASON))
+    return "\uD83C\uDD98 escalate once (correction unreadable)";
+  if (row.reasons.includes(REPORTER_GATE_STALE_REASON)) {
+    return `\uD83C\uDD98 escalate once (gate stale — waiting ${Math.round(row.gateAgeHours ?? 0)}h)`;
+  }
+  return "\uD83C\uDD98 escalate once";
 }
 var PARKED_STATES = ["awaiting_review", "ci_pending", "awaiting_reporter"];
 function parkedCount(prs) {
@@ -6713,7 +6775,7 @@ function registerInboxCommand(program2) {
           p.state,
           `ci:${p.ciState}`,
           `${p.ageHours}h`,
-          p.title + (p.correction ? ` \uD83D\uDCE3 @${p.correction.author} corrected the reading` : "") + (p.corrections && p.corrections.length > 1 ? ` (+${p.corrections.length - 1} more unanswered)` : "") + (p.escalateOnce ? ` \uD83C\uDD98 escalate once (${p.escalateOnceReason})` : "") + (p.parentNeedsHuman ? " (parent is needs-human)" : "") + (p.degraded ? " ⚠️ degraded" : "") + (p.humanOnly ? ` \uD83D\uDD12 ${p.distrust} — human only` : "")
+          p.title + (p.correction ? ` \uD83D\uDCE3 @${p.correction.author} corrected the reading` : "") + (p.corrections && p.corrections.length > 1 ? ` (+${p.corrections.length - 1} more unanswered)` : "") + (p.escalateOnce ? ` ${escalateOnceNote(p)}` : "") + (p.parentNeedsHuman ? " (parent is needs-human)" : "") + (p.degraded ? " ⚠️ degraded" : "") + (p.humanOnly ? ` \uD83D\uDD12 ${p.distrust} — human only` : "")
         ]);
         for (const l of renderTable(["PR", "State", "CI", "Age", "Title"], rows))
           console.log(`  ${l}`);
@@ -7934,7 +7996,6 @@ function stampLoopReview(body) {
 
 ${marker}`;
 }
-var INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**";
 function renderIntentGateNotice() {
   const tokens = SHIPFLOW_CONTRACT.intentGate.confirmationTokens.map((t) => `\`${t}\``).join(", ");
   return [
