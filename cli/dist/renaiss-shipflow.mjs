@@ -3036,6 +3036,11 @@ function resolveRequireReview() {
   const c = loadConfig().requireReview;
   return c === undefined ? true : c;
 }
+function resolvePickupScope() {
+  const env = process.env.SHIPFLOW_PICKUP_SCOPE;
+  const raw = env != null && env.trim() !== "" ? env.trim() : loadConfig().pickupScope ?? "assigned";
+  return PICKUP_SCOPES.includes(raw) ? raw : "assigned";
+}
 function resolveIntentGateMode() {
   const env = process.env.SHIPFLOW_INTENT_GATE;
   const raw = env != null && env.trim() !== "" ? env.trim() : loadConfig().intentGate ?? "strict";
@@ -3104,7 +3109,7 @@ function resolveApiKey() {
   const a = resolveAuthToken();
   return a?.token;
 }
-var INTAKE_APPROVAL_MODES, DEFAULT_BASE, configFile = () => join(configDir(), "config.json"), credsFile = () => join(configDir(), "credentials.json"), projectsFile = () => join(configDir(), "projects.json"), MERGE_POLICIES, INTENT_GATE_MODES, loadConfig = () => readJsonOr(configFile(), {}), saveConfig = (c) => writeJson(configFile(), c), clearConfig = () => {
+var INTAKE_APPROVAL_MODES, DEFAULT_BASE, configFile = () => join(configDir(), "config.json"), credsFile = () => join(configDir(), "credentials.json"), projectsFile = () => join(configDir(), "projects.json"), MERGE_POLICIES, PICKUP_SCOPES, INTENT_GATE_MODES, loadConfig = () => readJsonOr(configFile(), {}), saveConfig = (c) => writeJson(configFile(), c), clearConfig = () => {
   try {
     unlinkSync(configFile());
   } catch {}
@@ -3116,6 +3121,7 @@ var init_config = __esm(() => {
   INTAKE_APPROVAL_MODES = ["code-org", "reporter", "off"];
   DEFAULT_BASE = join(homedir(), ".config", "renaissshipflow");
   MERGE_POLICIES = ["manual", "auto-on-green", "auto-timeout"];
+  PICKUP_SCOPES = ["assigned", "all"];
   INTENT_GATE_MODES = ["strict", "trusted"];
   APP_SLUG_RE = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/;
 });
@@ -4205,8 +4211,9 @@ ${SHIPFLOW_TRIAGED_MARKER}`;
   const number = parseInt(url.split("/").pop() || "0", 10);
   return { url, number };
 }
-function ghIssueList(repo, state = "open", limit = 30) {
-  const out = _exec(`gh issue list --repo ${shellQuote(repo)} --state ${state} --limit ${limit} --json ${FIELDS}`).toString();
+function ghIssueList(repo, state = "open", limit = 30, assignee) {
+  const assigneeArg = assignee ? ` --assignee ${shellQuote(assignee)}` : "";
+  const out = _exec(`gh issue list --repo ${shellQuote(repo)} --state ${state} --limit ${limit}${assigneeArg} --json ${FIELDS}`).toString();
   return JSON.parse(out);
 }
 var DETAIL_FIELDS = `${FIELDS},author,milestone,updatedAt,closedAt`;
@@ -4296,8 +4303,8 @@ function ghPRAuthorAssociations(repo, limit = 50) {
 function ghIssueAuthorAssociations(repo, limit = 200) {
   return ghAuthorAssociations(repo, "issues", limit);
 }
-function ghIssueListWithAssociations(repo, limit = 200) {
-  const issues = ghIssueList(repo, "open", limit);
+function ghIssueListWithAssociations(repo, limit = 200, assignee) {
+  const issues = ghIssueList(repo, "open", limit, assignee);
   let assoc;
   try {
     assoc = ghIssueAuthorAssociations(repo, limit);
@@ -5340,9 +5347,10 @@ init_helpers();
 var collect = (v, prev) => prev.concat([v]);
 function registerIssuesCommand(program2) {
   const issues = program2.command("issues").description("Issue listing");
-  issues.command("list").description("List open issues for the current repo, with ShipFlow triage overlay").option("--state <state>", "Issue state", "open").option("--limit <n>", "Max results", "30").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  issues.command("list").description("List open issues for the current repo, with ShipFlow triage overlay").option("--state <state>", "Issue state", "open").option("--limit <n>", "Max results", "30").option("--assignee <login>", "Only issues assigned to this user (@me = current gh login)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { project } = await loadCtx(program2);
-    const list = ghIssueList(project.repoFullName, opts.state, parseInt(opts.limit, 10));
+    const assignee = opts.assignee === "@me" ? ghCurrentLogin() : opts.assignee;
+    const list = ghIssueList(project.repoFullName, opts.state, parseInt(opts.limit, 10), assignee);
     emit(opts, { project, issues: list }, () => {
       if (!list.length) {
         console.log("No issues.");
@@ -6108,11 +6116,29 @@ ${section}` : section;
     const t = await loadTriage(ctx, repo, number);
     printIssueContext(issueData, t.triage, repo, ctx.project, opts, t.unavailable);
   }));
-  issue.command("next").description("Pick & claim the next open, unclaimed issue (for the work loop); exits 4 when none remain").option("--repo <fullname>", "Override target repo").option("--label <label>", "Only consider issues with this label").option("--assignee <login>", "Only consider issues assigned to this user").option("--agent <name>", "Agent label recorded on the claim (default: $SHIPFLOW_AGENT or hostname)").option("--ttl <minutes>", "Claim lifetime in minutes (default 120)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  issue.command("next").description("Pick & claim the next open, unclaimed issue (for the work loop); exits 4 when none remain").option("--repo <fullname>", "Override target repo").option("--label <label>", "Only consider issues with this label").option("--assignee <login>", "Only consider issues assigned to this user (@me = the gh login; default under pickup-scope=assigned)").option("--agent <name>", "Agent label recorded on the claim (default: $SHIPFLOW_AGENT or hostname)").option("--ttl <minutes>", "Claim lifetime in minutes (default 120)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const ctx = await loadCtx(program2);
     const repo = opts.repo ?? ctx.project.repoFullName;
     const agent = opts.agent ?? process.env.SHIPFLOW_AGENT ?? hostname2();
-    const open = ghIssueListWithAssociations(repo, 200);
+    let assignee = opts.assignee;
+    if (assignee === "@me" || assignee === undefined && resolvePickupScope() === "assigned") {
+      let me = "";
+      try {
+        me = ghCurrentLogin();
+      } catch {
+        me = "";
+      }
+      if (!me) {
+        const msg = "pickup-scope=assigned but the gh login could not be resolved (auth/network?) — refusing repo-wide pickup; fix `gh auth status` or set pickup-scope all.";
+        if (opts.json)
+          console.log(JSON.stringify({ error: msg }));
+        else
+          console.error(`⛔ ${msg}`);
+        process.exit(1);
+      }
+      assignee = me;
+    }
+    const open = ghIssueListWithAssociations(repo, 200, assignee);
     let claimsUnavailable = false;
     const claims = await ctx.client.listClaims(ctx.creds.org, ctx.project.projectId).catch(() => {
       claimsUnavailable = true;
@@ -6205,7 +6231,7 @@ ${section}` : section;
         console.warn(`waiting-on heal failed for #${i.number} (still waiting): ${e.message}`);
       }
     }
-    const matching = open.filter((i) => isActionableForPickup(i, { claimed: claimed.has(i.number), label: opts.label, assignee: opts.assignee, intakeMode }));
+    const matching = open.filter((i) => isActionableForPickup(i, { claimed: claimed.has(i.number), label: opts.label, assignee, intakeMode }));
     const candidates = sortIssuesForPickup(matching);
     let raced = 0;
     for (const cand of candidates) {
@@ -7006,6 +7032,17 @@ var SETTINGS = [
     field: "conflictSweep",
     set: (v, c) => String(c.conflictSweep = parseBool(v)),
     effective: resolveConflictSweep
+  },
+  {
+    key: "pickup-scope",
+    field: "pickupScope",
+    set: (v, c) => {
+      const m = v.trim();
+      if (!PICKUP_SCOPES.includes(m))
+        throw new Error(`pickup-scope must be one of: ${PICKUP_SCOPES.join(", ")}`);
+      return c.pickupScope = m;
+    },
+    effective: resolvePickupScope
   },
   {
     key: "intent-gate",

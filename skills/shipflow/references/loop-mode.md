@@ -83,6 +83,7 @@ Read them with `renaiss-shipflow config list`; set with `config set <key> <v>`
 | `merge-policy` | `manual` | `manual` = never auto-merge (park for a human) · `auto-on-green` = merge when CI green **and** approved · `auto-timeout` = green + no objection past `stale-pr-hours` |
 | `require-ci` | `true` | CI must be green before a PR is "advanced" / merged |
 | `max-fix-attempts` | `3` | CI-fix tries on one PR before escalating to a human — also caps reporter-correction reworks (#442) |
+| `pickup-scope` | `assigned` | `assigned` = the loop claims only issues assigned to its own account — assignment is the queueing gesture (#600) · `all` = repo-wide pickup (pre-#600) |
 | `intent-gate` | `strict` | `strict` = a Deviations section, an Interpretation-note callout, or the interpretation marker all park the PR for the reporter · `trusted` = only the EXPLICIT reinterpretation signals (marker/callout) park; reviewer-approved deviations merge on green (#471 — for solo operators) |
 | `wip-limit` | `10` | max ACTIONABLE open PRs you own before you stop admitting new work — reporter-parked (`awaiting_reporter`) PRs don't count (#451; read `summary.wipActionable`) |
 | `stale-pr-hours` | `48` | a green, unreviewed PR older than this is `stale` → ping/escalate |
@@ -133,6 +134,24 @@ your context.
     behavior (the host picks per dispatch, per "Match the model to the task").
 
 ## The cycle — each tick
+
+**Tick 1 only — lay out the Initial Plan before ANY dispatch (#600).** After
+the drift probe and the first `inbox --json`, read the queue WITHOUT claiming
+(`renaiss-shipflow issues list --assignee @me --state open --json` under the
+default `pickup-scope assigned`; drop `--assignee` when the scope is `all` —
+the plan must show the queue the loop will ACTUALLY pick from. A read, never
+`issue next`) and print one graphical-first plan block:
+
+| Section | Content |
+|---|---|
+| Policies | merge-policy · require-ci · cap · wip-limit · pickup-scope · intent-gate, one line |
+| Reconcile | one row per in-flight PR: `#N · state · planned action` |
+| Admission queue | the scope's eligible issues in pickup order (priority → severity → newest), up to `cap`, each `#N · priority · title` |
+| Deferred | anything visible but not actionable this run (parked, waiting-on, over-cap) with the reason |
+
+Then proceed. This is the operator's chance to interrupt a wrong plan before
+workers spend tokens; subsequent ticks print only the one-line summary — never
+repeat the plan block.
 
 ### 0. CLI drift check — POST-MERGE (primary) · TICK-START (backstop)
 
@@ -403,7 +422,11 @@ issue — each step a fresh subagent. **The cap is per pass, not per session**
 every tick — a session that opened 5 PRs yesterday is not "at cap" today, and
 "🛑 at cap" may only ever appear in a tick that itself opened `cap` PRs.
 
-1. **Pick** — `renaiss-shipflow issue next --json` (claims next open/unclaimed,
+1. **Pick** — `renaiss-shipflow issue next --json` (claims next open/unclaimed
+   issue **assigned to the account running the loop** — `pickup-scope`
+   defaults to `assigned` (#600), so assigning an issue IS the queueing
+   gesture; unassigned issues are invisible to the loop until someone assigns
+   them. `config set pickup-scope all` restores repo-wide pickup. Ordering:
    priority → severity → newest; optional `--label bug`; skips `needs-human`/claimed).
    - **Intake gate (#448):** an issue opened from OUTSIDE the code org (author
      association not `OWNER`/`MEMBER`/`COLLABORATOR`, or unreadable — it fails

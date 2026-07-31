@@ -28,6 +28,13 @@ queue); anything else is an `issue next` filter (e.g. `--label bug`). No `cap=` 
 .worktrees/shipflow-loop -b shipflow-loop/base origin/<default>` and `cd` in. Reuse
 if it exists; all work happens inside it.
 
+**First tick only:** lay out the Initial Plan before any dispatch — policies
+line, reconcile table (PR → planned action), admission queue in pickup order up to the cap
+(read via `issues list --assignee @me` under the default assigned scope, or
+without the filter under `pickup-scope all` — the plan shows what the loop
+will actually pick; never claimed for the plan), and deferred items with reasons (#600). Later
+ticks print only the summary line.
+
 Each tick:
 
 **A. Reconcile in-flight first** — `renaiss-shipflow inbox --json` classifies each
@@ -120,7 +127,10 @@ nothing `needsAttention`:
 skip B. Else while PRs-opened-THIS-PASS < `cap` (the counter resets to zero every
 tick — hitting the cap never carries across ticks, #451), admit ONE issue (each
 step a subagent):
-1. **Pick** — `renaiss-shipflow issue next --json` (priority→severity→newest; skips
+1. **Pick** — `renaiss-shipflow issue next --json` — claims only issues
+   **assigned to the loop's account** (`pickup-scope` default `assigned`, #600;
+   assign an issue to queue it, `config set pickup-scope all` for repo-wide).
+   Ordering priority→severity→newest; skips
    `needs-human`/claimed/`⏳ waiting-on`). Exit 4 / `issue: null` → nothing to
    admit. Dependency: blocked-by an unmerged `#X` → `issue wait <n> --on <#X>`
    + next (NOT escalate — `issue next` re-admits it automatically when the
