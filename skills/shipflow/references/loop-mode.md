@@ -397,6 +397,65 @@ every tick — a session that opened 5 PRs yesterday is not "at cap" today, and
 
 1. **Pick** — `renaiss-shipflow issue next --json` (claims next open/unclaimed,
    priority → severity → newest; optional `--label bug`; skips `needs-human`/claimed).
+   - **Intake gate (#448):** an issue opened from OUTSIDE the code org (author
+     association not `OWNER`/`MEMBER`/`COLLABORATOR`, or unreadable — it fails
+     closed) is labelled `needs-reporter-approval` and is **not claimable** until
+     someone with **triage permission or above** removes the label. GitHub's own
+     permissions enforce that: an outside account cannot remove a label. A
+     non-code contributor's own confirmation therefore happens in the chat thread
+     where ShipFlow knows their exact identity, not on GitHub. Unset means
+     `code-org`.
+     - **Arming happens ONCE per issue**, recorded by a hidden
+       `shipflow:intake-gated` marker in the gate comment. So removing the label
+       **sticks** — the loop does not re-apply it on the next pass, and the issue
+       re-enters the queue. That hand removal IS the per-issue approval. (The one
+       re-arm: the issue is edited *after* it was approved — see below.)
+     - **Only a LOOP-AUTHORED marker counts.** Commenting needs no write access,
+       so the marker is *not* permission-enforced the way the label is — a
+       body-only match would let any commenter post the invisible marker on
+       their own issue and skip the gate entirely. The loop therefore ignores
+       markers it did not author (`viewerDidAuthor === false`). Removing the
+       **label** stays the only approval, and that is the part GitHub enforces.
+     - **The approval is the removal EVENT, not the label being absent.** The
+       marker only records "this loop armed this issue". Before admitting an
+       armed issue the loop reads the `unlabeled` timeline live and requires a
+       real removal by a **named actor** (a NULL actor is rejected). Without
+       that, the issue is withheld and nothing is written. This is what makes
+       **two loops on one repo** safe: the open-issue list is snapshotted once
+       per pass, so loop B can hold a snapshot taken before loop A armed an
+       issue — inferring approval from that stale absence admitted unapproved
+       outside work (PR #450 round 5).
+     - **Approval binds to the CONTENT, not just to the label.** If the issue's
+       **body OR title** changes **after** the removal, the loop re-arms and
+       asks for a fresh approval — otherwise a filer could get a benign issue
+       approved and then rewrite it into build instructions no maintainer ever
+       saw. Changes made *before* the approval are untouched: the maintainer
+       read those. Both halves are needed: GitHub's `lastEditedAt` covers the
+       **body only**, while a retitle is a separate `RenamedTitleEvent` — and on
+       a thin-bodied issue the title *is* the spec, so the title alone was a
+       full post-approval swap (PR #450 round 6). The rename events ride on the
+       timeline read the removal check already makes, so it costs no extra call.
+     - **Caveat — the trust set is wider than the approval permission.** GitHub
+       returns `COLLABORATOR` for *any* invited collaborator, including an
+       **outside collaborator with read-only** permission, while removing a
+       label needs **triage or above**. So a read-only outside collaborator's
+       own issues are admitted ungated, even though that account cannot approve
+       anyone else's. This is deliberate — the set mirrors `pr-state.ts` and the
+       server's `trustedAuthorAssociations`, and narrowing it would gate every
+       write-access contractor. The operator-side control is simply not to
+       invite read-only outside collaborators on a repo the loop builds.
+     - `config set intake-approval off` disables the gate **entirely** — it stops
+       new arming AND makes issues **already carrying** the label claimable
+       again. That second half matters: nothing removes `needs-reporter-approval`
+       automatically today (**#473**), so `off` is the only **repo-wide** way back
+       from a mass-arming event.
+     - `intake-approval reporter` is **accepted but not yet honored** on the
+       GitHub intake path — reporter-side clearing is chat-only and has no
+       GitHub implementation (**#473**), so today `reporter` gates exactly like
+       `code-org`.
+     - An **unreadable** author association — or an unreadable comment list —
+       gates the issue for that pass only and writes **no** label; a lookup
+       outage must not persist a one-way gate across the whole repo.
    **Exit 4** / `issue: null` → nothing to admit.
    - **Dependency check:** blocked-by / depends-on an unmerged `#X` →
      `renaiss-shipflow issue wait <n> --on <#X> --reason "…"` and pick the next.

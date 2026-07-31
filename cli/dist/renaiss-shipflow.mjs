@@ -2118,7 +2118,7 @@ var init_shipflow_contract_data = __esm(() => {
       ]
     },
     labels: {
-      $comment: "ShipFlow's GitHub label palette + the lifecycle label NAMES. `colors` maps a label name to its 6-hex color; ShipFlow owns these colors and BOTH the server's ensureLabels and the CLI's ghEnsureLabel source this ONE map (pre-contract they were byte-identical copies, so a color edit on one side flip-flopped the label). `prefixColors` colors open-ended label groups by name prefix. `names` are the lifecycle labels the code references by MEANING (claim / escalation / approval / reporter-review / verify-failed); every `names` value is also a `colors` key (parity-tested). `verifyFailed` is applied by the post-deploy verifier when a PR's verification manifest has a failing assertion (issue #207) — it hooks the reporter ping and the follow-up auto-revert. `autoHarvested` marks issues the cross-reviewer finding harvester files from valid findings OTHER PR reviewers (gemini-code-assist, chatgpt-codex-connector) raised and ShipFlow missed (part of #56). Repaint/matching semantics stay per-consumer — only the literals are shared.",
+      $comment: "ShipFlow's GitHub label palette + the lifecycle label NAMES. `colors` maps a label name to its 6-hex color; ShipFlow owns these colors and BOTH the server's ensureLabels and the CLI's ghEnsureLabel source this ONE map (pre-contract they were byte-identical copies, so a color edit on one side flip-flopped the label). `prefixColors` colors open-ended label groups by name prefix. `names` are the lifecycle labels the code references by MEANING (claim / escalation / approval / reporter-review / verify-failed); every `names` value is also a `colors` key (parity-tested). `needsReporterApproval` is the INTAKE gate (issue #448): an issue opened by an account outside the code org carries it until a trusted maintainer approves, and `isActionableForPickup` refuses to claim a carrier — so the loop cannot build work nobody in the org has green-lit. It is deliberately NOT `needsReporterReview`: that label is the #441 MERGE gate with its own confirmation-token grammar, and one reply must never release two different decisions. `verifyFailed` is applied by the post-deploy verifier when a PR's verification manifest has a failing assertion (issue #207) — it hooks the reporter ping and the follow-up auto-revert. `autoHarvested` marks issues the cross-reviewer finding harvester files from valid findings OTHER PR reviewers (gemini-code-assist, chatgpt-codex-connector) raised and ShipFlow missed (part of #56). Repaint/matching semantics stay per-consumer — only the literals are shared.",
       colors: {
         bug: "d73a4a",
         enhancement: "a2eeef",
@@ -2134,6 +2134,7 @@ var init_shipflow_contract_data = __esm(() => {
         "severity:blocking": "e11d48",
         "\uD83E\uDD16 in-progress": "1d76db",
         "needs-reporter-review": "d4c5f9",
+        "needs-reporter-approval": "c2a5f9",
         "needs-human": "d93f0b",
         "shipflow-approved": "0e8a16",
         "loop-proceed": "0e8a16",
@@ -2155,6 +2156,7 @@ var init_shipflow_contract_data = __esm(() => {
       names: {
         inProgress: "\uD83E\uDD16 in-progress",
         needsReporterReview: "needs-reporter-review",
+        needsReporterApproval: "needs-reporter-approval",
         needsHuman: "needs-human",
         shipflowApproved: "shipflow-approved",
         verifyFailed: "verify-failed",
@@ -2994,6 +2996,10 @@ function resolveConflictSweep() {
     return parseBool(env);
   return loadConfig().conflictSweep === true;
 }
+function resolveIntakeApproval() {
+  const raw = (process.env.SHIPFLOW_INTAKE_APPROVAL ?? loadConfig().intakeApproval ?? "code-org").trim().toLowerCase();
+  return INTAKE_APPROVAL_MODES.includes(raw) ? raw : "code-org";
+}
 function resolveSignoffOwner() {
   const env = process.env.SHIPFLOW_SIGNOFF_OWNER;
   const raw = env != null && env.trim() !== "" ? env : loadConfig().signoffOwner ?? "";
@@ -3047,7 +3053,7 @@ function resolveApiKey() {
   const a = resolveAuthToken();
   return a?.token;
 }
-var DEFAULT_BASE, configFile = () => join(configDir(), "config.json"), credsFile = () => join(configDir(), "credentials.json"), projectsFile = () => join(configDir(), "projects.json"), MERGE_POLICIES, INTENT_GATE_MODES, loadConfig = () => readJsonOr(configFile(), {}), saveConfig = (c) => writeJson(configFile(), c), clearConfig = () => {
+var INTAKE_APPROVAL_MODES, DEFAULT_BASE, configFile = () => join(configDir(), "config.json"), credsFile = () => join(configDir(), "credentials.json"), projectsFile = () => join(configDir(), "projects.json"), MERGE_POLICIES, INTENT_GATE_MODES, loadConfig = () => readJsonOr(configFile(), {}), saveConfig = (c) => writeJson(configFile(), c), clearConfig = () => {
   try {
     unlinkSync(configFile());
   } catch {}
@@ -3056,6 +3062,7 @@ var init_config = __esm(() => {
   init_escalation_format();
   init_shipflow_contract_data();
   init_pr_state();
+  INTAKE_APPROVAL_MODES = ["code-org", "reporter", "off"];
   DEFAULT_BASE = join(homedir(), ".config", "renaissshipflow");
   MERGE_POLICIES = ["manual", "auto-on-green", "auto-timeout"];
   INTENT_GATE_MODES = ["strict", "trusted"];
@@ -4200,12 +4207,67 @@ function ghPRListMine(repo, limit = 30) {
   const out = _exec(`gh pr list --repo ${shellQuote(repo)} --author @me --state open --limit ${limit} --json ${PR_FIELDS}`).toString();
   return JSON.parse(out);
 }
-function ghPRAuthorAssociations(repo, limit = 50) {
+var GH_GRAPHQL_PAGE_MAX = 100;
+function ghAuthorAssociations(repo, connection, limit) {
   const [owner, name] = repo.split("/");
-  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){" + "pullRequests(states:OPEN,first:$n){nodes{number authorAssociation}}}}";
-  const out = _exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${limit}`).toString();
-  const nodes = JSON.parse(out)?.data?.repository?.pullRequests?.nodes ?? [];
-  return new Map(nodes.filter((n) => typeof n.number === "number").map((n) => [n.number, String(n.authorAssociation ?? "")]));
+  const assoc = new Map;
+  let remaining = Math.max(0, Math.trunc(limit));
+  let after;
+  while (remaining > 0) {
+    const page = Math.min(remaining, GH_GRAPHQL_PAGE_MAX);
+    const q = "query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){" + `${connection}(states:OPEN,first:$n,after:$c,orderBy:{field:CREATED_AT,direction:DESC})` + "{pageInfo{hasNextPage endCursor}nodes{number authorAssociation}}}}";
+    const cmd = `gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${page}` + (after ? ` -f c=${shellQuote(after)}` : "");
+    const payload = JSON.parse(_exec(cmd).toString());
+    if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+      throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
+    }
+    const conn = payload?.data?.repository?.[connection];
+    if (!conn)
+      throw new Error(`GraphQL returned no ${connection} connection for ${repo} (repository null or unreadable)`);
+    const nodes = conn.nodes ?? [];
+    for (const n of nodes) {
+      if (typeof n.number === "number")
+        assoc.set(n.number, String(n.authorAssociation ?? ""));
+    }
+    remaining -= nodes.length;
+    after = conn.pageInfo?.endCursor ?? undefined;
+    if (!conn.pageInfo?.hasNextPage || !after || nodes.length === 0)
+      break;
+  }
+  return assoc;
+}
+function ghPRAuthorAssociations(repo, limit = 50) {
+  return ghAuthorAssociations(repo, "pullRequests", limit);
+}
+function ghIssueAuthorAssociations(repo, limit = 200) {
+  return ghAuthorAssociations(repo, "issues", limit);
+}
+function ghIssueListWithAssociations(repo, limit = 200) {
+  const issues = ghIssueList(repo, "open", limit);
+  let assoc;
+  try {
+    assoc = ghIssueAuthorAssociations(repo, limit);
+  } catch (e) {
+    console.error(`⚠️  issue authorAssociation lookup failed (${String(e.message ?? e).split(`
+`)[0]}) — ` + `all ${issues.length} open issue(s) report as association-unknown and stay gated for THIS pass only; ` + `no ${SHIPFLOW_CONTRACT.labels.names.needsReporterApproval} label will be written.`);
+    for (const i of issues)
+      i.associationLookupFailed = true;
+    return issues;
+  }
+  let uncovered = 0;
+  for (const i of issues) {
+    const a = assoc.get(i.number);
+    if (a === undefined) {
+      i.associationLookupFailed = true;
+      uncovered++;
+      continue;
+    }
+    i.authorAssociation = a;
+  }
+  if (uncovered > 0) {
+    console.error(`⚠️  ${uncovered} of ${issues.length} open issue(s) fell outside the authorAssociation window — ` + "they report as association-unknown and stay gated for THIS pass only; no label will be written.");
+  }
+  return issues;
 }
 function ghPRListAll(repo, limit = 50) {
   const out = _exec(`gh pr list --repo ${shellQuote(repo)} --state open --limit ${limit} --json ${PR_FIELDS}`).toString();
@@ -4321,19 +4383,37 @@ function ghIssueComment(repo, number, body) {
   _exec(`gh issue comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(body)}`, { stdio: "ignore" });
 }
 function ghLabelRemovals(repo, number, label) {
+  return ghIssueTimelineSignals(repo, number, label).removals;
+}
+function ghIssueTimelineSignals(repo, number, label) {
+  const signals = { removals: [], renamedAt: [] };
   try {
     const [owner, name] = repo.split("/");
     const path = `repos/${owner}/${name}/issues/${number}/timeline`;
-    const q = '.[] | select(.event=="unlabeled") | [.label.name, (.actor.login // ""), (.actor.type // "")] | @tsv';
+    const q = '.[] | select(.event=="unlabeled" or .event=="renamed") | [.event, (.label.name // ""), (.actor.login // ""), (.actor.type // ""), (.created_at // "")] | @tsv';
     const out = _exec(`gh api ${shellQuote(path)} --paginate -q ${shellQuote(q)}`).toString();
-    return out.split(`
-`).map((l) => l.split("\t")).filter((c) => c[0] === label).map((c) => {
-      const actor = (c[1] ?? "").trim();
-      const type = (c[2] ?? "").trim().toLowerCase();
-      return { actor, actorIsBot: type === "bot" || actor.endsWith("[bot]"), actorKnown: actor !== "" };
-    });
+    for (const line of out.split(`
+`)) {
+      const c = line.split("\t");
+      const event = (c[0] ?? "").trim();
+      if (event === "renamed") {
+        signals.renamedAt.push((c[4] ?? "").trim());
+        continue;
+      }
+      if (event !== "unlabeled" || c[1] !== label)
+        continue;
+      const actor = (c[2] ?? "").trim();
+      const type = (c[3] ?? "").trim().toLowerCase();
+      signals.removals.push({
+        actor,
+        actorIsBot: type === "bot" || actor.endsWith("[bot]"),
+        actorKnown: actor !== "",
+        createdAt: (c[4] ?? "").trim()
+      });
+    }
+    return signals;
   } catch {
-    return [];
+    return { removals: [], renamedAt: [] };
   }
 }
 function ghIntentGateAuditCandidates(repo, number) {
@@ -4347,6 +4427,18 @@ function ghIntentGateAuditCandidates(repo, number) {
   } catch {
     return [];
   }
+}
+function ghIssueLastEditedAt(repo, number) {
+  const [owner, name] = repo.split("/");
+  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){lastEditedAt}}}";
+  const payload = JSON.parse(_exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString());
+  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
+  }
+  const issue = payload?.data?.repository?.issue;
+  if (!issue)
+    throw new Error(`GraphQL returned no issue ${repo}#${number} (repository null or unreadable)`);
+  return issue.lastEditedAt ? String(issue.lastEditedAt) : null;
 }
 function ghIntentGateAuditCount(repo, number) {
   try {
@@ -5565,6 +5657,11 @@ init_shipflow_contract_data();
 var NEEDS_HUMAN_LABEL = SHIPFLOW_CONTRACT.labels.names.needsHuman;
 var IN_PROGRESS_LABEL = SHIPFLOW_CONTRACT.labels.names.inProgress;
 var WAITING_ON_LABEL = SHIPFLOW_CONTRACT.labels.names.waitingOn;
+var NEEDS_REPORTER_APPROVAL_LABEL = SHIPFLOW_CONTRACT.labels.names.needsReporterApproval;
+var TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS = ["OWNER", "MEMBER", "COLLABORATOR"];
+function isOutsideCodeOrg(authorAssociation) {
+  return !TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS.includes(String(authorAssociation ?? "").trim().toUpperCase());
+}
 function isActionableForPickup(issue, filter) {
   if (filter.claimed)
     return false;
@@ -5574,6 +5671,8 @@ function isActionableForPickup(issue, filter) {
   if (labels.includes(IN_PROGRESS_LABEL))
     return false;
   if (labels.includes(WAITING_ON_LABEL))
+    return false;
+  if (filter.intakeMode !== "off" && labels.includes(NEEDS_REPORTER_APPROVAL_LABEL))
     return false;
   if (filter.label && !labels.includes(filter.label))
     return false;
@@ -5604,6 +5703,55 @@ function extractWaitingOnDep(comments) {
       return { repo: m[1], number: parseInt(m[2], 10) };
   }
   return null;
+}
+var INTAKE_GATE_MARKER = "<!-- shipflow:intake-gated -->";
+function hasIntakeGateMarker(comments) {
+  return comments.some((c) => c.viewerDidAuthor && /<!--\s*shipflow:intake-gated\s*-->/.test(c.body));
+}
+function classifyIntakeApproval(removals, lastEditedAt, renamedAt) {
+  let approvedAt = null;
+  for (const r of removals) {
+    if (!r.actorKnown)
+      continue;
+    const t = Date.parse(r.createdAt ?? "");
+    if (Number.isNaN(t))
+      continue;
+    if (approvedAt === null || t > approvedAt)
+      approvedAt = t;
+  }
+  if (approvedAt === null)
+    return "unapproved";
+  const body = (lastEditedAt ?? "").trim();
+  const changes = body === "" ? [...renamedAt] : [body, ...renamedAt];
+  for (const raw of changes) {
+    const changed = Date.parse((raw ?? "").trim());
+    if (Number.isNaN(changed))
+      return "stale";
+    if (changed > approvedAt)
+      return "stale";
+  }
+  return "approved";
+}
+function decideIntakeGate(issue, ctx) {
+  if (ctx.intakeMode === "off")
+    return "none";
+  if (issue.labels.some((l) => l.name === NEEDS_REPORTER_APPROVAL_LABEL))
+    return "none";
+  if (!isOutsideCodeOrg(issue.authorAssociation))
+    return "none";
+  if (ctx.armedBefore === null)
+    return "check-marker";
+  if (ctx.armedBefore) {
+    if (ctx.approval == null)
+      return "check-approval";
+    if (ctx.approval === "approved")
+      return "none";
+    if (ctx.approval === "unapproved")
+      return "gate-unapproved";
+  }
+  if (issue.associationLookupFailed)
+    return "gate-this-pass";
+  return "arm";
 }
 function isStaleInProgress(issue, claimed, openPRIssues) {
   if (!issue.labels.some((l) => l.name === IN_PROGRESS_LABEL))
@@ -5897,7 +6045,7 @@ ${section}` : section;
     const ctx = await loadCtx(program2);
     const repo = opts.repo ?? ctx.project.repoFullName;
     const agent = opts.agent ?? process.env.SHIPFLOW_AGENT ?? hostname2();
-    const open = ghIssueList(repo, "open", 200);
+    const open = ghIssueListWithAssociations(repo, 200);
     let claimsUnavailable = false;
     const claims = await ctx.client.listClaims(ctx.creds.org, ctx.project.projectId).catch(() => {
       claimsUnavailable = true;
@@ -5921,6 +6069,58 @@ ${section}` : section;
         }
       }
     }
+    const intakeMode = resolveIntakeApproval();
+    for (const i of intakeMode === "off" ? [] : open) {
+      let approvalState = null;
+      let action = decideIntakeGate(i, { intakeMode, armedBefore: null });
+      if (action === "check-marker") {
+        let armedBefore = null;
+        try {
+          armedBefore = hasIntakeGateMarker(ghIssueComments(repo, i.number));
+        } catch (e) {
+          console.warn(`intake gate: could not read #${i.number}'s comments (gated this pass only, nothing written): ${e.message}`);
+        }
+        action = armedBefore === null ? "gate-this-pass" : decideIntakeGate(i, { intakeMode, armedBefore });
+        if (action === "check-approval") {
+          let approval = "unapproved";
+          try {
+            const timeline = ghIssueTimelineSignals(repo, i.number, NEEDS_REPORTER_APPROVAL_LABEL);
+            approval = classifyIntakeApproval(timeline.removals, ghIssueLastEditedAt(repo, i.number), timeline.renamedAt);
+          } catch (e) {
+            console.warn(`intake gate: could not read #${i.number}'s approval evidence (withheld this pass, nothing written): ${e.message}`);
+          }
+          approvalState = approval;
+          action = decideIntakeGate(i, { intakeMode, armedBefore, approval });
+        }
+      }
+      if (action === "none")
+        continue;
+      i.labels = [...i.labels, { name: NEEDS_REPORTER_APPROVAL_LABEL }];
+      if (action === "gate-unapproved") {
+        console.warn(`\uD83D\uDD12 #${i.number}: gate armed and no ${NEEDS_REPORTER_APPROVAL_LABEL} removal on record — ` + "withheld this pass, nothing written (another loop may have just armed it).");
+        continue;
+      }
+      if (action === "gate-this-pass") {
+        console.warn(`\uD83D\uDD12 #${i.number}: author association unreadable — gated for THIS pass only, no label written. ` + `If this persists, the association lookup is failing, not the author.`);
+        continue;
+      }
+      try {
+        ghEnsureLabel(repo, NEEDS_REPORTER_APPROVAL_LABEL);
+        ghIssueAddLabels(repo, i.number, [NEEDS_REPORTER_APPROVAL_LABEL]);
+        const reArm = approvalState === "stale";
+        ghIssueComment(repo, i.number, [
+          reArm ? `\uD83D\uDD12 **Intake gate re-armed** — this issue was approved, but its **body or title changed after** that approval, so the ShipFlow loop is no longer holding a maintainer's sign-off on the content it would build.` : `\uD83D\uDD12 **Intake gate** — this issue was filed from outside the code org (\`${i.authorAssociation || "unknown"}\`), so the ShipFlow loop will not build it until a maintainer approves.`,
+          "",
+          reArm ? `**To re-approve:** remove the \`${NEEDS_REPORTER_APPROVAL_LABEL}\` label again after reading the current text. Approval binds to the content, not to the label.` : `**To approve:** remove the \`${NEEDS_REPORTER_APPROVAL_LABEL}\` label. The loop arms this gate **once** — it will not re-apply the label unless the issue is edited after approval, and the issue re-enters the queue on the next pass.`,
+          "",
+          INTAKE_GATE_MARKER
+        ].join(`
+`));
+        console.warn(reArm ? `\uD83D\uDD12 #${i.number}: edited after approval — intake gate re-armed, needs a fresh approval.` : `\uD83D\uDD12 #${i.number}: author association ${i.authorAssociation || "unknown"} — needs an approval from the code org before the loop builds it.`);
+      } catch (e) {
+        console.warn(`intake gate: could not label #${i.number} (still gated this tick): ${e.message}`);
+      }
+    }
     for (const i of open) {
       if (!i.labels.some((l) => l.name === WAITING_ON_LABEL) || claimed.has(i.number))
         continue;
@@ -5938,7 +6138,7 @@ ${section}` : section;
         console.warn(`waiting-on heal failed for #${i.number} (still waiting): ${e.message}`);
       }
     }
-    const matching = open.filter((i) => isActionableForPickup(i, { claimed: claimed.has(i.number), label: opts.label, assignee: opts.assignee }));
+    const matching = open.filter((i) => isActionableForPickup(i, { claimed: claimed.has(i.number), label: opts.label, assignee: opts.assignee, intakeMode }));
     const candidates = sortIssuesForPickup(matching);
     let raced = 0;
     for (const cand of candidates) {
@@ -6735,6 +6935,17 @@ var SETTINGS = [
       return c.intentGate = m;
     },
     effective: resolveIntentGateMode
+  },
+  {
+    key: "intake-approval",
+    field: "intakeApproval",
+    set: (v, c) => {
+      const m = v.trim().toLowerCase();
+      if (!INTAKE_APPROVAL_MODES.includes(m))
+        throw new Error(`intake-approval must be one of: ${INTAKE_APPROVAL_MODES.join(", ")}`);
+      return c.intakeApproval = m;
+    },
+    effective: resolveIntakeApproval
   },
   {
     key: "loop-worker-model",
