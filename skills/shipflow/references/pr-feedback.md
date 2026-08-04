@@ -1,22 +1,19 @@
 # Resolving PR review feedback (loop reconcile, step 1)
 
-For each open PR the loop authored that needs attention, work through **every**
-reviewer comment, fix what you can, and reply so reviewers (human and automated,
-e.g. gemini-code-assist) know what happened. Only act on **your own** PRs.
+Work through **every** reviewer comment (human and bot, e.g.
+gemini-code-assist) on loop-authored PRs needing attention; fix what you can,
+then reply via `renaiss-shipflow pr note <n> --body …` (#603 — the marked path; bare `gh pr comment` on a loop PR re-reads as a reporter correction, #477). Only act on **your own** PRs.
 
 ## 1. Gather every comment — don't miss inline ones
 
-Start with `renaiss-shipflow pr reviews <n> --json` — it lists every **unresolved
-review thread** (with its node-`id`, author, path, and body), including async bot
-reviewers. Those threads are what block approval/merge, so they're the worklist.
-`gh pr view <n> --comments` shows general comments + review summaries but **not**
-line-level inline comments — fetch those too:
+`pr reviews --json` is the worklist (unresolved threads block approval/merge);
+`gh pr view --comments` misses line-level inline comments — fetch separately:
 
 ```bash
-renaiss-shipflow pr reviews <n> --json                      # unresolved threads (the worklist)
-gh pr view <n> --comments                                   # general + review bodies
-gh pr view <n> --json reviews,statusCheckRollup,headRefName # verdicts + CI + branch
-gh pr checks <n>                                            # CI status
+renaiss-shipflow pr reviews <n> --json    # unresolved threads (node-id, author, path, body) — the worklist
+gh pr view <n> --comments                 # general + review bodies
+gh pr view <n> --json reviews,statusCheckRollup,headRefName  # verdicts + CI + branch
+gh pr checks <n>                          # CI status
 # inline (code-line) review comments:
 gh api repos/<owner>/<repo>/pulls/<n>/comments \
   --jq '.[] | "\(.path):\(.line) [@\(.user.login)] \(.body)"'
@@ -24,24 +21,22 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments \
 
 ## 2. Triage each comment (from someone other than you)
 
-- **Actionable & clear** → fix it.
+- **Actionable & clear** → fix.
 - **Needs clarification** → ask in a reply; don't guess.
 - **Won't fix / disagree** → reply with a brief reason; never silently ignore.
 - **Already addressed / stale** → skip (don't re-reply).
 
 ## 3. Fix
 
-Check out the PR's branch (`gh pr checkout <n>` or `git checkout <headRefName>`),
-make the changes for **all** actionable comments together, run the project's tests
-and the browser check (loop step 5), commit by **invoking the `shipflow:smart-commit`
-skill** (per loop-mode.md § "Commit messages" — no AI-attribution trailer, skip
-the human-confirm gate), and push.
+`gh pr checkout <n>`, fix **all** actionable comments together, run tests +
+browser check (loop step 5), commit via the **`shipflow:smart-commit`** skill
+(loop-mode.md § "Commit messages": no AI-attribution trailer, skip the
+human-confirm gate), push.
 
 ## 4. Reply on the PR — necessary comments only
 
-- Post **one consolidated comment**: a resolution table the reviewer judges in
-  one glance — one row per comment addressed, then any question as its own line
-  with a recommendation:
+One consolidated comment — resolution table, then any question as its own line
+with a recommendation:
 
   ```
   | # | Comment | Change | ✓ |
@@ -51,33 +46,32 @@ the human-confirm gate), and push.
 
   Q: <thing> — **Recommendation:** <answer>. Your call.
   ```
-- To answer a specific inline thread, reply to it directly:
-  `gh api repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body="…"`
-- If you fixed CI, say what was failing and how you fixed it (one row in the table).
-- Don't comment just to say "done" — keep it signal, not noise.
+
+Inline-thread reply:
+`gh api repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body="…"`.
+Fixed CI → one row (what failed, how fixed). No "done"-only comments — signal,
+not noise.
 
 ## 5. Comment on the linked issue when relevant
 
-If the feedback changes scope/behavior or the reporter should know, add a short
-note on the issue the PR closes:
+Scope/behavior changed, or the reporter should know →
 `gh issue comment <n> --body "Heads-up from review: …"`. Otherwise skip.
 
 ## 6. Resolve the threads you addressed
 
-Once a thread's comment is fixed (and replied to), mark it resolved so it stops
-blocking approval/merge: `renaiss-shipflow pr resolve <n> --thread <id>` (ids from
-step 1's `pr reviews --json`). Only resolve threads you actually addressed.
+`renaiss-shipflow pr resolve <n> --thread <id>` (ids from step 1) so the
+thread stops blocking approval/merge. Only resolve threads you actually
+addressed.
 
 ## 7. Hand back for re-review
 
-Pushing re-triggers reviewers that run on push. If a specific human review is
-needed, `gh pr edit <n> --add-reviewer <login>`. The loop reviewer won't approve
-(and `pr automerge` won't merge) while any thread is unresolved. Never `gh pr
-merge` — merging needs explicit human confirmation.
+Pushing re-triggers push-run reviewers; for a specific human,
+`gh pr edit <n> --add-reviewer <login>`. The loop reviewer won't approve (and
+`pr automerge` won't merge) while any thread is unresolved. Never
+`gh pr merge` — merging needs explicit human confirmation.
 
 ## Message style — everything you write on GitHub
 
-Everything you write on GitHub (comments, PR bodies, issue bodies) follows the one
-**Message style** contract — graphical-first (tables / mermaid / checklists /
-meters before bullets, ≤12 words/bullet), plus the PR-body template and the
-issue-body ladder — in `loop-mode.md` § "Message style". Don't restate it here.
+Everything written on GitHub (comments, PR bodies, issue bodies) follows the
+**Message style** contract — `loop-mode.md` § "Message style"; don't restate
+it here.

@@ -1,31 +1,28 @@
 # Browser end-to-end testing (the loop's E2E verify step)
 
-How the loop verifies a fix in a real browser and captures screenshot evidence,
-before opening a PR. Modeled on gstack's `browse` + `/qa` flow. For UI/behavior
-changes this is the **required** verification; pure backend/library changes can
-verify with the project's own tests instead (but still capture relevant output).
+How the loop verifies a fix in a real browser and captures screenshot evidence
+before opening a PR. **Required** for UI/behavior changes; backend/library-only
+changes may verify with the project's own tests (still capture relevant output).
 
 ## 1. Resolve + ensure a healthy browser
 
-ShipFlow drives the **gstack headed browser** (`browse`). Resolve *and* health-check
-it in one step:
+ShipFlow drives the **gstack headed browser** (`browse`). Resolve *and*
+health-check in one step:
 
 ```bash
 BROWSE="$("$PLUGIN_DIR/bin/shipflow-browser" --ensure)" || { echo "$BROWSE" >&2; exit 1; }
 ```
 
-`--ensure` resolves gstack `browse` **and heals a wedged server** — the
-"Auth failed — server may have restarted" / stale-port state that `browse restart`
-can't recover on its own. It kills the stale server + its chromium so the next
-command respawns fresh; the chromium profile (cookies, auth, scroll) persists on
-disk, so nothing is lost. If gstack isn't installed, fall back to the project's own
-E2E runner (Playwright/Cypress) and still produce a screenshot — never skip visual
+`--ensure` resolves gstack `browse` **and heals a wedged server** (stale port /
+"Auth failed — server may have restarted"); the chromium profile (cookies,
+auth) persists on disk. No gstack → fall back to the project's E2E runner
+(Playwright/Cypress) and still produce a screenshot — never skip visual
 verification for a UI change.
 
 ## 2. Scope the test from the branch diff
 
-Before driving the browser, work out **what to test** from what changed — don't
-just verify the one line you edited. Map the diff to the pages it affects:
+Map the diff to the pages it affects — don't just verify the one line you
+edited:
 
 ```bash
 git diff origin/<default>...HEAD --name-only
@@ -34,39 +31,34 @@ git log origin/<default>..HEAD --oneline
 
 - route/controller files → the URL paths they serve
 - view/template/component files → the pages that render them
-- model/service files → the pages whose features use them (cross-ref the feature
-  map: `renaiss-shipflow features --json` gives each feature's `paths`)
-- **adjacent pages** — features that **share paths** with the changed ones are the
-  regression risk; test those too (this is what catches a fix breaking a neighbour)
-- API/backend-only change → exercise it (`$BROWSE js "await fetch('/api/...')"`) and
-  still load the main flow — backend changes affect app behavior
+- model/service files → pages whose features use them
+  (`renaiss-shipflow features --json` → each feature's `paths`)
+- **adjacent pages** — features sharing paths with the changed ones are the
+  regression risk; test them too
+- API/backend-only change → exercise it (`$BROWSE js "await fetch('/api/...')"`)
+  and still load the main flow
 
-The set of affected + adjacent pages is your test plan for step 3. If the diff maps
-to no page, fall back to a smoke pass of the homepage + top nav.
+Affected + adjacent pages = the step-3 test plan. No page mapped → smoke-pass
+the homepage + top nav.
 
 ## 3. Get the app under test running
 
-- The browser is already healthy (step 1 ensured it) — **reuse** the session, don't
+- The browser is already healthy (step 1) — **reuse** the session, don't
   relaunch.
-- Point it at the **running app** and its URL: a local dev server, the PR's
-  `--preview-url`, or production. Use the page the issue is about.
-  **Starting a dev server: DETACH it, never foreground** (issue #490) — a
-  foreground `npm run dev` blocks the whole tool call until the harness kills
-  it, which reads as the subagent frozen. Three more rules from the PR #491
-  review: isolate per run (parallel workers sharing one PID file/port kill each
-  other's servers and probe the wrong branch), kill the PROCESS TREE (the saved
-  PID is the `npm` wrapper; its child server survives a bare `kill`), and ABORT
-  when readiness never comes — a fallen-through probe loop otherwise "passes":
+- Point it at the **running app** (local dev server, the PR's `--preview-url`,
+  or production), at the page the issue is about.
+  **Starting a dev server: DETACH it, never foreground** (#490) — a foreground
+  `npm run dev` blocks the whole tool call. Also (#491): isolate per run (a
+  shared PID file/port makes parallel workers kill each other's servers), kill
+  the PROCESS TREE, and ABORT when readiness never comes:
   ```bash
   RUN_DIR=$(mktemp -d)
-  # Reserve a FREE port: a random draw that collides with another worker's
-  # server makes the probe "ready" against the wrong app (PR #492 review).
+  # Reserve a FREE port — a colliding draw makes the probe "ready" against the wrong app (#492).
   PORT=$((3100 + RANDOM % 900))
   while lsof -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; do PORT=$((3100 + RANDOM % 900)); done
   ( PORT=$PORT nohup npm run dev > "$RUN_DIR/dev.log" 2>&1 & echo $! > "$RUN_DIR/dev.pid" )
-  # Teardown must take the whole DESCENDANT tree: the saved PID is the npm
-  # wrapper; `pkill -P` only reaches immediate children and a grandchild server
-  # survives, reparented to PID 1, still holding the port.
+  # Teardown takes the whole DESCENDANT tree — the saved PID is the npm
+  # wrapper; `pkill -P` misses grandchildren reparented to PID 1.
   kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill "$1" 2>/dev/null; }
   READY=
   for i in $(seq 1 30); do
@@ -81,16 +73,13 @@ to no page, fall back to a smoke pass of the homepage + top nav.
   # … drive the browser against http://localhost:$PORT …
   kill_tree "$(cat "$RUN_DIR/dev.pid")"
   ```
-- For auth-walled pages, import cookies once:
-  `$BROWSE cookie-import-browser chrome --domain <domain>` (a one-time macOS
-  Keychain prompt the user approves).
+- Auth-walled pages: `$BROWSE cookie-import-browser chrome --domain <domain>`
+  (one-time macOS Keychain prompt).
 
 ## 4. Drive the fix end-to-end (before → after, one pair PER changed surface)
 
 **One before/after pair per surface or state the fix touches — not one pair
-total.** A change that restyles a mode row, a button, and a status chip needs
-three pairs; a single pair proves one surface and leaves the rest unverified.
-List the affected surfaces from the issue/PR first, then loop:
+total.** List the affected surfaces from the issue/PR, then loop:
 
 ```bash
 EV="${TMPDIR:-/tmp}/shipflow-evidence/issue-<n>"; mkdir -p "$EV"
@@ -104,35 +93,32 @@ $BROWSE fill @e4 "value"
 $BROWSE press Enter
 $BROWSE snapshot -D                          # DIFF — proves what changed, the heart of the check
 $BROWSE console --errors                     # no new console errors introduced
-# Mark WHERE the change is before the shot — an outline AROUND the element,
-# never an overlay/arrow ACROSS it (outline-offset keeps every pixel visible):
+# Outline AROUND the changed element — never an overlay/arrow ACROSS it:
 $BROWSE js 'document.querySelectorAll("<changed-el-selector>").forEach(e=>{e.style.outline="3px solid #ff3b30";e.style.outlineOffset="3px"})'
 $BROWSE screenshot "$EV/<surface>-after.png" # the fix working, change outlined
 ```
 
-- The `snapshot -D` diff is the verification — it shows the DOM actually changed
-  the way the fix intends (e.g. the error banner is gone, the row was deleted).
-- A surface only reachable after another interaction (a result card, an open
-  overlay) is still a surface — drive to it and capture its pair.
-- Optionally check layout: `$BROWSE responsive "$EV/layout"` (mobile/tablet/desktop).
+- The `snapshot -D` diff IS the verification — the DOM changed the way the fix
+  intends.
+- A surface only reachable via interaction (a result card, an open overlay) is
+  still a surface — drive to it and capture its pair.
+- Optional layout check: `$BROWSE responsive "$EV/layout"` (mobile/tablet/desktop).
 
 ## 5. Make the screenshots visible, score, then gate
 
-- **Read** each PNG with the Read tool (`$EV/after.png`, etc.) so you and the user
-  actually see the result — an unread screenshot is invisible.
-- **Score the affected page(s)** with the health rubric in `references/qa-report.md`
-  (0–100, weighted). Compute it for the page **before** and **after** the fix so you
-  have a delta. Re-score **adjacent** pages too — a neighbour whose score dropped
-  means the fix regressed it (revert/fix before opening the PR, never ship it).
-- **Pass/fail gate:** only continue to evidence + PR if the fix genuinely
-  verified (expected change present, no new console errors, **no negative score
-  delta on a neighbour**). If it didn't, go back and fix, or release the issue as
-  blocked — do **not** open a PR for an unverified fix.
+- **Read** each PNG with the Read tool — an unread screenshot is invisible.
+- **Score the affected page(s)** with the rubric in `references/qa-report.md`
+  (0–100, weighted), **before** and **after**, for a delta. Re-score
+  **adjacent** pages — a dropped neighbour = the fix regressed it (revert/fix
+  before the PR, never ship it).
+- **Pass/fail gate:** proceed to evidence + PR only if genuinely verified
+  (expected change present, no new console errors, **no negative neighbour
+  delta**). Otherwise fix, or release the issue as blocked — never open a PR
+  for an unverified fix.
 
 ## 6. Hand the evidence to the PR
 
-Once the PR is open, attach the captured screenshot(s) **to the PR** so reviewers
-see the verification inline — pass the PR number with `--pr`, and put the health
+Once the PR is open, attach the screenshot(s) **to the PR** with `--pr`, health
 delta in the caption (the reviewer and merge gate read it):
 
 ```bash
@@ -143,12 +129,11 @@ renaiss-shipflow issue evidence <n> --pr <pr> \
   --caption "Verified: <what you tested> · health <before>→<after> (Δ<+/-N>) · 0 new console errors"
 ```
 
-Screenshot evidence **must** include both `--before` and `--after`, with equal
-counts — `before[i]` pairs with `after[i]`, and `--label` names each pair by
-position. Multiple (or labeled) pairs render as a side-by-side
-`| Surface | 🔴 Before | 🟢 After |` table the reviewer judges row by row; a
-single unlabeled pair renders under stacked "Before/After the fix" headings.
-The command rejects a lone before or after and mismatched pair counts. With `--pr`, the comment lands on the PR (plus
-the reporter's chat thread); the issue stays linked through the PR's `Fixes #<n>`.
-Without a PR, it falls back to an issue comment. Attach a short screen recording
-as well for flows that need motion (`--file demo.mp4`).
+`--before` and `--after` are both required, with equal counts — `before[i]`
+pairs with `after[i]`, `--label` names pairs by position; a lone before/after
+or mismatched counts is rejected. Multiple/labeled pairs render as a
+side-by-side `| Surface | 🔴 Before | 🟢 After |` table; a single unlabeled
+pair as stacked "Before/After the fix" headings. `--pr` lands the comment on
+the PR (plus the reporter's chat thread; issue linked via `Fixes #<n>`);
+without it, an issue comment. `--file demo.mp4` adds a screen recording for
+flows that need motion.
