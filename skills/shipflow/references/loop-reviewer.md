@@ -221,7 +221,10 @@ day they also mean "irrelevant", they stop meaning anything.
 0a. **CI-wait discipline (#603): the verdict NEVER waits across turns.** When
    the only outstanding gate input is a pending check, wait INSIDE one bounded
    blocking shell call — e.g. `for i in $(seq 1 12); do sleep 60; gh pr checks <n>
-   | grep -q '^test.*pass' && break; done` — then act. Never end your turn
+   | grep -qE '^test.*(pass|fail)' && break; done` — then JUDGE the result
+   (pass → proceed; fail → read the failure and request_changes; a loop that
+   breaks only on pass burns the full window on a failed check, PR #604
+   review). Never end your turn
    "waiting on CI": an ended turn with no verdict is a dropped gate the
    orchestrator cannot distinguish from a crash (measured: 3 resume-nudges in
    one pass). If the check is still pending when the bounded wait exhausts,
