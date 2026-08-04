@@ -4254,8 +4254,29 @@ function ghPRCreate(args) {
   const number = parseInt(out.split("/").pop() || "0", 10);
   return { url: out, number };
 }
+function ghRepoMergeMethods(repo) {
+  try {
+    const out = _exec(`gh repo view ${shellQuote(repo)} --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`).toString();
+    const p = JSON.parse(out);
+    return { squash: p.squashMergeAllowed !== false, merge: p.mergeCommitAllowed !== false, rebase: p.rebaseMergeAllowed !== false };
+  } catch {
+    return { squash: true, merge: true, rebase: true };
+  }
+}
+function chooseMergeMethod(preferred, allowed) {
+  if (allowed[preferred])
+    return preferred;
+  for (const m of ["squash", "merge", "rebase"]) {
+    if (allowed[m])
+      return m;
+  }
+  return preferred;
+}
 function ghPRMerge(repo, number, mode = "squash", deleteBranch = true) {
-  const flags = [`--${mode}`];
+  const method = chooseMergeMethod(mode, ghRepoMergeMethods(repo));
+  if (method !== mode)
+    console.error(`ℹ️  repo disallows --${mode}; merging with --${method} (issue #494)`);
+  const flags = [`--${method}`];
   if (deleteBranch)
     flags.push("--delete-branch");
   _exec(`gh pr merge ${number} --repo ${shellQuote(repo)} ${flags.join(" ")}`, { stdio: "inherit" });
