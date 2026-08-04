@@ -8788,6 +8788,26 @@ Address + resolve them (pr resolve), then approve (or --force).`));
         console.log(`  ${l}`);
     }, { pretty: true });
   }));
+  pr.command("note <number>").description("Post a general PR comment WITH the loop marker — the loop's ONLY sanctioned free-text comment path (issue #603): an unmarked comment re-reads as a reporter correction on gated PRs (#477)").option("--repo <fullname>", "Override target repo").option("--body <text>", "Comment body (required)").option("--rework-from <commentId>", "Echo the acted-on comment id so the correction horizon moves (rework replies)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+    const number = parseInt(numberStr, 10);
+    const ctx = await loadGhCtx(program2, opts.repo);
+    const repo = opts.repo ?? ctx.project.repoFullName;
+    const body = (opts.body ?? "").trim();
+    if (!body) {
+      const msg = "pr note requires --body — an empty loop note has nothing to mark";
+      if (opts.json)
+        console.log(JSON.stringify({ error: msg }));
+      else
+        console.error(`⛔ ${msg}`);
+      process.exit(1);
+    }
+    const parts = [body, "", SHIPFLOW_CONTRACT.markers.loop];
+    if (opts.reworkFrom)
+      parts.push(`<!-- shipflow:rework-from id=${opts.reworkFrom} -->`);
+    ghIssueComment(repo, number, parts.join(`
+`));
+    emit(opts, { pr: number, noted: true, marked: true }, () => console.log(`\uD83D\uDCDD marked note posted on PR #${number}`), { pretty: true });
+  }));
   pr.command("resolve <number>").description("Resolve review threads the loop has addressed (all unresolved, or specific --thread ids)").option("--thread <id...>", "Specific thread node-id(s) to resolve (default: all unresolved)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);

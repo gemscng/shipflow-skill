@@ -218,6 +218,15 @@ A dependency that was *deliberately not consulted* is not a dependency that went
 dark. `degraded[]` and the three markers are reserved for a real failure — the
 day they also mean "irrelevant", they stop meaning anything.
 
+0a. **CI-wait discipline (#603): the verdict NEVER waits across turns.** When
+   the only outstanding gate input is a pending check, wait INSIDE one bounded
+   blocking shell call — e.g. `for i in $(seq 1 12); do sleep 60; gh pr checks <n>
+   | grep -q '^test.*pass' && break; done` — then act. Never end your turn
+   "waiting on CI": an ended turn with no verdict is a dropped gate the
+   orchestrator cannot distinguish from a crash (measured: 3 resume-nudges in
+   one pass). If the check is still pending when the bounded wait exhausts,
+   RETURN an explicit `{approved: false, ci: "pending"}` — a verdict about this
+   attempt, not a dangling wait.
 0. **External reviews first — clear them before you approve.** The packet's
    *External review threads* section lists unresolved threads, including async
    bot reviewers (gemini-code-assist, coderabbit). If any are unresolved you

@@ -294,6 +294,12 @@ collect its return. Loop A until nothing in-flight `needsAttention`:
   them with `renaiss-shipflow pr reviews <n> --json`, fix each, push, reply, and
   **resolve the thread** (`pr resolve <n> --thread <id>`). Then **re-dispatch the
   reviewer** (the gate re-runs after any change). Ambiguous/conflicting → escalate.
+- **Merge-order discipline (#603):** when reconcile finds MULTIPLE own PRs
+  approved+green, merge them oldest-first in ONE sweep BEFORE dispatching any
+  sync/rebase — every merge invalidates every other PR's freshness, so merging
+  first minimizes rebase rounds (measured: one 4-file PR ate 3 sync×CI cycles
+  because merges kept landing between its rebases). After a sync push goes
+  green, attempt the automerge immediately on that signal, never on a timer.
 - `approved_ready` → the reviewer already added `shipflow-approved` (Phase B step 4)
   → `renaiss-shipflow pr automerge <n> --json` (merges only if `merge-policy` + CI +
   approval allow **and no review thread is unresolved**; parks on `manual`). The
@@ -990,7 +996,11 @@ Silence still parks forever.
   Its absence is the anti-self-loop failure: an UNMARKED loop comment on a gated
   PR is indistinguishable from a fresh reporter correction (same login, same
   association — that is why no author filter exists here), so the loop reworks in
-  response to itself until the ceiling stops it. Echo the id of the entry you
+  response to itself until the ceiling stops it. **Post every free-text loop
+  comment via `renaiss-shipflow pr note <n> --body … [--rework-from <id>]`
+  (#603) — it carries the marker for you; bare `gh pr comment` on a
+  loop-authored PR is BANNED** (a measured pass burned 3 of 3 correction
+  dispatches on the loop re-reading its own unmarked notes, #477). Echo the id of the entry you
   ACTED on: the horizon moves to that comment, so a correction that arrived while
   the worker was running is still waiting on the next tick instead of being
   buried by the answer to an older one.
