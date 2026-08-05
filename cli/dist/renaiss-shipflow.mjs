@@ -4275,6 +4275,20 @@ function chooseMergeMethod(preferred, allowed) {
   }
   return preferred;
 }
+function ghOwnOpenPRs(repo, author) {
+  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --author ${shellQuote(author)} --state open --limit 100 --json number,isDraft`).toString();
+  return JSON.parse(out);
+}
+function ghPRCheckLines(repo, number) {
+  try {
+    return _exec(`gh pr checks ${number} --repo ${shellQuote(repo)}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().split(`
+`).filter((l) => l.trim() !== "");
+  } catch (e) {
+    const out = e.stdout?.toString() ?? "";
+    return out.split(`
+`).filter((l) => l.trim() !== "");
+  }
+}
 function ghPRMerge(repo, number, mode = "squash", deleteBranch = true) {
   const method = chooseMergeMethod(mode, ghRepoMergeMethods(repo));
   if (method !== mode)
@@ -8051,6 +8065,25 @@ var liveIntentGateFreshReads = (repo, number) => ({
   clearance: () => ghIntentGateClearance(repo, number, REPORTER_REVIEW_LABEL),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms))
 });
+function classifyChecks(lines) {
+  let sawPass = false;
+  let pending = false;
+  for (const l of lines) {
+    const state = (l.split("\t")[1] ?? "").trim().toLowerCase();
+    if (!state || state === "skipping" || state === "skipped" || state === "neutral" || state === "-")
+      continue;
+    if (state === "fail" || state === "failure" || state === "error" || state === "cancelled" || state === "canceled" || state === "timed_out" || state === "action_required")
+      return "fail";
+    if (state === "pass" || state === "success") {
+      sawPass = true;
+      continue;
+    }
+    pending = true;
+  }
+  if (pending || !sawPass)
+    return "pending";
+  return "pass";
+}
 function renderPrNoteBody(body, reworkFrom) {
   const parts = [body, "", SHIPFLOW_CONTRACT.markers.loop];
   if (reworkFrom)
@@ -8281,6 +8314,43 @@ function unresolvedThreadsOrBlock(repo, number) {
     return { count: 0, unavailable: true };
   }
 }
+async function automergeOnce(ctx, repo, number, opts) {
+  const policy = opts.policy ?? resolveMergePolicy();
+  const staleHours = resolveStalePrHours();
+  const me = ghCurrentLogin();
+  const prView = ghPRView(repo, number);
+  const threads = unresolvedThreadsOrBlock(repo, number);
+  const unresolvedThreads = threads.count;
+  const gate = await freshProbeIntentGate(evalIntentGate(repo, number, prView), liveIntentGateFreshReads(repo, number));
+  const freshness = ghPRFreshness(repo, prView);
+  const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy, behindBy: freshness.behindBy, freshnessUnresolvable: freshness.unresolvable });
+  const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
+  const wouldMerge = decision.wouldMerge && !threads.unavailable;
+  if (!wouldMerge) {
+    const arm = armIntentGate(repo, number, gate, liveIntentGateWriters);
+    const allBlockers = [...blockers, ...arm.blockers];
+    if (!arm.armed) {
+      console.error(`❌ ${GATE_ARM_BLOCKER} — the reporter is not confirmed to have been asked: ${arm.gateArmError}`);
+    }
+    return {
+      number,
+      merged: false,
+      policy,
+      blockers: allBlockers,
+      ...arm.attempted ? { gateArmed: arm.armed } : {},
+      ...arm.gateArmError ? { gateArmError: arm.gateArmError } : {},
+      ...decision.unsatisfiable ? { unsatisfiable: true } : {}
+    };
+  }
+  const result = ghPRMerge(repo, number, opts.mode ?? "squash", true);
+  cleanupMergedLocalBranch(result.headBranch);
+  await signalBestEffort(ctx, "prs", number, "merged", { repo, mergedSha: result.mergedSha }, "Merged but ShipFlow signal failed");
+  const closed = (prView.closingIssuesReferences ?? []).map((i) => i.number);
+  for (const n of closed) {
+    await signalBestEffort(ctx, "issues", n, "release-claim", { repo, reason: `merged via PR #${number}` });
+  }
+  return { number, merged: true, mergedSha: result.mergedSha, policy, closedIssues: closed };
+}
 function registerPRCommand(program2) {
   const pr = program2.command("pr").description("Pull request actions");
   pr.command("create").description("Open a PR; prepends ShipFlow context to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (added under ShipFlow header)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR)", "warn").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
@@ -8371,52 +8441,55 @@ ${opts.body ?? ""}`;
         console.log(`  [ ] ${b}`);
     }, { pretty: true });
   }));
-  pr.command("automerge <number>").description("Merge a PR only if policy + CI + approval allow it; otherwise no-op and exit 5. The loop's safe auto-merge.").option("--policy <p>", "Override merge policy: manual | auto-on-green | auto-timeout").option("--mode <mode>", "squash | merge | rebase", "squash").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  pr.command("automerge [number]").description("Merge a PR only if policy + CI + approval allow it; otherwise no-op and exit 5. The loop's safe auto-merge. --all-ready evaluates every own open PR OLDEST-FIRST in one sweep (issue #608 — merging first minimizes freshness-rebase rounds).").option("--all-ready", "Sweep all own open PRs oldest-first instead of one number").option("--policy <p>", "Override merge policy: manual | auto-on-green | auto-timeout").option("--mode <mode>", "squash | merge | rebase", "squash").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
-    const { number, repo } = resolveTarget(ctx, numberStr, opts);
-    const policy = opts.policy ?? resolveMergePolicy();
-    const staleHours = resolveStalePrHours();
-    const me = ghCurrentLogin();
-    const prView = ghPRView(repo, number);
-    const threads = unresolvedThreadsOrBlock(repo, number);
-    const unresolvedThreads = threads.count;
-    const gate = await freshProbeIntentGate(evalIntentGate(repo, number, prView), liveIntentGateFreshReads(repo, number));
-    const freshness = ghPRFreshness(repo, prView);
-    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy, behindBy: freshness.behindBy, freshnessUnresolvable: freshness.unresolvable });
-    const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
-    const wouldMerge = decision.wouldMerge && !threads.unavailable;
-    if (!wouldMerge) {
-      const arm = armIntentGate(repo, number, gate, liveIntentGateWriters);
-      const allBlockers = [...blockers, ...arm.blockers];
-      if (!arm.armed) {
-        console.error(`❌ ${GATE_ARM_BLOCKER} — the reporter is not confirmed to have been asked: ${arm.gateArmError}`);
+    if (!numberStr && !opts.allReady) {
+      const msg = "pr automerge needs a PR number or --all-ready";
+      if (opts.json)
+        console.log(JSON.stringify({ error: msg }));
+      else
+        console.error(`⛔ ${msg}`);
+      process.exit(1);
+    }
+    if (opts.allReady) {
+      const repoAll = opts.repo ?? ctx.project.repoFullName;
+      const meAll = ghCurrentLogin();
+      if (!meAll) {
+        const msg = "pr automerge --all-ready: gh login unresolved — refusing a repo-wide sweep";
+        if (opts.json)
+          console.log(JSON.stringify({ error: msg }));
+        else
+          console.error(`⛔ ${msg}`);
+        process.exit(1);
       }
-      emit(opts, {
-        number,
-        merged: false,
-        policy,
-        blockers: allBlockers,
-        ...arm.attempted ? { gateArmed: arm.armed } : {},
-        ...arm.gateArmError ? { gateArmError: arm.gateArmError } : {},
-        ...decision.unsatisfiable ? { unsatisfiable: true } : {}
-      }, () => {
-        console.log(`⏸️  PR #${number} not auto-merged — still blocked on:`);
-        for (const b of allBlockers)
-          console.log(`  [ ] ${b}`);
-        if (decision.unsatisfiable) {
-          console.log("  ⚠️  This blocker cannot clear by waiting — escalate for a human decision.");
+      const mine = ghOwnOpenPRs(repoAll, meAll).filter((p) => !p.isDraft);
+      const results = [];
+      for (const { number: n } of mine.sort((a, b) => a.number - b.number)) {
+        try {
+          const r2 = await automergeOnce(ctx, repoAll, n, opts);
+          results.push(r2);
+        } catch (e) {
+          results.push({ number: n, merged: false, error: String(e.message ?? e).split(`
+`)[0] });
         }
+      }
+      const merged = results.filter((r2) => r2.merged).length;
+      emit(opts, { allReady: true, evaluated: results.length, merged, results }, () => console.log(`✅ merged ${merged}/${results.length} ready PR(s) oldest-first`), { pretty: true });
+      return;
+    }
+    const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    const r = await automergeOnce(ctx, repo, number, opts);
+    if (!r.merged) {
+      emit(opts, r, () => {
+        console.log(`⏸️  PR #${number} not auto-merged — still blocked on:`);
+        for (const b of r.blockers ?? [])
+          console.log(`  [ ] ${b}`);
+        if (r.unsatisfiable)
+          console.log("  ⚠️  This blocker cannot clear by waiting — escalate for a human decision.");
       });
       process.exit(5);
     }
-    const result = ghPRMerge(repo, number, opts.mode ?? "squash", true);
-    cleanupMergedLocalBranch(result.headBranch);
-    await signalBestEffort(ctx, "prs", number, "merged", { repo, mergedSha: result.mergedSha }, "Merged but ShipFlow signal failed");
-    const closed = (prView.closingIssuesReferences ?? []).map((i) => i.number);
-    for (const n of closed) {
-      await signalBestEffort(ctx, "issues", n, "release-claim", { repo, reason: `merged via PR #${number}` });
-    }
-    emit(opts, { number, merged: true, mergedSha: result.mergedSha, policy, closedIssues: closed }, () => console.log(`✅ Merged PR #${number} (${result.mergedSha}) under policy=${policy}${closed.length ? ` — closes #${closed.join(", #")}` : ""}.`));
+    emit(opts, r, () => console.log(`✅ Merged PR #${number} (${r.mergedSha}) under policy=${r.policy}${(r.closedIssues ?? []).length ? ` — closes #${(r.closedIssues ?? []).join(", #")}` : ""}.`));
   }));
   pr.command("sync <number>").description("Rebase the PR's branch onto its (moved) base; aborts cleanly on conflict (or leaves it in progress with --keep-conflicts) so the loop can resolve or escalate. Run on the PR's checked-out branch.").option("--repo <fullname>", "Override target repo").option("--no-push", "Don't force-with-lease push after a clean rebase").option("--keep-conflicts", "On conflict, leave the rebase in progress and list the conflicted files instead of aborting — the agentic-resolution entry point (issue #393)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
@@ -8797,6 +8870,32 @@ Address + resolve them (pr resolve), then approve (or --force).`));
       for (const l of renderTable(["Reviewer", "Location", "Comment"], rows))
         console.log(`  ${l}`);
     }, { pretty: true });
+  }));
+  pr.command("await-checks <number>").description("Block until the PR's checks resolve (bounded) — JSON {ci: pass|fail|pending}; exit 0 on resolution (caller judges), exit 11 still-pending at timeout (issue #608)").option("--repo <fullname>", "Override target repo").option("--timeout-minutes <n>", "Bounded wait ceiling", "15").option("--interval-seconds <n>", "Poll interval", "30").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+    const ctx = await loadGhCtx(program2, opts.repo);
+    const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    if (Number.isNaN(number)) {
+      const msg = `pr await-checks: "${numberStr}" is not a PR number`;
+      if (opts.json)
+        console.log(JSON.stringify({ error: msg }));
+      else
+        console.error(`⛔ ${msg}`);
+      process.exit(1);
+    }
+    const timeoutMs = parseIntOr(opts.timeoutMinutes, 15) * 60000;
+    const intervalMs = Math.max(5, parseIntOr(opts.intervalSeconds, 30)) * 1000;
+    const started = Date.now();
+    let ci = "pending";
+    for (;; ) {
+      ci = classifyChecks(ghPRCheckLines(repo, number));
+      if (ci !== "pending" || Date.now() - started + intervalMs > timeoutMs)
+        break;
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    const elapsedSeconds = Math.round((Date.now() - started) / 1000);
+    emit(opts, { number, ci, elapsedSeconds, ...degradedField(ctx) }, () => console.log(`${ci === "pass" ? "✅" : ci === "fail" ? "❌" : "⏳"} PR #${number} checks: ${ci} after ${elapsedSeconds}s`), { pretty: true });
+    if (ci === "pending")
+      process.exit(11);
   }));
   pr.command("note <number>").description("Post a general PR comment WITH the loop marker — the loop's ONLY sanctioned free-text comment path (issue #603): an unmarked comment re-reads as a reporter correction on gated PRs (#477)").option("--repo <fullname>", "Override target repo").option("--body <text>", "Comment body (required)").option("--rework-from <commentId>", "Echo the acted-on comment id so the correction horizon moves (rework replies)").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);

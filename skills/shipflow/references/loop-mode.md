@@ -234,10 +234,10 @@ worker scoped to that PR; loop A until nothing in-flight `needsAttention`:
   coderabbit): `renaiss-shipflow pr reviews <n> --json` to list, fix, push,
   reply, **resolve the thread** (`pr resolve <n> --thread <id>`),
   re-dispatch the reviewer. Ambiguous/conflicting → escalate.
-- **Merge-order discipline (#603):** multiple own PRs approved+green →
-  merge oldest-first in ONE sweep BEFORE any sync/rebase dispatch (every
-  merge invalidates every other PR's freshness — measured). After a sync
-  push goes green → automerge immediately on that signal, never on a timer.
+- **Merge-order (#603/#608):** multiple own PRs approved+green → ONE
+  `renaiss-shipflow pr automerge --all-ready --json` (evaluates oldest-first
+  internally; each merge would invalidate later candidates' freshness).
+  Dispatch syncs only for rows it reports behind-base.
 - `approved_ready` → reviewer already added `shipflow-approved` (B step 4)
   → `renaiss-shipflow pr automerge <n> --json` (merges only if
   `merge-policy` + CI + approval allow **and no review thread is
@@ -798,6 +798,12 @@ still parks forever).
 - **Health gate on merge:** a negative health delta
   (`references/qa-report.md`) is treated like an unresolved thread — no
   reviewer approval, no automerge, regardless of `merge-policy`.
+- **Pass ledger (mandatory, every pass end — operator requirement #608):**
+  after the count line, print a compact table: one row per DISPATCH —
+  `role · target (#issue/#PR) · outcome · subagent tokens` (from each Task
+  return's usage metadata) — plus a totals row (dispatches, merged, tokens).
+  Tokens the orchestrator itself spent go in the totals line when the harness
+  reports them. No ledger = the pass is not done.
 - **At the cap or an empty queue:** summarize — PRs opened, merged,
   parked-awaiting-review, escalated (with reasons) — then ask whether to
   continue beyond the cap or raise the merge policy. Intent-gate-parked

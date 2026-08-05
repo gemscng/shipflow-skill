@@ -170,15 +170,12 @@ degradations (each renders in the packet body):
 `degraded[]` and the three markers mean real failure only — the day they also
 mean "irrelevant", they stop meaning anything.
 
-0a. **CI-wait discipline (#603): the verdict NEVER waits across turns.** Only
-   a pending check outstanding → wait INSIDE one bounded blocking shell call —
-   e.g. `for i in $(seq 1 12); do sleep 60; gh pr checks <n>
-   | grep -qE '^test.*(pass|fail)' && break; done` — then JUDGE the result
-   (pass → proceed; fail → read the failure and request_changes; break-on-pass
-   alone burns the window on a failed check, PR #604 review). Never end a turn
-   "waiting on CI": no verdict = a dropped gate, indistinguishable from a
-   crash (measured, #603). Wait exhausted, still pending → RETURN
-   `{approved: false, ci: "pending"}` — a verdict, not a dangling wait.
+0a. **CI-wait discipline (#603/#608): the verdict NEVER waits across turns.**
+   Only a pending check outstanding → `renaiss-shipflow pr await-checks <n>
+   --timeout-minutes 12 --json` INSIDE your turn, then JUDGE `{ci}`: `pass` →
+   proceed; `fail` → read the failure, request_changes; exit 11 (`pending` at
+   timeout) → RETURN `{approved: false, ci: "pending"}` — a verdict, not a
+   dangling wait (an ended turn with no verdict is a dropped gate).
 0. **External reviews first — clear them before you approve.** The packet's
    *External review threads* section lists unresolved threads, incl. async
    bots (gemini-code-assist, coderabbit). Any unresolved → cannot approve:
