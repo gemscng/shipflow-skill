@@ -1,0 +1,88 @@
+# Phase C — bug sweep (queue empty)
+
+Split from loop-mode.md §The cycle (#611). Load ONLY when Phase B exits 4
+with Phase A clean.
+
+### C. Bug sweep — when there's nothing left to fix, hunt for new bugs
+
+B exits 4 / `issue: null` **and** A is clean → if `bug-hunt` is on
+(`config get bug-hunt`, default **true**), turn idle time into QA that
+refills the queue:
+
+1. **Sweep methodically** (dispatch a QA subagent) — run `renaiss-shipflow
+   test` and **`renaiss-shipflow regression --wait --json`** (ShipFlow's
+   own **E2E test_runner**; blocks until the generated API/UI cases finish
+   in the configured test environment). Gate on the executed result —
+   `--wait` exits non-zero, `result.status: failure` when real E2E cases
+   fail; each failed case = a **reproduced bug** for step 2 (repro = name +
+   api/ui hint). `success`/`skipped` (or "no test environment configured" →
+   manual checklist only) → no E2E bugs. Then a real-browser QA sweep:
+   `renaiss-shipflow features --json` to prioritise `high` `test_priority`
+   features, per-page checklist on each (`references/bug-taxonomy.md` §4:
+   click everything, fill forms, empty/error states, console after each
+   interaction, responsive, auth boundaries). Compute the **health score**,
+   diff against the stored baseline (`references/qa-report.md`) — a drop =
+   regression. Screenshot anything broken.
+2. **File genuine bugs as issues** — each **actually reproduced** (retry
+   once), severity + category from the taxonomy, not already open (dedupe
+   is enforced by `issue create` itself — below; skip `auto-qa` items you
+   already filed):
+   `renaiss-shipflow issue create --title "<bug>" --body "<issue-body ladder>"
+   --label bug --label auto-qa --label "severity:<…>" --label "area:<…>" --json`
+   (`bug-taxonomy.md` §3; body = the **issue-body ladder**,
+   `message-style.md` — status header sourcing `auto-qa sweep`). Attach evidence
+   (`issue evidence <n> --file <shot>`), update the baseline. **Only file
+   what you reproduced.**
+
+   **Near-verbatim duplicate filing is blocked in code (#580) — but the
+   check is narrow, so keep searching.** `issue create` scans every open
+   issue (`--limit 1000`) and refuses only a near-verbatim restatement. A
+   **paraphrase slips through** (#404 vs #569, ~0.38) — still
+   keyword-search before filing, and never rely on `renaiss-shipflow
+   issues list --json` alone: its default `--limit 30` newest-first slice
+   cannot contain an older duplicate (how #579 restated #427). Pass
+   `--limit 1000` for this.
+
+   **The rule cuts both ways.** A strict-superset title is refused 100% of
+   the time — a narrower issue quoting an open title and extending it
+   **will be refused, by design**. A digit- or negation-bearing extension
+   (`… exceeds 64 KB`) files clean (such tokens are must-match-exactly).
+   Two ways through:
+
+   | Your filing vs the open issue | Do this |
+   |---|---|
+   | Genuinely the same defect, stated more precisely | Comment the extra detail on the open issue — don't file |
+   | A distinct defect that merely shares the wording | Re-file with **`--allow-duplicate`**, and say why in the body |
+   | Different numbers or a negation (`exits 5`→`7`, `is`→`isn't`) | Files cleanly — the discriminator gate sees the difference |
+
+   **Citing an issue (#587):** an issue reference is digits, and citing
+   the issue you were restating used to skip the check. No longer;
+   per-candidate:
+
+   | Title filed while #427 is open | vs #427 | vs every OTHER open issue |
+   |---|---|---|
+   | #579's title + ` (#427 regression)` | **refused** at 0.778 — `427` is dropped from gate 3, but the citation tokens stay in Dice, so 0.875 deflates to 0.778 | `427` still discriminates in full |
+   | #579's title + ` (#999 regression)` | files clean — `999` still discriminates | `999` still discriminates |
+   | `owner/repo#427` anywhere in the title | files clean — a cross-repo ref is not a citation | unchanged |
+   | `427` used bare *and* cited (`retried 427 times, see #427`) | files clean — one bare use is enough | unchanged |
+
+   **A citation of the issue you are restating no longer excuses you; a
+   citation of any OTHER issue still does** (measured, #587; dropping every
+   cited number is deliberately NOT the rule — #590). **The margin is
+   thin**: 0.778 sits 0.078 above the 0.70 floor — three more content words
+   tip a refusal into a clean file (#588).
+
+   | Outcome | Exit | What you do |
+   |---|---|---|
+   | No match | 0 | Filed — carry on (a clean exit is **not** proof there's no duplicate; see above) |
+   | Match, `--json` / `--yaml` | **12** | Read `{blocked: true, candidates: […]}` and **comment on the existing issue** instead — nothing was created |
+   | Match, genuinely a different bug | **12** | Re-run with **`--allow-duplicate`** (it echoes what it overrode) |
+   | Scan window came back FULL | 0 | Filed, with a loud `window is FULL` warning — the older issues were never scanned; check by hand |
+   | Open-issue fetch failed | 0 | Warned + filed anyway — a GitHub outage never blocks a filing; dedupe by hand |
+3. **Feed the loop**: filed ≥1 new issue → **back to A**. Nothing new
+   (clean, or only dupes) → *that's* the real stop.
+
+Bound it: at most `bug-hunt-cap` new issues per run (default 5); the PR
+`cap` still applies to fixes. `config set bug-hunt false` (or
+`SHIPFLOW_BUG_HUNT=false`) → an empty queue just stops.
+

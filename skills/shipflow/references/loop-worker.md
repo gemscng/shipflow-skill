@@ -69,7 +69,7 @@ judge the stale link on its merits.
    test framework (note it in the return).
 5. **PR** — commit via Skill tool → **`shipflow:smart-commit`**
    (plugin-qualified — a bare name can resolve to another plugin's copy,
-   #544; loop-mode.md § "Commit messages": no AI-attribution trailer, skip
+   #544; message-style.md § "Commit messages": no AI-attribution trailer, skip
    the human-confirm gate). Push, then
    `renaiss-shipflow pr create --json --lint=strict` — MANDATORY: the prose
    lint (#196) exits 2 on a prose-shaped body (≥3 parallel facts, no
@@ -172,7 +172,7 @@ Keep `summary` to one line — no diffs or logs.
 ## Message style — everything you write on GitHub
 
 All GitHub writing (comments, PR bodies, issue bodies) follows the **Message
-style** contract — `loop-mode.md` § "Message style"; don't restate it here.
+style** contract — `message-style.md`; don't restate it here.
 Machine-checked: `pr create --lint=strict` (step 5) rejects pure prose when ≥3
 parallel facts exist; `issue create` warns on the same shape. Fix the body,
 never bypass the lint.

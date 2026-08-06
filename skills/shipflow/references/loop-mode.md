@@ -22,8 +22,10 @@ Roles.
 5. **Reconcile playbook** — inbox `state` → action
 6. **Guardrails**
 
-Sub-references: `loop-worker.md` · `loop-reviewer.md` · `browser-testing.md` ·
-`bug-taxonomy.md` · `qa-report.md` · `pr-feedback.md`.
+Sub-references: `loop-worker.md` · `loop-reviewer.md` (PR gate) ·
+`loop-reviewer-intake.md` (issue intake) · state cards loaded on demand —
+`loop-gate.md` · `loop-bug-sweep.md` · `message-style.md` — plus
+`browser-testing.md` · `bug-taxonomy.md` · `qa-report.md` · `pr-feedback.md`.
 
 ## Setup — run in a worktree (once, before the cycle)
 
@@ -95,7 +97,7 @@ the heavy work never enters yours.
   `renaiss-shipflow features --json`, reviews an **issue at intake**
   (validate, map to features, acceptance brief) and a **PR before merge**
   (cross-feature impact, regressions, brief met; approves with `pr approve`).
-  Contract: `references/loop-reviewer.md`.
+  Contracts: intake → `references/loop-reviewer-intake.md`; PR gate → `references/loop-reviewer.md`.
 - **worker** — fixes ONE issue end-to-end (branch → fix → test → PR →
   evidence), returns `{pr, verified, blocked}`; also runs reconcile fixes.
   Contract: `references/loop-worker.md`.
@@ -262,7 +264,7 @@ worker scoped to that PR; loop A until nothing in-flight `needsAttention`:
   never checked out.
 - `reporter_corrected` → **rework — the reporter has answered** (#442).
   Gate stays ON: nothing merges, the reworked PR re-arms. Full protocol +
-  row schema → Guardrails § "A reporter correction IS the human answering".
+  row schema → `loop-gate.md` § "A reporter correction IS the human answering".
   **Judge first** — a question or chatter is not a correction.
 - `awaiting_reporter` → **park; the reporter must confirm** —
   `needs-reporter-review` = unconfirmed interpretation (#190), no policy
@@ -378,13 +380,13 @@ only in a tick that itself opened `cap` PRs.
    + triage. It pulls `features --json`, consults `renaiss-shipflow
    priorities --json` → `docs/PRIORITIES.md` (greenlit class + normal slice
    proceeds; deploy-blast-radius always per-item sign-off; off-doc
-   escalates — `loop-reviewer.md` Mode 1 step 1b), validates, maps to
+   escalates — `loop-reviewer-intake.md` step 1b), validates, maps to
    features, returns an **acceptance brief** (what "done" means + features
    to regression-check). Reject (invalid/duplicate/needs a human) →
    `issue escalate`, pick next. **Partial-slice brief → file each deferred
    part as a follow-up sub-issue now** — `renaiss-shipflow issue create
    --title "…" --body "Part of #<n>: …" --json` — *before* dispatching the
-   worker; bodies per the **issue-body ladder** (§ "Message style"), status
+   worker; bodies per the **issue-body ladder** (`message-style.md`), status
    header sourcing `Part of #<n>`.
    **Handle exit 12 on every filing** — a bare non-zero exit read as
    "failed command" silently drops the deferred scope: on **12** read
@@ -445,86 +447,9 @@ releases it), keeping the issue out of `issue next` meanwhile.
 
 ### C. Bug sweep — when there's nothing left to fix, hunt for new bugs
 
-B exits 4 / `issue: null` **and** A is clean → if `bug-hunt` is on
-(`config get bug-hunt`, default **true**), turn idle time into QA that
-refills the queue:
-
-1. **Sweep methodically** (dispatch a QA subagent) — run `renaiss-shipflow
-   test` and **`renaiss-shipflow regression --wait --json`** (ShipFlow's
-   own **E2E test_runner**; blocks until the generated API/UI cases finish
-   in the configured test environment). Gate on the executed result —
-   `--wait` exits non-zero, `result.status: failure` when real E2E cases
-   fail; each failed case = a **reproduced bug** for step 2 (repro = name +
-   api/ui hint). `success`/`skipped` (or "no test environment configured" →
-   manual checklist only) → no E2E bugs. Then a real-browser QA sweep:
-   `renaiss-shipflow features --json` to prioritise `high` `test_priority`
-   features, per-page checklist on each (`references/bug-taxonomy.md` §4:
-   click everything, fill forms, empty/error states, console after each
-   interaction, responsive, auth boundaries). Compute the **health score**,
-   diff against the stored baseline (`references/qa-report.md`) — a drop =
-   regression. Screenshot anything broken.
-2. **File genuine bugs as issues** — each **actually reproduced** (retry
-   once), severity + category from the taxonomy, not already open (dedupe
-   is enforced by `issue create` itself — below; skip `auto-qa` items you
-   already filed):
-   `renaiss-shipflow issue create --title "<bug>" --body "<issue-body ladder>"
-   --label bug --label auto-qa --label "severity:<…>" --label "area:<…>" --json`
-   (`bug-taxonomy.md` §3; body = the **issue-body ladder**, § "Message
-   style" — status header sourcing `auto-qa sweep`). Attach evidence
-   (`issue evidence <n> --file <shot>`), update the baseline. **Only file
-   what you reproduced.**
-
-   **Near-verbatim duplicate filing is blocked in code (#580) — but the
-   check is narrow, so keep searching.** `issue create` scans every open
-   issue (`--limit 1000`) and refuses only a near-verbatim restatement. A
-   **paraphrase slips through** (#404 vs #569, ~0.38) — still
-   keyword-search before filing, and never rely on `renaiss-shipflow
-   issues list --json` alone: its default `--limit 30` newest-first slice
-   cannot contain an older duplicate (how #579 restated #427). Pass
-   `--limit 1000` for this.
-
-   **The rule cuts both ways.** A strict-superset title is refused 100% of
-   the time — a narrower issue quoting an open title and extending it
-   **will be refused, by design**. A digit- or negation-bearing extension
-   (`… exceeds 64 KB`) files clean (such tokens are must-match-exactly).
-   Two ways through:
-
-   | Your filing vs the open issue | Do this |
-   |---|---|
-   | Genuinely the same defect, stated more precisely | Comment the extra detail on the open issue — don't file |
-   | A distinct defect that merely shares the wording | Re-file with **`--allow-duplicate`**, and say why in the body |
-   | Different numbers or a negation (`exits 5`→`7`, `is`→`isn't`) | Files cleanly — the discriminator gate sees the difference |
-
-   **Citing an issue (#587):** an issue reference is digits, and citing
-   the issue you were restating used to skip the check. No longer;
-   per-candidate:
-
-   | Title filed while #427 is open | vs #427 | vs every OTHER open issue |
-   |---|---|---|
-   | #579's title + ` (#427 regression)` | **refused** at 0.778 — `427` is dropped from gate 3, but the citation tokens stay in Dice, so 0.875 deflates to 0.778 | `427` still discriminates in full |
-   | #579's title + ` (#999 regression)` | files clean — `999` still discriminates | `999` still discriminates |
-   | `owner/repo#427` anywhere in the title | files clean — a cross-repo ref is not a citation | unchanged |
-   | `427` used bare *and* cited (`retried 427 times, see #427`) | files clean — one bare use is enough | unchanged |
-
-   **A citation of the issue you are restating no longer excuses you; a
-   citation of any OTHER issue still does** (measured, #587; dropping every
-   cited number is deliberately NOT the rule — #590). **The margin is
-   thin**: 0.778 sits 0.078 above the 0.70 floor — three more content words
-   tip a refusal into a clean file (#588).
-
-   | Outcome | Exit | What you do |
-   |---|---|---|
-   | No match | 0 | Filed — carry on (a clean exit is **not** proof there's no duplicate; see above) |
-   | Match, `--json` / `--yaml` | **12** | Read `{blocked: true, candidates: […]}` and **comment on the existing issue** instead — nothing was created |
-   | Match, genuinely a different bug | **12** | Re-run with **`--allow-duplicate`** (it echoes what it overrode) |
-   | Scan window came back FULL | 0 | Filed, with a loud `window is FULL` warning — the older issues were never scanned; check by hand |
-   | Open-issue fetch failed | 0 | Warned + filed anyway — a GitHub outage never blocks a filing; dedupe by hand |
-3. **Feed the loop**: filed ≥1 new issue → **back to A**. Nothing new
-   (clean, or only dupes) → *that's* the real stop.
-
-Bound it: at most `bug-hunt-cap` new issues per run (default 5); the PR
-`cap` still applies to fixes. `config set bug-hunt false` (or
-`SHIPFLOW_BUG_HUNT=false`) → an empty queue just stops.
+B exit 4 + A clean + `bug-hunt` on → load `loop-bug-sweep.md` and follow it:
+test + regression + browser QA, file only REPRODUCED bugs (dedupe enforced,
+exit 12), cap `bug-hunt-cap`. Filed ≥1 → back to A; nothing new → real stop.
 
 ### D. Repeat / stop
 
@@ -552,8 +477,8 @@ still parks forever).
 
 | `state` | What it means | Action |
 |---|---|---|
-| `reporter_corrected` | still gated, and the reporter replied with a correction | rework per § "A reporter correction IS the human answering" — brief it as settled; the gate stays ON |
-| `awaiting_reporter` | approved + green, interpretation unconfirmed (`needs-reporter-review`) | park — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable` / `reporter_gate_stale`) → `issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` ONCE, nothing else — **never a PR comment** |
+| `reporter_corrected` (→ `loop-gate.md`) | still gated, and the reporter replied with a correction | rework per § "A reporter correction IS the human answering" — brief it as settled; the gate stays ON |
+| `awaiting_reporter` (→ `loop-gate.md`) | approved + green, interpretation unconfirmed (`needs-reporter-review`) | park — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable` / `reporter_gate_stale`) → `issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` ONCE, nothing else — **never a PR comment** |
 | `ci_failing` | a check is red | fix on branch, push; escalate after `max-fix-attempts` |
 | `changes_requested` | reviewer wants changes | pr-feedback → fix → push → reply |
 | `review_comments` | unaddressed comments | pr-feedback (may already be handled) → reply |
@@ -622,7 +547,7 @@ still parks forever).
   issue author). Only Action needed renders unfolded (the CLI collapses
   the rest into `<details>` and rejects action lines over 30 words); never
   an open question without a `**Recommendation:**` line — the CLI lints
-  and rejects; full contract in `loop-reviewer.md` Mode 1.
+  and rejects; full contract in `loop-reviewer-intake.md` step 1.
 - **The priorities doc is human-edited only.** `docs/PRIORITIES.md`
   (`renaiss-shipflow priorities`) is the owner's policy (#211): read it,
   **never edit it**; propose changes via `issue escalate`. Greenlit never
@@ -633,153 +558,19 @@ still parks forever).
   only (settled items "resolved by #N"); check off the parent body's
   decision checklist. One live 🚧 comment per issue — `--update` edits in
   place, never stacks banners.
-- **Mark loop comments on escalated issues.** The server auto-clears
-  `needs-human` on a *human* reply — it recognizes machinery by the 🚧
-  banner and **any** `<!-- shipflow:` marker, not by author (the loop
-  comments under the operator's account). Any non-resolving loop comment
-  on a `needs-human` issue MUST end with `<!-- shipflow:loop -->`, or it
-  un-parks the issue. `issue escalate` output needs no marker (🚧 banner
-  exempts it). Markers match by **prefix**, not a list (#411):
-  `<!-- shipflow:loop-review -->`, `<!-- shipflow:precedent-applied …` and
-  any future marker are machinery too.
-- 🔴 **`needs-reporter-review` is the opposite polarity — it does NOT
-  clear on any reply.** The #190 intent gate: a merge blocker until a
-  human confirms a worker's reading. The server clears it **only** on an
-  explicit affirmative and **ignores unknown prose** (#411 — a plain loop
-  comment used to strip it; PR #405 merged with the gate machine-cleared).
-  Rules:
-
-  | On a `needs-reporter-review` PR | Rule |
-  | --- | --- |
-  | **Any comment the loop posts** | MUST carry a `<!-- shipflow:` marker — `pr approve --comment` and `pr post-review` stamp `<!-- shipflow:loop-review -->` for you; a hand-written `gh pr comment` does not |
-  A reporter who wants the PR merged replies `confirmed` (or another token) as
-  the whole reply; anything more is a correction.
-
-  | **Releasing the gate** | only the reporter, with a reply that is ONLY `confirmed` / `confirm` / `/confirm` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / `+1` / 👍 and nothing else — never the loop |
-  | **Releasing it the other way** — the numbered `N: answer` door | a decision reply to an escalation ALSO releases it, under **four** preconditions, every one required: the block is the whole quote-stripped reply; **every** line of that block is itself a decision line; **every** answer is a `confirmationTokens` entry; and the thread carries an escalation banner. That fourth one is weaker than it sounds — `escalationOutstanding` returns true on the **first banner found anywhere in the comment history**, with no answered/resolved/superseded check, so a **stale** banner still opens this door (#486). The rule is single-sourced in `contracts/shipflow-contract.json` → `intentGate.$comment` — read it there; do **not** restate the matcher here (two hand-written copies is how #411 happened) |
-  | **Correcting the reading** | leaves the gate ON, by design: rework the PR — the loop now DOES, via `reporter_corrected` (see below) |
-  | **A QUALIFIED yes** | also leaves it ON — `yes but change the copy first` is a correction, not consent |
-  | **Prose that reads as consent** | also leaves it ON — even `Confirmed — ship it`, because it is not the token |
-  | **A token with ANYTHING under it** | also leaves it ON — one newline or one blank line, a correction or a thank-you |
-  | **Human override** | remove the label in the GitHub UI |
-
-  An **exact token that is the whole reply**, not a grammar: markdown
-  decoration and trailing punctuation are stripped (`**Confirmed**`,
-  `- lgtm`, `Confirmed.` all work); a token in a sentence, or with
-  anything after it, never releases — the matcher refuses without
-  inspecting what follows. A miss gets **one** nudge naming every token,
-  pointing commentary to a separate comment.
-
-  Whether a deployment *runs* these doors is a version question (both
-  shipped in server **0.28.2**, `a3b3d9c`, PR #441) — never state it from
-  this doc; read it:
-
-  | Check | Command |
-  | --- | --- |
-  | Deployed server build (plus CLI/plugin drift) | `renaiss-shipflow version` |
-  | The server directly | `GET /api/v1/version` on the API host |
-
-  **`renderIntentGateNotice` (CLI) and `renderIntentGateNudge` (server)
-  deliberately say NOTHING about the numbered door — leave it that way**;
-  adding it to either surface is a regression.
-
-  The loop **never** clears this gate on the reporter's behalf. Every
-  server removal posts an attributable audit comment naming the actor and
-  quoting their line — a vanished label with no such comment is a bug,
-  not a confirmation.
-- 🟢 **A reporter correction IS the human answering — rework it** (#442).
-  `inbox` classifies such a PR **`reporter_corrected`** — ranked above
-  `awaiting_reporter`, `needsAttention: true`, `reasons:
-  ["needs-reporter-review", "reporter_correction"]` — with the reply ON
-  the row: `corrections: [{id, author, at, url, excerpt}, …]` (every
-  unanswered comment, OLDEST first), `correction` = `corrections[0]`,
-  `parentNeedsHuman`; summary gains `reporterCorrected`. The CLI decides
-  only the deterministic half — *which comments has the loop not already
-  answered?* You decide the rest:
-
-  | Check | Rule |
-  | --- | --- |
-  | **Decision, or question?** | Only a DECISION dispatches — "not quite, scope it to the CLI only". A question or chatter ("does this cover the migration?") stays parked, exactly as it does on a `needs-human` issue. Guessing here burns a worker cycle per stray comment. |
-  | **Read the WHOLE list** | The decision is often NOT the newest comment: the gate's nudge tells reporters to send thanks and notes as a SEPARATE comment, so correction-then-note is the documented shape. Judge every entry in `corrections`; dispatch on the decision and echo THAT entry's `id`. |
-  | **Parent escalated?** | `parentNeedsHuman: true` → use the **needs-human answer path** above instead (clear `needs-human`, add `loop-proceed`, bake in, dispatch). One reply, one protocol — never both. Resolved from closing refs AND a `Part of #N` slice link, so a `--partial` PR's parent counts. |
-  | **Brief** | Bake the correction in as **SETTLED**, like an answered escalation decision: never re-ask it, never re-derive the reading it replaced. |
-  | **Worker MUST comment** | The rework ends with the marked comment below. Not optional — see the box after this table. |
-  | **Gate** | Untouched. Never remove the label; never post a confirmation on the reporter's behalf. `pr automerge` still refuses with `unconfirmed interpretation`, and the reworked PR re-arms. |
-  | **Ceiling** | `max-fix-attempts` reworks per PR (default 3). At the ceiling the row falls back to `awaiting_reporter` carrying `rework_ceiling` in `reasons` → `issue escalate` ONCE, don't re-poll. |
-  | **`correction_unreadable`** | The PR has human-shaped comments but NO loop-machinery comment at all, so the detector refuses to read the thread (below). Escalate to a human — never hand-judge it into a rework. |
-  | **`reporter_gate_stale`** | Nobody replied AT ALL and the gate has stood past `stale-pr-hours` (#439). `gateAgeHours` is the wait, anchored on the gate notice — **not** `updatedAt`, which the loop's own machinery keeps resetting. Escalate once; never nudge the PR. |
-
-  🟡 **The three refusals arrive as WORK, once.** `rework_ceiling`,
-  `correction_unreadable` and `reporter_gate_stale` stay
-  `awaiting_reporter` — no rework route out — but carry **`escalateOnce:
-  true`** and `needsAttention: true` (Phase A iterates `needsAttention`).
-  A PR with no linked issue has nothing to escalate and stays parked. Do
-  ONLY the escalation from such a row — never a rework, never a merge.
-
-  🔴 **Once means ONCE PER (PR, REASON), EVER — and you must pass the
-  key.**
-
-  | | |
-  |---|---|
-  | **Command** | `renaiss-shipflow issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` |
-  | **Both flags, always** | The CLI refuses a half-written key (exit 1, nothing written). Copy `escalateOnceReason` verbatim off the row. |
-  | **Invariant** | At most **one** escalation per (PR, reason), forever. A genuinely NEW reason on the same PR earns exactly one more. A PR is capped at one per `ESCALATE_ONCE_REASONS` entry. |
-  | **Where it lives** | A hidden `escalate-once` marker inside the escalation banner — no extra comment. `inbox` reads it back off the parent's comments. |
-  | **What counts as a key** | Three filters, all required: the CLI's own account authored the comment, the marker stands alone at column 0, and the comment **is an escalation banner**. A marker in any other CLI comment on the parent — an `issue wait --reason`, a loop-progress note — is prose, not a key. |
-  | **`--update`** | Refused **with** a key — this is the one notification that (PR, reason) ever gets, so it must be a new comment. **Without** a key it is safe: an in-place edit carries every marker on the edited banner forward, so an ordinary re-escalation of the same parent can never erase a key already on file. |
-  | **No precedent reuse** | A keyed escalation skips the precedent lookup, so it never auto-applies a stored answer and shows no `Precedent on file` suggestion. The undo cannot un-write a permanent key, so a reused-then-undone answer would park the row forever. |
-  | **Write it plainly** | Marker literals inside a `--reason` are escaped before they reach the banner, **and** a key is only read out of a banner, so quoting one anywhere — an escalation reason, an `issue wait` reason, a progress note — is harmless. Only the real `--for-pr`/`--once-reason` flags file one. |
-
-  ⚠️ **Never "just re-escalate", never key once-ness off the label:** the
-  server strips `needs-human` on any non-machinery comment — label-keyed
-  once-ness escalated every tick (#488). Escalate-once reasons are
-  terminal until the PR's own `needs-reporter-review` clears via a
-  confirmation token on the **PR thread**; a parent reply does not clear
-  them. Without `--for-pr`/`--once-reason` you re-open the storm by hand.
-
-  🟡 **"The loop already answered this" =** the worker's **`rework-from`**
-  marker, only — and only up to the comment it NAMES; anything newer
-  survives. The gate notice, the server's `intent-gate-hint` nudge and
-  the reviewer's `loop-review` verdict never suppress. Markers count only
-  from a `[bot]`/trusted author, in text they actually typed — a
-  **quoted** marker is a claim, not evidence (#411).
-
-  🔴 **The marked comment prevents rework-then-park-forever.** Nothing
-  re-pings the reporter after a rework (`NotifyNeedsReporterReview` fires
-  on `*.labeled` only; the near-miss nudge is once-per-PR). Post exactly
-  this shape, as the LAST thing the rework does:
-
-  ```markdown
-  ## 🔁 Reworked per your correction
-
-  | | |
-  | --- | --- |
-  | **You said** | <one-line quote of the correction> |
-  | **New reading** | <the interpretation now implemented — one line> |
-  | **Changed** | <what moved — one line> |
-
-  <the intentGate.releaseHint sentence, verbatim from the contract>
-
-  <!-- shipflow:rework-from id=<the id of the `corrections` entry you acted on> -->
-  ```
-
-  The `rework-from` marker is **load-bearing code**: the CLI reads `id=`
-  back (same comment never re-triggers) and counts markers for the
-  ceiling; `renderReworkFromMarker()` renders it,
-  `SHIPFLOW_CONTRACT.intentGate.releaseHint` is the hint — copy neither
-  by hand. An UNMARKED loop comment is indistinguishable from a fresh
-  correction (same login), so the loop reworks against itself. **Post
-  every free-text loop comment via `renaiss-shipflow pr note <n> --body …
-  [--rework-from <id>]` (#603) — it carries the marker; bare `gh pr
-  comment` on a loop-authored PR is BANNED** (measured, #477). Echo the
-  id you ACTED on — the horizon moves there, so a mid-rework correction
-  still surfaces next tick.
-
-  🔴 **A PR with no machinery comment at all is refused outright** —
-  `correction_unreadable` (measured, #401). Current-CLI-gated PRs always
-  have a trail (`pr automerge` posts the marked gate notice), so this
-  fires only on legacy or hand-labelled PRs — the right answer is a
-  human, not a guess.
+- **Mark loop comments on escalated issues.** Any non-resolving loop comment
+  on a `needs-human` issue MUST end with `<!-- shipflow:loop -->` or it
+  un-parks the issue (#411); markers match by prefix. Full rule in
+  `loop-gate.md`.
+- **Every free-text loop comment on a loop-authored PR goes through
+  `renaiss-shipflow pr note <n> --body … [--rework-from <id>]` (#603)** — it
+  carries the marker; bare `gh pr comment` is BANNED (measured, #477). Every
+  state, gated or not — conflict resolutions and stale nudges included.
+- **Intent gate / reporter protocol → `loop-gate.md`** — marker discipline
+  on gated PRs, the release-token table, the rework/`rework-from` protocol and
+  escalate-once: load that card whenever a row shows `awaiting_reporter`,
+  `reporter_corrected`, or `escalateOnce: true`, or before commenting on any
+  `needs-human` issue. Never act on a gated PR without it.
 - Reconcile (A) acts only on **your own** PRs and claimed issues; don't
   touch others' unless asked.
 - Blocked/escalated issues keep their claim and carry `needs-human`, so
@@ -804,6 +595,9 @@ still parks forever).
   return's usage metadata) — plus a totals row (dispatches, merged, tokens).
   Tokens the orchestrator itself spent go in the totals line when the harness
   reports them. No ledger = the pass is not done.
+  Include `tokensReadPerTick` in the totals row — the doc/context TOKENS this
+  tick loaded (spine + cards + contracts; ≈ bytes/4), so corpus creep stays
+  measurable (#611).
 - **At the cap or an empty queue:** summarize — PRs opened, merged,
   parked-awaiting-review, escalated (with reasons) — then ask whether to
   continue beyond the cap or raise the merge policy. Intent-gate-parked
@@ -832,120 +626,8 @@ still parks forever).
   scheduler only; subagent dispatch degrades to inline roles
   (`references/codex.md`).
 
-## Message style — everything you write on GitHub (comments, PR bodies, issue bodies)
+## Message style
 
-**This is the one authoritative copy** — `loop-worker.md`,
-`loop-reviewer.md`, and `pr-feedback.md` point here; edit the contract
-here only. Every message exists so a phone-skimming human can **judge it
-in seconds**: graphics first, words last. For each piece of information,
-use the FIRST format on this list that fits — prose is the fallback,
-never the default:
-
-1. **Table** — ≥3 parallel facts: files → changes, options → risks, checks → results.
-2. **`mermaid` block** — any flow, dependency, sequence, or state change of >2 steps
-   (GitHub renders mermaid natively). A small `flowchart LR` beats a paragraph of "then".
-3. **Checklist** — `- [x]` verified / `- [ ]` pending. Judgeable at a glance.
-4. **Meter** — any ratio or progress: `▰▰▰▱▱ 3/5 merged`.
-5. **Image** — screenshots, recordings, rendered cards as evidence. Seeing beats reading.
-6. **Bullets** — only what no visual can carry: one point per bullet, ≤12 words.
-
-Rules that hold for every format:
-
-- Lead with the outcome: verdict / fixed / blocked — then the visuals.
-- `path:line`, numbers, and short quotes beat descriptions.
-- Asking a human to choose? Render a **decision table** — `| # | Decision | Recommendation |`
-  — whose `#` matches the `N: answer` reply protocol. Every option row carries the
-  loop's recommendation; never a bare open question.
-- Table cells read in one breath: the ≤30-word visible-line cap applies **per cell**.
-- Detail nobody needs in order to act folds into `<details>`; it never renders unfolded.
-- Cut openers ("I have reviewed…"), hedges, and restatements of the diff.
-- If a bullet needs a second clause, split it or cut it.
-
-GitHub collapses single newlines into one paragraph — put a **blank line
-between every section** or bold-led line, and write enumerations as real
-markdown lists (one item per line), never inline `1. … 2. …`.
-
-PR body template (sections, all visual-first, blank line between each):
-`Closes #N` (full fix) / `Part of #N` (slice) · **Root cause** ≤3 bullets, `mermaid`
-if the failure is a flow · **Changed** table (file → what) · **Testing** checklist
-with numbers · **Evidence** images/links.
-
-### Issue-body ladder — every ShipFlow-filed issue body
-
-**Authoritative for EVERY issue body ShipFlow files** — loop bug-sweep /
-auto-qa issues, Phase-B follow-up sub-issues, feature-relate auto-issues,
-harvest-filed issues, hand-filed `/shipflow-new-issue`. Issue #387 is the
-live demo. Build top-down:
-
-| # | Element | When | Shape |
-|---|---|---|---|
-| 1 | **Status header** | always — the first line | one blockquote line: `> <priority emoji> **P<n> · <type> · <area> · effort <S/M/L>** · <wave/source>` |
-| 2 | **Body core** | always | bug → the Repro core below; feature/task → **Why** + **What** (≤3 bullets each) |
-| 3 | **Mermaid diagram** | the defect or design has a flow, sequence, or state shape | small `flowchart`/`sequenceDiagram`/`stateDiagram` — beats prose causality |
-| 4 | **Evidence table** | any `file:line` claim | `\| Claim \| Where \|` — every claim grounded in `path:line` / links / screenshots |
-| 5 | **Acceptance checklist** | always | `- [ ]` items — the reviewer's coverage gate checks them 1:1 |
-| 6 | **`<details>` folds** | long logs, alt options, raw data | collapsed at the bottom, never unfolded |
-
-Priority emoji: 🔴 P0 · 🟠 P1 · 🟡 P2 · 🟢 P3. Wave/source examples:
-`auto-qa sweep`, `Part of #N`, `wave 3`, `hand-filed`. All general rules
-above apply (≤30 words per cell, blank line between sections, prose
-last).
-
-**Bug-body core** — element 2's shape (blank lines are load-bearing):
-
-```
-**Repro**
-1. <step>
-2. <step>
-
-**Expected** <one line>
-
-**Actual** <one line>
-
-**Impact** <one line> · severity:<level>
-```
-
-Screenshots/links land in the evidence table (element 4); the acceptance
-checklist (element 5) still closes a bug body — minimally
-`- [ ] <actual> no longer occurs; <expected> observed`.
-
-### Commit messages: invoke the smart-commit skill
-
-**Create every loop commit by INVOKING the bundled `smart-commit` skill**
-— the Skill tool with the PLUGIN-QUALIFIED name
-**`shipflow:smart-commit`** (#544: a bare name can resolve to another
-plugin's same-named skill — same ambiguity class as the fully-qualified
-`/shipflow:shipflow-loop` rule). No Skill tool / plugin namespace (Codex)
-→ read and follow the skill file from the **plugin clone**:
-`~/.shipflow-skill/skills/smart-commit/SKILL.md` (`references/codex.md`)
-— plugin-relative `skills/smart-commit/SKILL.md`, never the loop
-worktree, never a bare name. Not a hand-written `git commit`: the skill
-splits the staged diff into atomic units and writes Angular conventional
-messages — let it do categorize / split / format. One authoritative copy;
-`loop-worker.md` and `pr-feedback.md` point here.
-
-What the skill produces (sanity-check its output):
-
-- **Format**: `type(scope): subject` — `feat`/`fix`/`docs`/`refactor`/
-  `test`/`perf`/`chore`/`ci`/`build`/`style`; imperative subject, no
-  capital, no period, ≤50 chars; body wrapped at 72 (*what and why*);
-  footer = the `Closes #N` / `Part of #N` reference (matching the PR
-  body).
-- **Atomic**: one logical unit per commit — new-construct / modification
-  / config / docs / refactor / bug-fix / test split out; the regression
-  test may ride with its fix (step 4).
-- **Pre-commit**: lint + format clean before committing (step 4's tests
-  satisfy the skill's test gate).
-- **No AI-attribution trailer** — the skill's default; loop commits keep
-  it (owner decision, #279). Footer = issue reference only;
-  loop-authorship stays traceable via branch, PR, and account.
-
-**One autonomous adaptation** (the loop has no human; the skill assumes
-one): **skip the human-confirm gate** — execute the plan the skill
-produced directly; the reviewer gate and your own tests are the
-confirmation. Never block waiting for a human that isn't there (the
-Spawned/headless posture in SKILL.md). Everything else applies as
-written.
-
-Do NOT edit the vendored `skills/smart-commit` skill to encode this — it
-stays re-syncable; the one autonomous adaptation lives here.
+All GitHub-writing contracts (readable-body, issue-body ladder, escalation
+format, commit messages via `shipflow:smart-commit`) live in
+`message-style.md` — load it in any dispatch that WRITES to GitHub.

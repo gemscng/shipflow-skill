@@ -87,7 +87,7 @@ Unless `once` was passed, set the trigger up once, idempotently, at run start:
 | Intake gate, dependency waits, capability requests, reviewer intake brief, worker fix contract, reviewer PR review + security diff scan + approve flags | "B. Admit new work — under the WIP limit, every issue reviewed first" |
 | Sweep procedure, dedupe / exit 12, filing caps | "C. Bug sweep — when there's nothing left to fix, hunt for new bugs" |
 | Merge path, intent gate, comment markers, escalation contract, model tiers, WTF brake, health gate, cleanup | "Guardrails" |
-| GitHub comment/PR/issue formats, issue-body ladder, commit messages | "Message style — everything you write on GitHub (comments, PR bodies, issue bodies)" |
+| GitHub comment/PR/issue formats, issue-body ladder, commit messages | `references/message-style.md` |
 
 **End of every pass (mandatory):** post the ONE emoji-coded summary line — `✅ N
 merged · 🔀 N opened · ⏸ N parked (reason) · 🚧 N escalated (reason)` — rules

@@ -30,7 +30,7 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments \
 
 `gh pr checkout <n>`, fix **all** actionable comments together, run tests +
 browser check (loop step 5), commit via the **`shipflow:smart-commit`** skill
-(loop-mode.md § "Commit messages": no AI-attribution trailer, skip the
+(message-style.md § "Commit messages": no AI-attribution trailer, skip the
 human-confirm gate), push.
 
 ## 4. Reply on the PR — necessary comments only
@@ -73,5 +73,5 @@ Pushing re-triggers push-run reviewers; for a specific human,
 ## Message style — everything you write on GitHub
 
 Everything written on GitHub (comments, PR bodies, issue bodies) follows the
-**Message style** contract — `loop-mode.md` § "Message style"; don't restate
+**Message style** contract — `message-style.md`; don't restate
 it here.
