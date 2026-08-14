@@ -254,14 +254,17 @@ mean "irrelevant", they stop meaning anything.
    ⛔ **`--findings -` is not optional on the pipe form (issue #427).** stdin
    is read only on an explicit `--findings -` (the `!isTTY` fallback was
    removed in #219 so a headless approve couldn't hang on an inherited pipe).
-   Omit it → still exits 0, prints `0 inline finding(s)` — the review
-   silently discarded. Two forms work, nothing else does:
+   Omit it and the command now REFUSES — exit 1, nothing posted — instead of
+   dropping the findings behind a `0 inline finding(s)` success line. The
+   refusal is not time-boxed: stdin is watched right up to the moment the
+   review is posted, so a slow producer is refused too, never posted over.
+   Two forms work, nothing else does:
 
    | Form | Invocation | Result |
    |---|---|---|
    | pipe | `… \| pr post-review <n> --findings -` | findings anchored |
    | file | `pr post-review <n> --findings /tmp/pr-<n>.findings.json` | findings anchored |
-   | ⛔ bare pipe | `… \| pr post-review <n>` | `inline: 0` — **all findings dropped** |
+   | ⛔ bare pipe | `… \| pr post-review <n>` | **exit 1, nothing posted** — re-run with `--findings -` |
 
    Prefer the file form for large payloads or a kept artifact; the pipe form
    needs `--findings -` every time. Severity: `critical|high|medium|low`

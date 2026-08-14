@@ -8734,10 +8734,21 @@ ${opts.body ?? ""}`;
     writeCapture(opts.out, diff);
     emit(opts, { ...out, ok: true }, () => console.log(`files=${files} lines=${lines} sha256=${sha256}`));
   }));
-  pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", "1-2 sentence verdict summary").option("--verdict <v>", "approve | comment | request_changes | reject", "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...]}). Pass '-' to read stdin — stdin is read ONLY with '-'. Omitting the flag posts ZERO findings and never reads a pipe, so a bare `… | pr post-review` silently drops every finding (issue #427)").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to post --verdict approve on a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the review body").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", "1-2 sentence verdict summary").option("--verdict <v>", "approve | comment | request_changes | reject", "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...]}). Pass '-' to read stdin — stdin is read ONLY with '-'. Without the flag the command posts ZERO findings, and a bare `… | pr post-review` FAILS LOUDLY (exit 1, nothing posted) instead of dropping the pipe silently: any byte seen on stdin before the review is posted refuses, however slow the producer (issue #427)").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to post --verdict approve on a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the review body").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
-    const rawFindings = opts.findings && opts.findings !== "-" ? readFileSync5(opts.findings, "utf8") : opts.findings === "-" ? await readStdin2() : "";
+    let rawFindings;
+    let stdinWatch = null;
+    if (opts.findings && opts.findings !== "-")
+      rawFindings = readFileSync5(opts.findings, "utf8");
+    else if (opts.findings === "-")
+      rawFindings = await readStdin2();
+    else {
+      stdinWatch = watchStdinBytes();
+      if (await stdinWatch.within(STDIN_PEEK_MS))
+        refuseUnflaggedPipe(number);
+      rawFindings = "";
+    }
     let parsed;
     try {
       parsed = JSON.parse(rawFindings || "[]");
@@ -8785,6 +8796,9 @@ ${opts.body ?? ""}`;
 
 `);
     const payload = buildReviewPayload({ summary, verdict, findings, anchors });
+    if (stdinWatch && await stdinWatch.sawBytes())
+      refuseUnflaggedPipe(number);
+    stdinWatch?.release();
     ghCreateReview(repo, number, payload);
     const inlineCount = payload.comments.length;
     const foldedCount = findings.length - inlineCount;
@@ -8952,6 +8966,89 @@ async function readStdin2() {
   for await (const c of process.stdin)
     chunks.push(c);
   return Buffer.concat(chunks).toString("utf8");
+}
+function refuseUnflaggedPipe(number) {
+  console.error(`⛔ Findings are piped to \`pr post-review ${number}\` but \`--findings -\` was not passed — refusing to post a review that would drop them (issue #427).`);
+  console.error(`   Re-run the SAME pipe with the flag: … | renaiss-shipflow pr post-review ${number} --findings - --verdict <v> --summary "<1-2 sentences>"`);
+  console.error(`   Or write the payload to a file and pass --findings <path>. Nothing was posted.`);
+  process.exit(1);
+}
+var STDIN_PEEK_MS = 250;
+var IDLE_WATCH = {
+  within: () => Promise.resolve(false),
+  sawBytes: () => Promise.resolve(false),
+  release: () => {}
+};
+function watchStdinBytes() {
+  const stdin = process.stdin;
+  if (stdin.isTTY)
+    return IDLE_WATCH;
+  let saw = false;
+  let closed = false;
+  let released = false;
+  let wake = null;
+  function release() {
+    if (released)
+      return;
+    released = true;
+    stdin.removeListener("readable", onReadable);
+    stdin.removeListener("end", onClose);
+    stdin.removeListener("error", onClose);
+    stdin.pause();
+    stdin.destroy();
+  }
+  function onReadable() {
+    const chunk = stdin.read();
+    if (chunk === null || chunk.length === 0)
+      return;
+    saw = true;
+    release();
+    wake?.();
+  }
+  function onClose() {
+    closed = true;
+    release();
+    wake?.();
+  }
+  stdin.on("readable", onReadable);
+  stdin.once("end", onClose);
+  stdin.once("error", onClose);
+  return {
+    within(ms) {
+      if (saw)
+        return Promise.resolve(true);
+      if (closed)
+        return Promise.resolve(false);
+      return new Promise((resolve4) => {
+        let settled = false;
+        const settle = () => {
+          if (settled)
+            return;
+          settled = true;
+          clearTimeout(timer);
+          wake = null;
+          if (!released) {
+            if (typeof stdin.unref === "function")
+              stdin.unref();
+            else
+              release();
+          }
+          resolve4(saw);
+        };
+        wake = settle;
+        const timer = setTimeout(settle, ms);
+      });
+    },
+    async sawBytes() {
+      for (let i = 0;i < 2 && !saw && !released; i++) {
+        await new Promise((r) => {
+          setImmediate(r);
+        });
+      }
+      return saw;
+    },
+    release
+  };
 }
 function currentBranch() {
   return execSync4("git rev-parse --abbrev-ref HEAD").toString().trim();
