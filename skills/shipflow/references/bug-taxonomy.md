@@ -18,10 +18,41 @@ checklist**
 | **medium** | Works but with a noticeable problem; a workaround exists | >5s load, validation missing but submit still works, mobile-only layout break |
 | **low** | Cosmetic / polish | footer typo, 1px misalignment, inconsistent hover |
 
-The loop fixes by tier: **critical + high** always; **medium** unless capped
-out; **low** only when the queue is otherwise empty. A reviewer may not
-`approve` a PR that leaves a **critical/high** finding from its own brief
-unaddressed.
+Tiers set pickup **order**, not eligibility — `issue next` has no severity
+gate. `sortIssuesForPickup` (`apps/renaissshipflow-cli/src/issue-order.ts`)
+sorts every actionable issue: `priority:` rank → `severity:` rank → newest
+`createdAt`. A **low** issue is never skipped, only ranked last of the four
+severity tiers; `issue next`
+(`apps/renaissshipflow-cli/src/commands/issue.ts`) claims whatever lands on
+top.
+
+| Want | Do |
+|---|---|
+| Bias the queue | Label it with a tier word the ranker actually knows — anything else counts as unlabeled (`labelRank`, `issue-order.ts`) |
+| Restrict a run to one tier | `issue next --label "severity:critical"` — one label per run, and it stacks with the assignee pre-filter below (`isActionableForPickup`, `issue-order.ts`) |
+| Widen past your own assignments | `pickup-scope` defaults to `assigned`, so `issue next` filters to your gh login; `all` = repo-wide (`config.ts`) |
+| Hand an issue back | `issue done <number>` (`issue.ts`) — drops the ShipFlow claim and clears `🤖 in-progress` server-side; closes nothing |
+
+The CLI side of `issue done` is signal-only, but the server acts on the signal:
+`HandleReleaseIssue`
+(`apps/renaissshipflow-server/internal/adapter/http/cli_handler.go`) calls
+`RemoveLabel(…, inProgressLabel)`, locked by
+`TestHandleReleaseIssue_RemovesInProgressLabel`. So a released issue is no
+longer held out by that label — but whether it is claimable again is
+`isActionableForPickup`'s call (`issue-order.ts`), and the in-progress label is
+only one of the several skips it applies. Read that function rather than assume
+a release is enough. The stale self-heal (`isStaleInProgress` — no live claim
+**and** no open PR) is the backstop for releases that are never sent: crashed
+sessions, TTL-expired claims.
+
+A merge releases the claim on its own (`pr merge`, `pr.ts`) **only for issues
+linked by a closing keyword** — it iterates `closingIssuesReferences`. A `Part
+of #N` slice (`pr create --partial`) has none, so merging it releases nothing
+and the parent keeps its claim; hand that one back with `issue done`. Otherwise
+loop mode holds the claim until merge (`loop-mode.md`).
+
+A reviewer may not `approve` a PR that leaves a **critical/high** finding from
+its own brief unaddressed.
 
 ## 2. Categories
 
@@ -47,8 +78,9 @@ renaiss-shipflow issue create --title "<bug>" --body "<body — see shape below>
 The reviewer uses the same severity words in its verdict bullets
 (`[critical|high|med]`).
 
-The body follows the **issue-body ladder** (`loop-mode.md` § "Message style" —
-the one authoritative copy). Sweep-filed bug shape: status-header blockquote
+The body follows the **issue-body ladder** (`message-style.md` § "Issue-body
+ladder" — the one authoritative copy; `loop-mode.md` § "Message style" is now a
+pointer stub). Sweep-filed bug shape: status-header blockquote
 (`> 🟡 **P2 · bug · <area> · effort S** · auto-qa sweep`), **Repro** steps,
 **Expected**/**Actual**/**Impact** one-liners (Impact carries
 `severity:<level>`), an `| Evidence | Where |` table (claim → path:line /
