@@ -2276,7 +2276,7 @@ function commentArmsGate(c) {
   const b = stripQuotedLines(c.body);
   return b.includes(INTENT_GATE_NOTICE_HEADLINE) || b.includes(REWORK_FROM_MARKER);
 }
-function gateOpenedAt(pr) {
+function gateOpenedAt(pr, restClearedAt) {
   const comments = pr.comments ?? [];
   let clearedMs = -Infinity;
   let clearedIso;
@@ -2292,6 +2292,11 @@ function gateOpenedAt(pr) {
       continue;
     clearedMs = t;
     clearedIso = c.createdAt;
+  }
+  const restMs = commentTs(restClearedAt);
+  if (Number.isFinite(restMs) && restMs > clearedMs) {
+    clearedMs = restMs;
+    clearedIso = restClearedAt;
   }
   let armedMs = -Infinity;
   let armedIso;
@@ -2322,7 +2327,7 @@ function classifyPR(pr, me, opts = {}) {
     const correction = reporterCorrectionOn(pr);
     const spent = reworkAttemptsOn(pr).length;
     const ceiling = opts.maxReworks ?? DEFAULT_MAX_REWORKS;
-    gateAgeHours = hoursSince(gateOpenedAt(pr), opts.nowMs);
+    gateAgeHours = hoursSince(gateOpenedAt(pr, opts.gateClearedAt), opts.nowMs);
     if (correction && spent < ceiling) {
       state = "reporter_corrected";
       reasons = [...reasons, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON];
@@ -4042,7 +4047,7 @@ function ghIntentGateAuditCandidates(repo, number) {
   try {
     const [owner, name] = repo.split("/");
     const path = `repos/${owner}/${name}/issues/${number}/comments`;
-    const q = '.[] | {body: (.body // ""), authorLogin: (.user.login // ""), ' + 'authorAssociation: (.author_association // ""), ' + 'authorIsBot: ((.user.type // "") == "Bot")} | @json';
+    const q = '.[] | {body: (.body // ""), authorLogin: (.user.login // ""), ' + 'authorAssociation: (.author_association // ""), ' + 'authorIsBot: ((.user.type // "") == "Bot"), ' + 'createdAt: (.created_at // "")} | @json';
     const out = _exec(`gh api ${shellQuote(path)} --paginate -q ${shellQuote(q)}`).toString();
     return out.split(`
 `).map((l) => l.trim()).filter((l) => l !== "").map((l) => JSON.parse(l));
@@ -4075,6 +4080,25 @@ function ghIntentGateAuditCount(repo, number) {
     return accepted.length;
   } catch {
     return 0;
+  }
+}
+function ghIntentGateLastClearedAt(repo, number) {
+  try {
+    const trusted = resolveIntentGateAuditAuthorSlug();
+    let bestMs = -Infinity;
+    let best;
+    for (const c of ghIntentGateAuditCandidates(repo, number)) {
+      if (!isIntentGateAuditComment(c, trusted.slug))
+        continue;
+      const t = Date.parse(c.createdAt ?? "");
+      if (Number.isNaN(t) || t <= bestMs)
+        continue;
+      bestMs = t;
+      best = c.createdAt;
+    }
+    return best;
+  } catch {
+    return;
   }
 }
 function ghIntentGateClearance(repo, number, label) {
@@ -6575,6 +6599,9 @@ function safeUnresolvedThreadCount(fetchThreads) {
     return { count: 0, degraded: true };
   }
 }
+function gateClearanceReadFor(prNumber, intentBlocked, read) {
+  return intentBlocked ? read(prNumber) : undefined;
+}
 function hasReporterReviewLabel(pr) {
   return (pr.labels ?? []).some((l) => l.name === SHIPFLOW_CONTRACT.labels.names.needsReporterReview);
 }
@@ -6800,7 +6827,8 @@ function registerInboxCommand(program2) {
     const prs = minePrs.map((pr) => {
       const { count: unresolvedThreads, degraded: degraded2 } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
       const intentBlocked = hasReporterReviewLabel(pr);
-      const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks });
+      const gateClearedAt = gateClearanceReadFor(pr.number, intentBlocked, (n) => ghIntentGateLastClearedAt(repo, n));
+      const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks, gateClearedAt });
       return minePrRow(pr, cl, { unresolvedThreads, degraded: degraded2, parentIsEscalated, parentWasEscalatedFor });
     });
     const issues = ghIssueListByLabel(repo, IN_PROGRESS_LABEL).map((i) => {
@@ -6816,7 +6844,9 @@ function registerInboxCommand(program2) {
     if (sweepEnabled) {
       try {
         for (const entry of foreignConflictedPRs(minePrs, ghPRListAll(repo), me, { enabled: true })) {
-          const cl = classifyPR(entry.pr, me, { staleHours, intentBlocked: hasReporterReviewLabel(entry.pr), maxReworks });
+          const foreignGated = hasReporterReviewLabel(entry.pr);
+          const gateClearedAt = gateClearanceReadFor(entry.pr.number, foreignGated, (n) => ghIntentGateLastClearedAt(repo, n));
+          const cl = classifyPR(entry.pr, me, { staleHours, intentBlocked: foreignGated, maxReworks, gateClearedAt });
           prs.push(foreignPrRow(entry, cl));
         }
       } catch {}
