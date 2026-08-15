@@ -2996,6 +2996,21 @@ function parseIntOr(v, fallback) {
   const n = parseInt(v, 10);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
+function parseBoolStrict(key, v) {
+  const s = (v ?? "").trim().toLowerCase();
+  if (BOOL_TRUE_WORDS.includes(s))
+    return true;
+  if (BOOL_FALSE_WORDS.includes(s))
+    return false;
+  throw new Error(`${key} must be one of: ${[...BOOL_TRUE_WORDS, ...BOOL_FALSE_WORDS].join(", ")} (got: ${v})`);
+}
+function parseIntStrict(key, v) {
+  const s = (v ?? "").trim();
+  if (!/^\d+$/.test(s) || !Number.isSafeInteger(Number(s))) {
+    throw new Error(`${key} must be a non-negative whole number (got: ${v})`);
+  }
+  return Number(s);
+}
 function resolveRequireCi() {
   const env = process.env.SHIPFLOW_REQUIRE_CI;
   if (env != null && env !== "")
@@ -3123,7 +3138,7 @@ var INTAKE_APPROVAL_MODES, DEFAULT_BASE, configFile = () => join(configDir(), "c
   try {
     unlinkSync(configFile());
   } catch {}
-}, loadCredentials = () => readJsonOr(credsFile(), null), saveCredentials = (c) => writeJson(credsFile(), c), loadProjectCache = () => readJsonOr(projectsFile(), {}), saveProjectCache = (c) => writeJson(projectsFile(), c), APP_SLUG_RE;
+}, loadCredentials = () => readJsonOr(credsFile(), null), saveCredentials = (c) => writeJson(credsFile(), c), loadProjectCache = () => readJsonOr(projectsFile(), {}), saveProjectCache = (c) => writeJson(projectsFile(), c), BOOL_TRUE_WORDS, BOOL_FALSE_WORDS, APP_SLUG_RE;
 var init_config = __esm(() => {
   init_escalation_format();
   init_shipflow_contract_data();
@@ -3133,6 +3148,8 @@ var init_config = __esm(() => {
   MERGE_POLICIES = ["manual", "auto-on-green", "auto-timeout"];
   PICKUP_SCOPES = ["assigned", "all"];
   INTENT_GATE_MODES = ["strict", "trusted"];
+  BOOL_TRUE_WORDS = ["true", "1", "on", "yes"];
+  BOOL_FALSE_WORDS = ["false", "0", "off", "no"];
   APP_SLUG_RE = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/;
 });
 
@@ -7055,19 +7072,19 @@ var SETTINGS = [
   {
     key: "auto-issue",
     field: "autoIssue",
-    set: (v, c) => String(c.autoIssue = parseBool(v)),
+    set: (v, c) => String(c.autoIssue = parseBoolStrict("auto-issue", v)),
     effective: resolveAutoIssue
   },
   {
     key: "live-reload",
     field: "liveReload",
-    set: (v, c) => String(c.liveReload = parseBool(v)),
+    set: (v, c) => String(c.liveReload = parseBoolStrict("live-reload", v)),
     effective: resolveLiveReload
   },
   {
     key: "require-ci",
     field: "requireCi",
-    set: (v, c) => String(c.requireCi = parseBool(v)),
+    set: (v, c) => String(c.requireCi = parseBoolStrict("require-ci", v)),
     effective: resolveRequireCi
   },
   {
@@ -7084,37 +7101,37 @@ var SETTINGS = [
   {
     key: "max-fix-attempts",
     field: "maxFixAttempts",
-    set: (v, c) => String(c.maxFixAttempts = parseIntOr(v, 3)),
+    set: (v, c) => String(c.maxFixAttempts = parseIntStrict("max-fix-attempts", v)),
     effective: resolveMaxFixAttempts
   },
   {
     key: "wip-limit",
     field: "wipLimit",
-    set: (v, c) => String(c.wipLimit = parseIntOr(v, 10)),
+    set: (v, c) => String(c.wipLimit = parseIntStrict("wip-limit", v)),
     effective: resolveWipLimit
   },
   {
     key: "stale-pr-hours",
     field: "stalePrHours",
-    set: (v, c) => String(c.stalePrHours = parseIntOr(v, 48)),
+    set: (v, c) => String(c.stalePrHours = parseIntStrict("stale-pr-hours", v)),
     effective: resolveStalePrHours
   },
   {
     key: "bug-hunt",
     field: "bugHunt",
-    set: (v, c) => String(c.bugHunt = parseBool(v)),
+    set: (v, c) => String(c.bugHunt = parseBoolStrict("bug-hunt", v)),
     effective: resolveBugHunt
   },
   {
     key: "bug-hunt-cap",
     field: "bugHuntCap",
-    set: (v, c) => String(c.bugHuntCap = parseIntOr(v, 5)),
+    set: (v, c) => String(c.bugHuntCap = parseIntStrict("bug-hunt-cap", v)),
     effective: resolveBugHuntCap
   },
   {
     key: "require-review",
     field: "requireReview",
-    set: (v, c) => String(c.requireReview = parseBool(v)),
+    set: (v, c) => String(c.requireReview = parseBoolStrict("require-review", v)),
     effective: resolveRequireReview
   },
   {
@@ -7126,7 +7143,7 @@ var SETTINGS = [
   {
     key: "conflict-sweep",
     field: "conflictSweep",
-    set: (v, c) => String(c.conflictSweep = parseBool(v)),
+    set: (v, c) => String(c.conflictSweep = parseBoolStrict("conflict-sweep", v)),
     effective: resolveConflictSweep
   },
   {
@@ -7171,7 +7188,7 @@ var SETTINGS = [
   {
     key: "cli-drift-poll-seconds",
     field: "cliDriftPollSeconds",
-    set: (v, c) => String(c.cliDriftPollSeconds = parseIntOr(v, 180)),
+    set: (v, c) => String(c.cliDriftPollSeconds = parseIntStrict("cli-drift-poll-seconds", v)),
     effective: resolveCliDriftPollSeconds
   },
   {
