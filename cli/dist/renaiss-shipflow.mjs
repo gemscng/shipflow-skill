@@ -3661,6 +3661,497 @@ function emit(opts, jsonValue, humanPrint, { pretty = false } = {}) {
   formatOutput(resolveFormat(opts), jsonValue, humanPrint, { prettyJson: pretty });
 }
 
+// src/sh.ts
+import { execSync as execSync2, spawnSync } from "node:child_process";
+function shellQuote(s) {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+var EXEC_TIMEOUT_MS = 120000, EXEC_MAX_BUFFER, withDefaults = (options) => ({ timeout: EXEC_TIMEOUT_MS, maxBuffer: EXEC_MAX_BUFFER, ...options }), execImpl, spawnImpl, _exec = (cmd, options) => execImpl(cmd, withDefaults(options)), _spawn = (cmd, args, options) => spawnImpl(cmd, args ?? [], withDefaults(options));
+var init_sh = __esm(() => {
+  EXEC_MAX_BUFFER = 16 * 1024 * 1024;
+  execImpl = execSync2;
+  spawnImpl = spawnSync;
+});
+
+// src/gh.ts
+function ghInstalled() {
+  try {
+    _exec("command -v gh", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function ghAuthStatus() {
+  try {
+    _exec("gh auth status", { stdio: "ignore" });
+    return "logged-in";
+  } catch {
+    return "logged-out";
+  }
+}
+function ghAuthToken() {
+  return _exec("gh auth token").toString().trim();
+}
+function ghAuthLogin() {
+  const r = _spawn("gh", ["auth", "login"], { stdio: "inherit" });
+  return r.status === 0;
+}
+function ghIssueView(repo, number) {
+  const out = _exec(`gh issue view ${number} --repo ${shellQuote(repo)} --json ${FIELDS}`).toString();
+  return JSON.parse(out);
+}
+function classifyIssueReadFailure(e) {
+  const parts = [
+    e instanceof Error ? e.message : String(e),
+    String(e?.stderr ?? ""),
+    String(e?.stdout ?? "")
+  ];
+  const text = parts.join(`
+`);
+  return ISSUE_READ_ANSWERED_PATTERNS.some((re) => re.test(text)) ? "not-an-issue" : "unavailable";
+}
+function ghIssueOrPrState(repo, number) {
+  try {
+    const out = _exec(`gh api ${shellQuote(`repos/${repo}/issues/${number}`)} --jq .state`).toString().trim();
+    return out === "open" || out === "closed" ? out : null;
+  } catch {
+    return null;
+  }
+}
+function ghIssueCreate(repo, title, body, labels = []) {
+  ghEnsureLabel(repo, VIA_SHIPFLOW_LABEL, undefined, "Created by ShipFlow (agent-filed, not human-filed)");
+  const allLabels = labels.includes(VIA_SHIPFLOW_LABEL) ? labels : [...labels, VIA_SHIPFLOW_LABEL];
+  const labelFlags = allLabels.map((l) => `--label ${shellQuote(l)}`).join(" ");
+  const bodyWithMarker = body.includes(SHIPFLOW_TRIAGED_MARKER) ? body : `${body.replace(/\n+$/, "")}
+
+<sub>\uD83E\uDD16 Filed via ShipFlow</sub>
+${SHIPFLOW_TRIAGED_MARKER}`;
+  const out = _exec(`gh issue create --repo ${shellQuote(repo)} --title ${shellQuote(title)} --body ${shellQuote(bodyWithMarker)} ${labelFlags}`).toString();
+  const url = out.split(`
+`).map((s) => s.trim()).filter(Boolean).reverse().find((l) => l.startsWith("http")) ?? out.trim();
+  const number = parseInt(url.split("/").pop() || "0", 10);
+  return { url, number };
+}
+function assertResolvedFilter(value, flag, command) {
+  if (value !== undefined && value.trim() === "") {
+    throw new Error(`${command}: ${flag} resolved to an empty value — refusing to drop the filter and list the whole repo (check \`gh auth status\`)`);
+  }
+}
+function ghIssueList(repo, state = "open", limit = 30, assignee) {
+  assertResolvedFilter(assignee, "--assignee", "gh issue list");
+  const assigneeArg = assignee ? ` --assignee ${shellQuote(assignee)}` : "";
+  const out = _exec(`gh issue list --repo ${shellQuote(repo)} --state ${state} --limit ${limit}${assigneeArg} --json ${FIELDS}`).toString();
+  return JSON.parse(out);
+}
+function ghIssueListFiltered(repo, f = {}) {
+  const parts = [
+    "gh issue list",
+    `--repo ${shellQuote(repo)}`,
+    `--state ${shellQuote(f.state ?? "open")}`,
+    `--limit ${f.limit ?? 1000}`,
+    `--json ${DETAIL_FIELDS}`
+  ];
+  assertResolvedFilter(f.assignee, "--assignee", "gh issue list");
+  for (const l of f.labels ?? [])
+    parts.push(`--label ${shellQuote(l)}`);
+  if (f.assignee)
+    parts.push(`--assignee ${shellQuote(f.assignee)}`);
+  if (f.author)
+    parts.push(`--author ${shellQuote(f.author)}`);
+  if (f.mention)
+    parts.push(`--mention ${shellQuote(f.mention)}`);
+  if (f.milestone)
+    parts.push(`--milestone ${shellQuote(f.milestone)}`);
+  if (f.search)
+    parts.push(`--search ${shellQuote(f.search)}`);
+  const out = _exec(parts.join(" ")).toString();
+  return JSON.parse(out);
+}
+function ghPRCreate(args) {
+  const parts = ["gh pr create", `--repo ${shellQuote(args.repo)}`, `--body ${shellQuote(args.body)}`];
+  if (args.title)
+    parts.push(`--title ${shellQuote(args.title)}`);
+  if (args.base)
+    parts.push(`--base ${shellQuote(args.base)}`);
+  if (args.head)
+    parts.push(`--head ${shellQuote(args.head)}`);
+  if (args.draft)
+    parts.push(`--draft`);
+  const out = _exec(parts.join(" ")).toString().trim();
+  const number = parseInt(out.split("/").pop() || "0", 10);
+  return { url: out, number };
+}
+function ghRepoMergeMethods(repo) {
+  try {
+    const out = _exec(`gh repo view ${shellQuote(repo)} --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`).toString();
+    const p = JSON.parse(out);
+    return { squash: p.squashMergeAllowed !== false, merge: p.mergeCommitAllowed !== false, rebase: p.rebaseMergeAllowed !== false };
+  } catch {
+    return { squash: true, merge: true, rebase: true };
+  }
+}
+function chooseMergeMethod(preferred, allowed) {
+  if (allowed[preferred])
+    return preferred;
+  for (const m of ["squash", "merge", "rebase"]) {
+    if (allowed[m])
+      return m;
+  }
+  return preferred;
+}
+function ghOwnOpenPRs(repo, author) {
+  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --author ${shellQuote(author)} --state open --limit 100 --json number,isDraft`).toString();
+  return JSON.parse(out);
+}
+function ghPRCheckLines(repo, number) {
+  try {
+    return _exec(`gh pr checks ${number} --repo ${shellQuote(repo)}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().split(`
+`).filter((l) => l.trim() !== "");
+  } catch (e) {
+    const out = e.stdout?.toString() ?? "";
+    return out.split(`
+`).filter((l) => l.trim() !== "");
+  }
+}
+function ghPRMerge(repo, number, mode = "squash", deleteBranch = true) {
+  const method = chooseMergeMethod(mode, ghRepoMergeMethods(repo));
+  if (method !== mode)
+    console.error(`ℹ️  repo disallows --${mode}; merging with --${method} (issue #494)`);
+  const flags = [`--${method}`];
+  if (deleteBranch)
+    flags.push("--delete-branch");
+  _exec(`gh pr merge ${number} --repo ${shellQuote(repo)} ${flags.join(" ")}`, { stdio: "inherit" });
+  const view = _exec(`gh pr view ${number} --repo ${shellQuote(repo)} --json mergeCommit,headRefName`).toString();
+  const parsed = JSON.parse(view);
+  return { mergedSha: parsed.mergeCommit?.oid ?? "", headBranch: parsed.headRefName ?? "" };
+}
+function ghPRListMine(repo, limit = 30) {
+  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --author @me --state open --limit ${limit} --json ${PR_FIELDS}`).toString();
+  return JSON.parse(out);
+}
+function ghAuthorAssociations(repo, connection, limit) {
+  const [owner, name] = repo.split("/");
+  const assoc = new Map;
+  let remaining = Math.max(0, Math.trunc(limit));
+  let after;
+  while (remaining > 0) {
+    const page = Math.min(remaining, GH_GRAPHQL_PAGE_MAX);
+    const q = "query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){" + `${connection}(states:OPEN,first:$n,after:$c,orderBy:{field:CREATED_AT,direction:DESC})` + "{pageInfo{hasNextPage endCursor}nodes{number authorAssociation}}}}";
+    const cmd = `gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${page}` + (after ? ` -f c=${shellQuote(after)}` : "");
+    const payload = JSON.parse(_exec(cmd).toString());
+    if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+      throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
+    }
+    const conn = payload?.data?.repository?.[connection];
+    if (!conn)
+      throw new Error(`GraphQL returned no ${connection} connection for ${repo} (repository null or unreadable)`);
+    const nodes = conn.nodes ?? [];
+    for (const n of nodes) {
+      if (typeof n.number === "number")
+        assoc.set(n.number, String(n.authorAssociation ?? ""));
+    }
+    remaining -= nodes.length;
+    after = conn.pageInfo?.endCursor ?? undefined;
+    if (!conn.pageInfo?.hasNextPage || !after || nodes.length === 0)
+      break;
+  }
+  return assoc;
+}
+function ghPRAuthorAssociations(repo, limit = 50) {
+  return ghAuthorAssociations(repo, "pullRequests", limit);
+}
+function ghIssueAuthorAssociations(repo, limit = 200) {
+  return ghAuthorAssociations(repo, "issues", limit);
+}
+function ghIssueListWithAssociations(repo, limit = 200, assignee) {
+  const issues = ghIssueList(repo, "open", limit, assignee);
+  let assoc;
+  try {
+    assoc = ghIssueAuthorAssociations(repo, limit);
+  } catch (e) {
+    console.error(`⚠️  issue authorAssociation lookup failed (${String(e.message ?? e).split(`
+`)[0]}) — ` + `all ${issues.length} open issue(s) report as association-unknown and stay gated for THIS pass only; ` + `no ${SHIPFLOW_CONTRACT.labels.names.needsReporterApproval} label will be written.`);
+    for (const i of issues)
+      i.associationLookupFailed = true;
+    return issues;
+  }
+  let uncovered = 0;
+  for (const i of issues) {
+    const a = assoc.get(i.number);
+    if (a === undefined) {
+      i.associationLookupFailed = true;
+      uncovered++;
+      continue;
+    }
+    i.authorAssociation = a;
+  }
+  if (uncovered > 0) {
+    console.error(`⚠️  ${uncovered} of ${issues.length} open issue(s) fell outside the authorAssociation window — ` + "they report as association-unknown and stay gated for THIS pass only; no label will be written.");
+  }
+  return issues;
+}
+function ghPRListAll(repo, limit = 50) {
+  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --state open --limit ${limit} --json ${PR_FIELDS}`).toString();
+  const prs = JSON.parse(out);
+  let assoc;
+  try {
+    assoc = ghPRAuthorAssociations(repo, limit);
+  } catch (e) {
+    console.error(`⚠️  authorAssociation lookup failed (${String(e.message ?? e).split(`
+`)[0]}) — ` + `every foreign head reports as association-unknown and stays untrusted this tick.`);
+    return prs.map((p) => ({ ...p, associationLookupFailed: true }));
+  }
+  return prs.map((p) => ({ ...p, authorAssociation: assoc.get(p.number) }));
+}
+function ghUser() {
+  const out = _exec("gh api user").toString();
+  const u = JSON.parse(out);
+  return { login: String(u.login ?? ""), id: Number(u.id ?? 0), name: String(u.name ?? "") || String(u.login ?? ""), email: String(u.email ?? "") };
+}
+function ghMatchedEmail(u) {
+  return u.email || `${u.id}+${u.login}@users.noreply.github.com`;
+}
+function ghCurrentLogin() {
+  try {
+    return _exec("gh api user --jq .login").toString().trim();
+  } catch {
+    return "";
+  }
+}
+function ghIssueListByLabel(repo, label, limit = 30) {
+  const out = _exec(`gh issue list --repo ${shellQuote(repo)} --state open --label ${shellQuote(label)} --limit ${limit} --json ${FIELDS},comments`).toString();
+  return JSON.parse(out);
+}
+function ghOpenPRClosingIssues(repo) {
+  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --state open --limit 100 --json closingIssuesReferences`).toString();
+  const prs = JSON.parse(out);
+  return new Set(prs.flatMap((p) => (p.closingIssuesReferences ?? []).map((r) => r.number)));
+}
+function ghPRDiffText(repo, number) {
+  return _exec(`gh pr diff ${number} --repo ${shellQuote(repo)}`, { maxBuffer: 32 * 1024 * 1024 }).toString();
+}
+function ghPRChangedFiles(repo, number) {
+  const out = _exec(`gh api --paginate repos/${shellQuote(repo)}/pulls/${number}/files --jq ${shellQuote(".[].filename")}`, { maxBuffer: 32 * 1024 * 1024 }).toString();
+  return out.split(`
+`).map((l) => l.trim()).filter(Boolean);
+}
+function ghPRMergedByHead(repo, branch) {
+  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --head ${shellQuote(branch)} --state merged --limit 1 --json number,headRefOid`).toString();
+  const rows = JSON.parse(out);
+  const pr = rows[0];
+  return pr && typeof pr.number === "number" && typeof pr.headRefOid === "string" ? { number: pr.number, headRefOid: pr.headRefOid } : null;
+}
+function ghCompareHead(repo, pr) {
+  const baseOwner = repo.split("/")[0] ?? "";
+  const headOwner = pr.headRepositoryOwner?.login;
+  const crossRepo = pr.isCrossRepository === true || headOwner != null && headOwner.toLowerCase() !== baseOwner.toLowerCase();
+  if (!crossRepo)
+    return pr.headRefName;
+  return headOwner ? `${headOwner}:${pr.headRefName}` : null;
+}
+function ghPRFreshness(repo, pr) {
+  const base = pr.baseRefName;
+  if (!base)
+    return { behindBy: null, unresolvable: true };
+  const head = ghCompareHead(repo, pr);
+  if (head === null)
+    return { behindBy: null, unresolvable: true };
+  try {
+    const out = _exec(`gh api repos/${shellQuote(repo)}/compare/${shellQuote(base)}...${shellQuote(head)} -q .behind_by`, { stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+    const n = parseInt(out, 10);
+    return Number.isNaN(n) ? { behindBy: null } : { behindBy: n };
+  } catch (e) {
+    const err = e;
+    const detail = `${String(err.stderr ?? "")}
+${err.message ?? ""}`;
+    return /HTTP 404|\bNot Found\b/i.test(detail) ? { behindBy: null, unresolvable: true } : { behindBy: null };
+  }
+}
+function ghPRView(repo, number) {
+  const out = _exec(`gh pr view ${number} --repo ${shellQuote(repo)} --json ${PR_FIELDS}`).toString();
+  return JSON.parse(out);
+}
+function labelColorFor(name) {
+  if (Object.prototype.hasOwnProperty.call(LABEL_COLORS, name))
+    return LABEL_COLORS[name];
+  for (const [prefix, c] of Object.entries(LABEL_PREFIX_COLORS)) {
+    if (name.startsWith(prefix))
+      return c;
+  }
+  return;
+}
+function ghEnsureLabel(repo, name, color, description = "") {
+  const resolved = color ?? labelColorFor(name);
+  const force = resolved !== undefined;
+  try {
+    _exec(`gh label create ${shellQuote(name)} --repo ${shellQuote(repo)} --color ${shellQuote(resolved ?? "ededed")} --description ${shellQuote(description)}${force ? " --force" : ""}`, { stdio: "ignore" });
+  } catch {}
+}
+function ghIssueAddLabels(repo, number, labels) {
+  if (!labels.length)
+    return;
+  const flags = labels.map((l) => `--add-label ${shellQuote(l)}`).join(" ");
+  _exec(`gh issue edit ${number} --repo ${shellQuote(repo)} ${flags}`, { stdio: "ignore" });
+}
+function ghIssueRemoveLabel(repo, number, label) {
+  try {
+    _exec(`gh issue edit ${number} --repo ${shellQuote(repo)} --remove-label ${shellQuote(label)}`, { stdio: "ignore" });
+  } catch {}
+}
+function ghIssueComment(repo, number, body) {
+  _exec(`gh issue comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(body)}`, { stdio: "ignore" });
+}
+function ghLabelRemovals(repo, number, label) {
+  return ghIssueTimelineSignals(repo, number, label).removals;
+}
+function ghIssueTimelineSignals(repo, number, label) {
+  const signals = { removals: [], renamedAt: [] };
+  try {
+    const [owner, name] = repo.split("/");
+    const path = `repos/${owner}/${name}/issues/${number}/timeline`;
+    const q = '.[] | select(.event=="unlabeled" or .event=="renamed") | [.event, (.label.name // ""), (.actor.login // ""), (.actor.type // ""), (.created_at // "")] | @tsv';
+    const out = _exec(`gh api ${shellQuote(path)} --paginate -q ${shellQuote(q)}`).toString();
+    for (const line of out.split(`
+`)) {
+      const c = line.split("\t");
+      const event = (c[0] ?? "").trim();
+      if (event === "renamed") {
+        signals.renamedAt.push((c[4] ?? "").trim());
+        continue;
+      }
+      if (event !== "unlabeled" || c[1] !== label)
+        continue;
+      const actor = (c[2] ?? "").trim();
+      const type = (c[3] ?? "").trim().toLowerCase();
+      signals.removals.push({
+        actor,
+        actorIsBot: type === "bot" || actor.endsWith("[bot]"),
+        actorKnown: actor !== "",
+        createdAt: (c[4] ?? "").trim()
+      });
+    }
+    return signals;
+  } catch {
+    return { removals: [], renamedAt: [] };
+  }
+}
+function ghIntentGateAuditCandidates(repo, number) {
+  try {
+    const [owner, name] = repo.split("/");
+    const path = `repos/${owner}/${name}/issues/${number}/comments`;
+    const q = '.[] | {body: (.body // ""), authorLogin: (.user.login // ""), ' + 'authorAssociation: (.author_association // ""), ' + 'authorIsBot: ((.user.type // "") == "Bot")} | @json';
+    const out = _exec(`gh api ${shellQuote(path)} --paginate -q ${shellQuote(q)}`).toString();
+    return out.split(`
+`).map((l) => l.trim()).filter((l) => l !== "").map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+}
+function ghIssueLastEditedAt(repo, number) {
+  const [owner, name] = repo.split("/");
+  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){lastEditedAt}}}";
+  const payload = JSON.parse(_exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString());
+  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
+  }
+  const issue = payload?.data?.repository?.issue;
+  if (!issue)
+    throw new Error(`GraphQL returned no issue ${repo}#${number} (repository null or unreadable)`);
+  return issue.lastEditedAt ? String(issue.lastEditedAt) : null;
+}
+function ghIntentGateAuditCount(repo, number) {
+  try {
+    const trusted = resolveIntentGateAuditAuthorSlug();
+    const candidates = ghIntentGateAuditCandidates(repo, number);
+    const accepted = candidates.filter((c) => isIntentGateAuditComment(c, trusted.slug));
+    for (const c of candidates) {
+      if (c.authorIsBot === true && intentGateAuditLineAnchored(c.body) && !isIntentGateAuditComment(c, trusted.slug)) {
+        console.warn(`⚠️  intent-gate audit comment from bot '${c.authorLogin}' ignored — ` + `only '${trusted.slug}' is trusted to record a clearance ` + `(source: ${trusted.source}` + (trusted.rejected ? `; refused malformed ${trusted.rejected}` : "") + `; contract default intentGate.auditAuthorSlug=` + `'${SHIPFLOW_CONTRACT.intentGate.auditAuthorSlug}'). ` + `If that bot IS your deployment's ShipFlow App, set GITHUB_APP_SLUG ` + `(or \`renaiss-shipflow config set app-slug <slug>\`) to its slug.`);
+      }
+    }
+    return accepted.length;
+  } catch {
+    return 0;
+  }
+}
+function ghIntentGateClearance(repo, number, label) {
+  return {
+    auditComments: ghIntentGateAuditCount(repo, number),
+    removals: ghLabelRemovals(repo, number, label)
+  };
+}
+function ghIssueAuthor(repo, number) {
+  try {
+    const out = _exec(`gh issue view ${number} --repo ${shellQuote(repo)} --json author`).toString();
+    return JSON.parse(out)?.author?.login || null;
+  } catch {
+    return null;
+  }
+}
+function ghIssueComments(repo, number) {
+  const out = _exec(`gh issue view ${number} --repo ${shellQuote(repo)} --json comments`).toString();
+  const nodes = JSON.parse(out)?.comments ?? [];
+  return nodes.map((c) => ({
+    id: String(c.id ?? ""),
+    body: String(c.body ?? ""),
+    viewerDidAuthor: !!c.viewerDidAuthor,
+    authorLogin: String(c.author?.login ?? ""),
+    authorAssociation: String(c.authorAssociation ?? "")
+  }));
+}
+function ghUpdateIssueComment(commentId, body) {
+  const m = "mutation($id:ID!,$b:String!){updateIssueComment(input:{id:$id,body:$b}){issueComment{id}}}";
+  _exec(`gh api graphql -f query=${shellQuote(m)} -f id=${shellQuote(commentId)} -f b=${shellQuote(body)}`, { stdio: "ignore" });
+}
+function ghCreateReview(repo, number, payload) {
+  const [owner, name] = repo.split("/");
+  _exec(`gh api repos/${shellQuote(owner)}/${shellQuote(name)}/pulls/${number}/reviews --method POST --input -`, { input: JSON.stringify(payload), stdio: ["pipe", "ignore", "pipe"] });
+}
+function ghReviewThreads(repo, number) {
+  const [owner, name] = repo.split("/");
+  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){" + "reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{path line author{login} body}}}}}}}";
+  const out = _exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString();
+  const nodes = JSON.parse(out)?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+  return nodes.map((t) => {
+    const c = t.comments?.nodes?.[0] ?? {};
+    return {
+      id: String(t.id),
+      isResolved: !!t.isResolved,
+      path: c.path ?? "",
+      line: c.line ?? null,
+      author: c.author?.login ?? "",
+      body: (c.body ?? "").slice(0, 240)
+    };
+  });
+}
+function ghResolveReviewThread(threadId) {
+  const m = "mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}";
+  try {
+    _exec(`gh api graphql -f query=${shellQuote(m)} -f t=${shellQuote(threadId)}`, { stdio: "ignore" });
+  } catch {}
+}
+var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner", GH_GRAPHQL_PAGE_MAX = 100, LABEL_COLORS, LABEL_PREFIX_COLORS;
+var init_gh = __esm(() => {
+  init_sh();
+  init_shipflow_contract_data();
+  init_pr_state();
+  init_config();
+  init_sh();
+  ISSUE_READ_ANSWERED_PATTERNS = [
+    /could not resolve to an issue/i,
+    /could not resolve to a pullrequest/i,
+    /could not resolve to an issue or pull request/i,
+    /\bno issue found\b/i,
+    /\b(?:http )?404\b(?=[^\n]*\/issues\/\d+)/i
+  ];
+  SHIPFLOW_TRIAGED_MARKER = SHIPFLOW_CONTRACT.markers.triaged;
+  VIA_SHIPFLOW_LABEL = SHIPFLOW_CONTRACT.labels.names.viaShipflow;
+  DETAIL_FIELDS = `${FIELDS},author,milestone,updatedAt,closedAt`;
+  LABEL_COLORS = SHIPFLOW_CONTRACT.labels.colors;
+  LABEL_PREFIX_COLORS = SHIPFLOW_CONTRACT.labels.prefixColors;
+});
+
 // src/commands/helpers.ts
 function buildClientAuth(auth, creds) {
   if (auth.kind === "jwt" && creds)
@@ -3754,6 +4245,13 @@ function getOrg(cmd) {
 function getFormat(cmd) {
   return resolveFormat(cmd.opts());
 }
+function resolveMeLogin(context) {
+  const me = ghCurrentLogin();
+  if (!me) {
+    throw new UsageError(`${context}: gh login unresolved (\`gh api user\` failed — auth/network?) — refusing an unfiltered, repo-wide fallback; check \`gh auth status\``);
+  }
+  return me;
+}
 function runAction(fn) {
   return async (...args) => {
     try {
@@ -3775,6 +4273,7 @@ var init_helpers = __esm(() => {
   init_client();
   init_config();
   init_project();
+  init_gh();
   UsageError = class UsageError extends Error {
   };
 });
@@ -4128,490 +4627,8 @@ function registerTriggerCommand(program2) {
   }));
 }
 
-// src/sh.ts
-import { execSync as execSync2, spawnSync } from "node:child_process";
-var EXEC_TIMEOUT_MS = 120000;
-var EXEC_MAX_BUFFER = 16 * 1024 * 1024;
-var withDefaults = (options) => ({ timeout: EXEC_TIMEOUT_MS, maxBuffer: EXEC_MAX_BUFFER, ...options });
-var execImpl = execSync2;
-var spawnImpl = spawnSync;
-var _exec = (cmd, options) => execImpl(cmd, withDefaults(options));
-var _spawn = (cmd, args, options) => spawnImpl(cmd, args ?? [], withDefaults(options));
-function shellQuote(s) {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
-// src/gh.ts
-init_shipflow_contract_data();
-init_pr_state();
-init_config();
-var FIELDS = "number,title,body,state,labels,assignees,url,createdAt";
-function ghInstalled() {
-  try {
-    _exec("command -v gh", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-function ghAuthStatus() {
-  try {
-    _exec("gh auth status", { stdio: "ignore" });
-    return "logged-in";
-  } catch {
-    return "logged-out";
-  }
-}
-function ghAuthToken() {
-  return _exec("gh auth token").toString().trim();
-}
-function ghAuthLogin() {
-  const r = _spawn("gh", ["auth", "login"], { stdio: "inherit" });
-  return r.status === 0;
-}
-function ghIssueView(repo, number) {
-  const out = _exec(`gh issue view ${number} --repo ${shellQuote(repo)} --json ${FIELDS}`).toString();
-  return JSON.parse(out);
-}
-var ISSUE_READ_ANSWERED_PATTERNS = [
-  /could not resolve to an issue/i,
-  /could not resolve to a pullrequest/i,
-  /could not resolve to an issue or pull request/i,
-  /\bno issue found\b/i,
-  /\b(?:http )?404\b(?=[^\n]*\/issues\/\d+)/i
-];
-function classifyIssueReadFailure(e) {
-  const parts = [
-    e instanceof Error ? e.message : String(e),
-    String(e?.stderr ?? ""),
-    String(e?.stdout ?? "")
-  ];
-  const text = parts.join(`
-`);
-  return ISSUE_READ_ANSWERED_PATTERNS.some((re) => re.test(text)) ? "not-an-issue" : "unavailable";
-}
-function ghIssueOrPrState(repo, number) {
-  try {
-    const out = _exec(`gh api ${shellQuote(`repos/${repo}/issues/${number}`)} --jq .state`).toString().trim();
-    return out === "open" || out === "closed" ? out : null;
-  } catch {
-    return null;
-  }
-}
-var SHIPFLOW_TRIAGED_MARKER = SHIPFLOW_CONTRACT.markers.triaged;
-var VIA_SHIPFLOW_LABEL = SHIPFLOW_CONTRACT.labels.names.viaShipflow;
-function ghIssueCreate(repo, title, body, labels = []) {
-  ghEnsureLabel(repo, VIA_SHIPFLOW_LABEL, undefined, "Created by ShipFlow (agent-filed, not human-filed)");
-  const allLabels = labels.includes(VIA_SHIPFLOW_LABEL) ? labels : [...labels, VIA_SHIPFLOW_LABEL];
-  const labelFlags = allLabels.map((l) => `--label ${shellQuote(l)}`).join(" ");
-  const bodyWithMarker = body.includes(SHIPFLOW_TRIAGED_MARKER) ? body : `${body.replace(/\n+$/, "")}
-
-<sub>\uD83E\uDD16 Filed via ShipFlow</sub>
-${SHIPFLOW_TRIAGED_MARKER}`;
-  const out = _exec(`gh issue create --repo ${shellQuote(repo)} --title ${shellQuote(title)} --body ${shellQuote(bodyWithMarker)} ${labelFlags}`).toString();
-  const url = out.split(`
-`).map((s) => s.trim()).filter(Boolean).reverse().find((l) => l.startsWith("http")) ?? out.trim();
-  const number = parseInt(url.split("/").pop() || "0", 10);
-  return { url, number };
-}
-function ghIssueList(repo, state = "open", limit = 30, assignee) {
-  const assigneeArg = assignee ? ` --assignee ${shellQuote(assignee)}` : "";
-  const out = _exec(`gh issue list --repo ${shellQuote(repo)} --state ${state} --limit ${limit}${assigneeArg} --json ${FIELDS}`).toString();
-  return JSON.parse(out);
-}
-var DETAIL_FIELDS = `${FIELDS},author,milestone,updatedAt,closedAt`;
-function ghIssueListFiltered(repo, f = {}) {
-  const parts = [
-    "gh issue list",
-    `--repo ${shellQuote(repo)}`,
-    `--state ${shellQuote(f.state ?? "open")}`,
-    `--limit ${f.limit ?? 1000}`,
-    `--json ${DETAIL_FIELDS}`
-  ];
-  for (const l of f.labels ?? [])
-    parts.push(`--label ${shellQuote(l)}`);
-  if (f.assignee)
-    parts.push(`--assignee ${shellQuote(f.assignee)}`);
-  if (f.author)
-    parts.push(`--author ${shellQuote(f.author)}`);
-  if (f.mention)
-    parts.push(`--mention ${shellQuote(f.mention)}`);
-  if (f.milestone)
-    parts.push(`--milestone ${shellQuote(f.milestone)}`);
-  if (f.search)
-    parts.push(`--search ${shellQuote(f.search)}`);
-  const out = _exec(parts.join(" ")).toString();
-  return JSON.parse(out);
-}
-function ghPRCreate(args) {
-  const parts = ["gh pr create", `--repo ${shellQuote(args.repo)}`, `--body ${shellQuote(args.body)}`];
-  if (args.title)
-    parts.push(`--title ${shellQuote(args.title)}`);
-  if (args.base)
-    parts.push(`--base ${shellQuote(args.base)}`);
-  if (args.head)
-    parts.push(`--head ${shellQuote(args.head)}`);
-  if (args.draft)
-    parts.push(`--draft`);
-  const out = _exec(parts.join(" ")).toString().trim();
-  const number = parseInt(out.split("/").pop() || "0", 10);
-  return { url: out, number };
-}
-function ghRepoMergeMethods(repo) {
-  try {
-    const out = _exec(`gh repo view ${shellQuote(repo)} --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`).toString();
-    const p = JSON.parse(out);
-    return { squash: p.squashMergeAllowed !== false, merge: p.mergeCommitAllowed !== false, rebase: p.rebaseMergeAllowed !== false };
-  } catch {
-    return { squash: true, merge: true, rebase: true };
-  }
-}
-function chooseMergeMethod(preferred, allowed) {
-  if (allowed[preferred])
-    return preferred;
-  for (const m of ["squash", "merge", "rebase"]) {
-    if (allowed[m])
-      return m;
-  }
-  return preferred;
-}
-function ghOwnOpenPRs(repo, author) {
-  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --author ${shellQuote(author)} --state open --limit 100 --json number,isDraft`).toString();
-  return JSON.parse(out);
-}
-function ghPRCheckLines(repo, number) {
-  try {
-    return _exec(`gh pr checks ${number} --repo ${shellQuote(repo)}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().split(`
-`).filter((l) => l.trim() !== "");
-  } catch (e) {
-    const out = e.stdout?.toString() ?? "";
-    return out.split(`
-`).filter((l) => l.trim() !== "");
-  }
-}
-function ghPRMerge(repo, number, mode = "squash", deleteBranch = true) {
-  const method = chooseMergeMethod(mode, ghRepoMergeMethods(repo));
-  if (method !== mode)
-    console.error(`ℹ️  repo disallows --${mode}; merging with --${method} (issue #494)`);
-  const flags = [`--${method}`];
-  if (deleteBranch)
-    flags.push("--delete-branch");
-  _exec(`gh pr merge ${number} --repo ${shellQuote(repo)} ${flags.join(" ")}`, { stdio: "inherit" });
-  const view = _exec(`gh pr view ${number} --repo ${shellQuote(repo)} --json mergeCommit,headRefName`).toString();
-  const parsed = JSON.parse(view);
-  return { mergedSha: parsed.mergeCommit?.oid ?? "", headBranch: parsed.headRefName ?? "" };
-}
-var PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner";
-function ghPRListMine(repo, limit = 30) {
-  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --author @me --state open --limit ${limit} --json ${PR_FIELDS}`).toString();
-  return JSON.parse(out);
-}
-var GH_GRAPHQL_PAGE_MAX = 100;
-function ghAuthorAssociations(repo, connection, limit) {
-  const [owner, name] = repo.split("/");
-  const assoc = new Map;
-  let remaining = Math.max(0, Math.trunc(limit));
-  let after;
-  while (remaining > 0) {
-    const page = Math.min(remaining, GH_GRAPHQL_PAGE_MAX);
-    const q = "query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){" + `${connection}(states:OPEN,first:$n,after:$c,orderBy:{field:CREATED_AT,direction:DESC})` + "{pageInfo{hasNextPage endCursor}nodes{number authorAssociation}}}}";
-    const cmd = `gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${page}` + (after ? ` -f c=${shellQuote(after)}` : "");
-    const payload = JSON.parse(_exec(cmd).toString());
-    if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-      throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
-    }
-    const conn = payload?.data?.repository?.[connection];
-    if (!conn)
-      throw new Error(`GraphQL returned no ${connection} connection for ${repo} (repository null or unreadable)`);
-    const nodes = conn.nodes ?? [];
-    for (const n of nodes) {
-      if (typeof n.number === "number")
-        assoc.set(n.number, String(n.authorAssociation ?? ""));
-    }
-    remaining -= nodes.length;
-    after = conn.pageInfo?.endCursor ?? undefined;
-    if (!conn.pageInfo?.hasNextPage || !after || nodes.length === 0)
-      break;
-  }
-  return assoc;
-}
-function ghPRAuthorAssociations(repo, limit = 50) {
-  return ghAuthorAssociations(repo, "pullRequests", limit);
-}
-function ghIssueAuthorAssociations(repo, limit = 200) {
-  return ghAuthorAssociations(repo, "issues", limit);
-}
-function ghIssueListWithAssociations(repo, limit = 200, assignee) {
-  const issues = ghIssueList(repo, "open", limit, assignee);
-  let assoc;
-  try {
-    assoc = ghIssueAuthorAssociations(repo, limit);
-  } catch (e) {
-    console.error(`⚠️  issue authorAssociation lookup failed (${String(e.message ?? e).split(`
-`)[0]}) — ` + `all ${issues.length} open issue(s) report as association-unknown and stay gated for THIS pass only; ` + `no ${SHIPFLOW_CONTRACT.labels.names.needsReporterApproval} label will be written.`);
-    for (const i of issues)
-      i.associationLookupFailed = true;
-    return issues;
-  }
-  let uncovered = 0;
-  for (const i of issues) {
-    const a = assoc.get(i.number);
-    if (a === undefined) {
-      i.associationLookupFailed = true;
-      uncovered++;
-      continue;
-    }
-    i.authorAssociation = a;
-  }
-  if (uncovered > 0) {
-    console.error(`⚠️  ${uncovered} of ${issues.length} open issue(s) fell outside the authorAssociation window — ` + "they report as association-unknown and stay gated for THIS pass only; no label will be written.");
-  }
-  return issues;
-}
-function ghPRListAll(repo, limit = 50) {
-  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --state open --limit ${limit} --json ${PR_FIELDS}`).toString();
-  const prs = JSON.parse(out);
-  let assoc;
-  try {
-    assoc = ghPRAuthorAssociations(repo, limit);
-  } catch (e) {
-    console.error(`⚠️  authorAssociation lookup failed (${String(e.message ?? e).split(`
-`)[0]}) — ` + `every foreign head reports as association-unknown and stays untrusted this tick.`);
-    return prs.map((p) => ({ ...p, associationLookupFailed: true }));
-  }
-  return prs.map((p) => ({ ...p, authorAssociation: assoc.get(p.number) }));
-}
-function ghUser() {
-  const out = _exec("gh api user").toString();
-  const u = JSON.parse(out);
-  return { login: String(u.login ?? ""), id: Number(u.id ?? 0), name: String(u.name ?? "") || String(u.login ?? ""), email: String(u.email ?? "") };
-}
-function ghMatchedEmail(u) {
-  return u.email || `${u.id}+${u.login}@users.noreply.github.com`;
-}
-function ghCurrentLogin() {
-  try {
-    return _exec("gh api user --jq .login").toString().trim();
-  } catch {
-    return "";
-  }
-}
-function ghIssueListByLabel(repo, label, limit = 30) {
-  const out = _exec(`gh issue list --repo ${shellQuote(repo)} --state open --label ${shellQuote(label)} --limit ${limit} --json ${FIELDS},comments`).toString();
-  return JSON.parse(out);
-}
-function ghOpenPRClosingIssues(repo) {
-  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --state open --limit 100 --json closingIssuesReferences`).toString();
-  const prs = JSON.parse(out);
-  return new Set(prs.flatMap((p) => (p.closingIssuesReferences ?? []).map((r) => r.number)));
-}
-function ghPRDiffText(repo, number) {
-  return _exec(`gh pr diff ${number} --repo ${shellQuote(repo)}`, { maxBuffer: 32 * 1024 * 1024 }).toString();
-}
-function ghPRChangedFiles(repo, number) {
-  const out = _exec(`gh api --paginate repos/${shellQuote(repo)}/pulls/${number}/files --jq ${shellQuote(".[].filename")}`, { maxBuffer: 32 * 1024 * 1024 }).toString();
-  return out.split(`
-`).map((l) => l.trim()).filter(Boolean);
-}
-function ghPRMergedByHead(repo, branch) {
-  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --head ${shellQuote(branch)} --state merged --limit 1 --json number,headRefOid`).toString();
-  const rows = JSON.parse(out);
-  const pr = rows[0];
-  return pr && typeof pr.number === "number" && typeof pr.headRefOid === "string" ? { number: pr.number, headRefOid: pr.headRefOid } : null;
-}
-function ghCompareHead(repo, pr) {
-  const baseOwner = repo.split("/")[0] ?? "";
-  const headOwner = pr.headRepositoryOwner?.login;
-  const crossRepo = pr.isCrossRepository === true || headOwner != null && headOwner.toLowerCase() !== baseOwner.toLowerCase();
-  if (!crossRepo)
-    return pr.headRefName;
-  return headOwner ? `${headOwner}:${pr.headRefName}` : null;
-}
-function ghPRFreshness(repo, pr) {
-  const base = pr.baseRefName;
-  if (!base)
-    return { behindBy: null, unresolvable: true };
-  const head = ghCompareHead(repo, pr);
-  if (head === null)
-    return { behindBy: null, unresolvable: true };
-  try {
-    const out = _exec(`gh api repos/${shellQuote(repo)}/compare/${shellQuote(base)}...${shellQuote(head)} -q .behind_by`, { stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
-    const n = parseInt(out, 10);
-    return Number.isNaN(n) ? { behindBy: null } : { behindBy: n };
-  } catch (e) {
-    const err = e;
-    const detail = `${String(err.stderr ?? "")}
-${err.message ?? ""}`;
-    return /HTTP 404|\bNot Found\b/i.test(detail) ? { behindBy: null, unresolvable: true } : { behindBy: null };
-  }
-}
-function ghPRView(repo, number) {
-  const out = _exec(`gh pr view ${number} --repo ${shellQuote(repo)} --json ${PR_FIELDS}`).toString();
-  return JSON.parse(out);
-}
-var LABEL_COLORS = SHIPFLOW_CONTRACT.labels.colors;
-var LABEL_PREFIX_COLORS = SHIPFLOW_CONTRACT.labels.prefixColors;
-function labelColorFor(name) {
-  if (Object.prototype.hasOwnProperty.call(LABEL_COLORS, name))
-    return LABEL_COLORS[name];
-  for (const [prefix, c] of Object.entries(LABEL_PREFIX_COLORS)) {
-    if (name.startsWith(prefix))
-      return c;
-  }
-  return;
-}
-function ghEnsureLabel(repo, name, color, description = "") {
-  const resolved = color ?? labelColorFor(name);
-  const force = resolved !== undefined;
-  try {
-    _exec(`gh label create ${shellQuote(name)} --repo ${shellQuote(repo)} --color ${shellQuote(resolved ?? "ededed")} --description ${shellQuote(description)}${force ? " --force" : ""}`, { stdio: "ignore" });
-  } catch {}
-}
-function ghIssueAddLabels(repo, number, labels) {
-  if (!labels.length)
-    return;
-  const flags = labels.map((l) => `--add-label ${shellQuote(l)}`).join(" ");
-  _exec(`gh issue edit ${number} --repo ${shellQuote(repo)} ${flags}`, { stdio: "ignore" });
-}
-function ghIssueRemoveLabel(repo, number, label) {
-  try {
-    _exec(`gh issue edit ${number} --repo ${shellQuote(repo)} --remove-label ${shellQuote(label)}`, { stdio: "ignore" });
-  } catch {}
-}
-function ghIssueComment(repo, number, body) {
-  _exec(`gh issue comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(body)}`, { stdio: "ignore" });
-}
-function ghLabelRemovals(repo, number, label) {
-  return ghIssueTimelineSignals(repo, number, label).removals;
-}
-function ghIssueTimelineSignals(repo, number, label) {
-  const signals = { removals: [], renamedAt: [] };
-  try {
-    const [owner, name] = repo.split("/");
-    const path = `repos/${owner}/${name}/issues/${number}/timeline`;
-    const q = '.[] | select(.event=="unlabeled" or .event=="renamed") | [.event, (.label.name // ""), (.actor.login // ""), (.actor.type // ""), (.created_at // "")] | @tsv';
-    const out = _exec(`gh api ${shellQuote(path)} --paginate -q ${shellQuote(q)}`).toString();
-    for (const line of out.split(`
-`)) {
-      const c = line.split("\t");
-      const event = (c[0] ?? "").trim();
-      if (event === "renamed") {
-        signals.renamedAt.push((c[4] ?? "").trim());
-        continue;
-      }
-      if (event !== "unlabeled" || c[1] !== label)
-        continue;
-      const actor = (c[2] ?? "").trim();
-      const type = (c[3] ?? "").trim().toLowerCase();
-      signals.removals.push({
-        actor,
-        actorIsBot: type === "bot" || actor.endsWith("[bot]"),
-        actorKnown: actor !== "",
-        createdAt: (c[4] ?? "").trim()
-      });
-    }
-    return signals;
-  } catch {
-    return { removals: [], renamedAt: [] };
-  }
-}
-function ghIntentGateAuditCandidates(repo, number) {
-  try {
-    const [owner, name] = repo.split("/");
-    const path = `repos/${owner}/${name}/issues/${number}/comments`;
-    const q = '.[] | {body: (.body // ""), authorLogin: (.user.login // ""), ' + 'authorAssociation: (.author_association // ""), ' + 'authorIsBot: ((.user.type // "") == "Bot")} | @json';
-    const out = _exec(`gh api ${shellQuote(path)} --paginate -q ${shellQuote(q)}`).toString();
-    return out.split(`
-`).map((l) => l.trim()).filter((l) => l !== "").map((l) => JSON.parse(l));
-  } catch {
-    return [];
-  }
-}
-function ghIssueLastEditedAt(repo, number) {
-  const [owner, name] = repo.split("/");
-  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){lastEditedAt}}}";
-  const payload = JSON.parse(_exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString());
-  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
-  }
-  const issue = payload?.data?.repository?.issue;
-  if (!issue)
-    throw new Error(`GraphQL returned no issue ${repo}#${number} (repository null or unreadable)`);
-  return issue.lastEditedAt ? String(issue.lastEditedAt) : null;
-}
-function ghIntentGateAuditCount(repo, number) {
-  try {
-    const trusted = resolveIntentGateAuditAuthorSlug();
-    const candidates = ghIntentGateAuditCandidates(repo, number);
-    const accepted = candidates.filter((c) => isIntentGateAuditComment(c, trusted.slug));
-    for (const c of candidates) {
-      if (c.authorIsBot === true && intentGateAuditLineAnchored(c.body) && !isIntentGateAuditComment(c, trusted.slug)) {
-        console.warn(`⚠️  intent-gate audit comment from bot '${c.authorLogin}' ignored — ` + `only '${trusted.slug}' is trusted to record a clearance ` + `(source: ${trusted.source}` + (trusted.rejected ? `; refused malformed ${trusted.rejected}` : "") + `; contract default intentGate.auditAuthorSlug=` + `'${SHIPFLOW_CONTRACT.intentGate.auditAuthorSlug}'). ` + `If that bot IS your deployment's ShipFlow App, set GITHUB_APP_SLUG ` + `(or \`renaiss-shipflow config set app-slug <slug>\`) to its slug.`);
-      }
-    }
-    return accepted.length;
-  } catch {
-    return 0;
-  }
-}
-function ghIntentGateClearance(repo, number, label) {
-  return {
-    auditComments: ghIntentGateAuditCount(repo, number),
-    removals: ghLabelRemovals(repo, number, label)
-  };
-}
-function ghIssueAuthor(repo, number) {
-  try {
-    const out = _exec(`gh issue view ${number} --repo ${shellQuote(repo)} --json author`).toString();
-    return JSON.parse(out)?.author?.login || null;
-  } catch {
-    return null;
-  }
-}
-function ghIssueComments(repo, number) {
-  const out = _exec(`gh issue view ${number} --repo ${shellQuote(repo)} --json comments`).toString();
-  const nodes = JSON.parse(out)?.comments ?? [];
-  return nodes.map((c) => ({
-    id: String(c.id ?? ""),
-    body: String(c.body ?? ""),
-    viewerDidAuthor: !!c.viewerDidAuthor,
-    authorLogin: String(c.author?.login ?? ""),
-    authorAssociation: String(c.authorAssociation ?? "")
-  }));
-}
-function ghUpdateIssueComment(commentId, body) {
-  const m = "mutation($id:ID!,$b:String!){updateIssueComment(input:{id:$id,body:$b}){issueComment{id}}}";
-  _exec(`gh api graphql -f query=${shellQuote(m)} -f id=${shellQuote(commentId)} -f b=${shellQuote(body)}`, { stdio: "ignore" });
-}
-function ghCreateReview(repo, number, payload) {
-  const [owner, name] = repo.split("/");
-  _exec(`gh api repos/${shellQuote(owner)}/${shellQuote(name)}/pulls/${number}/reviews --method POST --input -`, { input: JSON.stringify(payload), stdio: ["pipe", "ignore", "pipe"] });
-}
-function ghReviewThreads(repo, number) {
-  const [owner, name] = repo.split("/");
-  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){" + "reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{path line author{login} body}}}}}}}";
-  const out = _exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString();
-  const nodes = JSON.parse(out)?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
-  return nodes.map((t) => {
-    const c = t.comments?.nodes?.[0] ?? {};
-    return {
-      id: String(t.id),
-      isResolved: !!t.isResolved,
-      path: c.path ?? "",
-      line: c.line ?? null,
-      author: c.author?.login ?? "",
-      body: (c.body ?? "").slice(0, 240)
-    };
-  });
-}
-function ghResolveReviewThread(threadId) {
-  const m = "mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}";
-  try {
-    _exec(`gh api graphql -f query=${shellQuote(m)} -f t=${shellQuote(threadId)}`, { stdio: "ignore" });
-  } catch {}
-}
-
 // src/commands/login.ts
+init_gh();
 init_client();
 init_config();
 init_prompts();
@@ -4719,11 +4736,13 @@ Git identity captured: ${cfg.gitName} <${cfg.gitEmail}> — apply per-repo with 
 }
 
 // src/commands/git-identity.ts
+init_gh();
+init_config();
 import { execFileSync, execSync as execSync3 } from "node:child_process";
 import { hostname } from "node:os";
-init_config();
 
 // src/git-local.ts
+init_sh();
 import { realpathSync } from "node:fs";
 import { basename } from "node:path";
 function parseWorktrees(porcelain) {
@@ -5258,6 +5277,7 @@ function registerVersionCommand(program2, cliVersion2) {
 }
 
 // src/commands/issues.ts
+init_gh();
 import { writeFileSync as writeFileSync2 } from "node:fs";
 import { resolve as resolve3 } from "node:path";
 
@@ -5387,7 +5407,7 @@ function registerIssuesCommand(program2) {
   const issues = program2.command("issues").description("Issue listing");
   issues.command("list").description("List open issues for the current repo, with ShipFlow triage overlay").option("--state <state>", "Issue state", "open").option("--limit <n>", "Max results", "30").option("--assignee <login>", "Only issues assigned to this user (@me = current gh login)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { project } = await loadCtx(program2);
-    const assignee = opts.assignee === "@me" ? ghCurrentLogin() : opts.assignee;
+    const assignee = opts.assignee === "@me" ? resolveMeLogin("issues list --assignee @me") : opts.assignee;
     const list = ghIssueList(project.repoFullName, opts.state, parseInt(opts.limit, 10), assignee);
     emit(opts, { project, issues: list }, () => {
       if (!list.length) {
@@ -5455,11 +5475,12 @@ function issueRow(i) {
 // src/commands/issue.ts
 init_client();
 init_project();
+init_gh();
+init_escalation_format();
+init_pr_state();
 import { hostname as hostname2 } from "node:os";
 import { readFileSync as readFileSync3, statSync } from "node:fs";
 import { basename as basename2 } from "node:path";
-init_escalation_format();
-init_pr_state();
 
 // src/message-lint.ts
 var TABLE_ROW = /^\s*\|.+\|\s*$/m;
@@ -6536,6 +6557,7 @@ async function readStdin() {
 
 // src/commands/inbox.ts
 init_config();
+init_gh();
 init_pr_state();
 init_escalation_format();
 init_shipflow_contract_data();
@@ -6900,6 +6922,7 @@ ${cat}`);
 init_helpers();
 
 // src/priorities.ts
+init_sh();
 import { existsSync as existsSync3, readFileSync as readFileSync4 } from "node:fs";
 import { join as join4 } from "node:path";
 var PRIORITIES_DOC_RELPATH = "docs/PRIORITIES.md";
@@ -7251,6 +7274,7 @@ function registerCapabilityCommand(program2) {
 
 // src/commands/pr.ts
 init_config();
+init_gh();
 import { execSync as execSync4 } from "node:child_process";
 import { closeSync, existsSync as existsSync4, lstatSync, openSync, readFileSync as readFileSync5, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { createHash as createHash2 } from "node:crypto";
@@ -8054,6 +8078,7 @@ function buildReviewPayload(opts) {
 
 // src/commands/pr.ts
 init_shipflow_contract_data();
+init_sh();
 init_pr_state();
 init_helpers();
 init_project();
@@ -8481,15 +8506,7 @@ ${opts.body ?? ""}`;
     }
     if (opts.allReady) {
       const repoAll = opts.repo ?? ctx.project.repoFullName;
-      const meAll = ghCurrentLogin();
-      if (!meAll) {
-        const msg = "pr automerge --all-ready: gh login unresolved — refusing a repo-wide sweep";
-        if (opts.json)
-          console.log(JSON.stringify({ error: msg }));
-        else
-          console.error(`⛔ ${msg}`);
-        process.exit(1);
-      }
+      const meAll = resolveMeLogin("pr automerge --all-ready");
       const mine = ghOwnOpenPRs(repoAll, meAll).filter((p) => !p.isDraft);
       const results = [];
       for (const { number: n } of mine.sort((a, b) => a.number - b.number)) {
@@ -9311,9 +9328,10 @@ function syncEntryGuard(i) {
 
 // src/commands/test.ts
 init_project();
+init_sh();
+init_helpers();
 import { existsSync as existsSync5, readFileSync as readFileSync6 } from "node:fs";
 import { join as join6 } from "node:path";
-init_helpers();
 function registerTestCommand(program2) {
   program2.command("test").description("Run the project's local test command (auto-detected)").option("--json", "Emit a machine-readable summary line (runner + exit code); test output still streams").option("--yaml", "Output YAML").allowUnknownOption().action((opts) => {
     const root = getCwdRepoRoot();
