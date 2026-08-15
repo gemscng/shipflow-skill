@@ -7645,25 +7645,49 @@ function pathCandidates(path, repo) {
     out.push(`${repo}/${path}`);
   return out;
 }
-function touchedFeatures(diffPaths, features, repo) {
+var CATCH_ALL_PROBE_PATH = "__shipflow_catch_all_probe__/__no_such_file__.probe";
+function isCatchAllFeaturePath(featurePath, repo) {
+  return pathCandidates(CATCH_ALL_PROBE_PATH, repo).some((c) => ownsPath(featurePath, c));
+}
+function resolveFeatureMatch(diffPaths, features, repo) {
   const changed = diffPaths.filter((p) => !isNoiseDiffPath(p)).flatMap((p) => pathCandidates(p, repo));
-  const out = [];
+  const touched = [];
+  const catchAll = [];
   for (const f of features) {
-    if ((f.paths ?? []).some((fp) => changed.some((path) => ownsPath(fp, path)))) {
-      out.push(f.name || f.key);
-    }
+    const owning = (f.paths ?? []).filter((fp) => changed.some((path) => ownsPath(fp, path)));
+    if (!owning.length)
+      continue;
+    const name = f.name || f.key;
+    touched.push(name);
+    if (owning.every((fp) => isCatchAllFeaturePath(fp, repo)))
+      catchAll.push(name);
   }
-  return out;
+  return { touched, catchAll };
 }
 var FEATURE_MATCH_NULL_WARNING = "⚠️ Feature map matched NOTHING — the map has features and this diff has non-noise " + "files, but no feature path owns any changed path. `Features touched` is absent " + "because the MATCHER found nothing, not because the PR touches no feature: treat " + "per-feature evidence coverage as UNVERIFIED and suspect stale/mis-prefixed map paths.";
-function featureMatchIsNull(features, diffPaths, touched) {
-  return Boolean(features?.length) && touched.length === 0 && diffPaths.some((p) => !isNoiseDiffPath(p));
+function featureMatchCatchAllWarning(catchAll) {
+  return `⚠️ Feature map matched ONLY a catch-all entry (${catchAll.join(", ")}) — the map has ` + "features and this diff has non-noise files, but no NAMED feature path owns any " + "changed path. A catch-all matches every diff identically, so `Features touched` " + "identifies nothing: treat per-feature evidence coverage as UNVERIFIED and suspect " + "stale/mis-prefixed map paths.";
 }
-function assessEvidenceCoverage(touched, comments) {
+function featureMatchVerdict(features, diffPaths, match) {
+  if (!features?.length || !diffPaths.some((p) => !isNoiseDiffPath(p)))
+    return "matched";
+  if (match.touched.length === 0)
+    return "null";
+  if (match.catchAll.length === match.touched.length)
+    return "catch-all";
+  return "matched";
+}
+function assessEvidenceCoverage(touched, comments, opts) {
   const evidenceItems = comments.filter((c) => {
     const body = c.body ?? "";
     return /^\s*🧪.*Test evidence/m.test(body) || /^\s*-?\s*\*{0,2}verified:/im.test(body);
   }).length;
+  if (opts?.catchAllOnly && touched.length) {
+    return {
+      evidenceItems,
+      warning: `⚠️ Per-feature evidence coverage UNVERIFIED — the only match is a catch-all map ` + `entry, so the ${evidenceItems} evidence item(s) here cannot be attributed to any ` + `named feature; the per-feature proof count is unknown, not satisfied.`
+    };
+  }
   if (touched.length <= 1 || evidenceItems >= touched.length) {
     return { evidenceItems, warning: null };
   }
@@ -7851,7 +7875,9 @@ function buildReviewPacket(input) {
   }
   const evidence = extractEvidenceLines(pr.comments ?? []);
   const allDiffPaths = splitUnifiedDiff(diff).map((s) => s.path);
-  const touchedAll = input.features?.length ? touchedFeatures(allDiffPaths, input.features, input.repo) : [];
+  const match = input.features?.length ? resolveFeatureMatch(allDiffPaths, input.features, input.repo) : { touched: [], catchAll: [] };
+  const touchedAll = match.touched;
+  const verdict = featureMatchVerdict(input.features, allDiffPaths, match);
   b.push(`
 ## Evidence / health`);
   if (input.featureMapSkipCause)
@@ -7859,12 +7885,17 @@ function buildReviewPacket(input) {
   else if (input.featureMapNotApplicable)
     b.push(featureMapNotApplicableNote(input.featureMapNotApplicable));
   if (input.features?.length) {
+    const mapMarkerAlreadyShown = Boolean(input.featureMapSkipCause || input.featureMapNotApplicable);
     if (touchedAll.length) {
-      b.push(`Features touched (${touchedAll.length}): ${touchedAll.join(", ")}`);
-      const cov = assessEvidenceCoverage(touchedAll, pr.comments ?? []);
+      const catchAllOnly = verdict === "catch-all" && !mapMarkerAlreadyShown;
+      const suffix = catchAllOnly ? " — catch-all only, no named feature" : "";
+      b.push(`Features touched (${touchedAll.length}): ${touchedAll.join(", ")}${suffix}`);
+      if (catchAllOnly)
+        b.push(featureMatchCatchAllWarning(match.catchAll));
+      const cov = assessEvidenceCoverage(touchedAll, pr.comments ?? [], { catchAllOnly });
       if (cov.warning)
         b.push(cov.warning);
-    } else if (!input.featureMapSkipCause && !input.featureMapNotApplicable && featureMatchIsNull(input.features, allDiffPaths, touchedAll)) {
+    } else if (!mapMarkerAlreadyShown && verdict === "null") {
       b.push(FEATURE_MATCH_NULL_WARNING);
     }
   }
@@ -7946,13 +7977,19 @@ function buildReviewPacketData(input) {
   let features;
   if (input.features?.length) {
     const diffPaths = splitUnifiedDiff(diff).map((s) => s.path);
-    const touchedNames = touchedFeatures(diffPaths, input.features, input.repo);
-    if (!input.featureMapSkipCause && !input.featureMapNotApplicable && featureMatchIsNull(input.features, diffPaths, touchedNames)) {
+    const match = resolveFeatureMatch(diffPaths, input.features, input.repo);
+    const touchedNames = match.touched;
+    const mapMarkerAlreadyShown = Boolean(input.featureMapSkipCause || input.featureMapNotApplicable);
+    const verdict = mapMarkerAlreadyShown ? "matched" : featureMatchVerdict(input.features, diffPaths, match);
+    if (verdict === "null")
       evidence.featureMatchWarning = FEATURE_MATCH_NULL_WARNING;
+    else if (verdict === "catch-all") {
+      evidence.featureMatchWarning = featureMatchCatchAllWarning(match.catchAll);
+      evidence.featuresTouchedCatchAllOnly = true;
     }
     if (touchedNames.length) {
       evidence.featuresTouched = touchedNames;
-      evidence.coverageWarning = assessEvidenceCoverage(touchedNames, pr.comments ?? []).warning;
+      evidence.coverageWarning = assessEvidenceCoverage(touchedNames, pr.comments ?? [], { catchAllOnly: verdict === "catch-all" }).warning;
       const touchedSet = new Set(touchedNames);
       const touched = input.features.filter((f) => touchedSet.has(f.name || f.key)).slice(0, 12);
       const layers = new Set(touched.map((f) => f.layer).filter(Boolean));
