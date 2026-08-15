@@ -8851,7 +8851,14 @@ ${opts.body ?? ""}`;
     writeCapture(opts.out, diff);
     emit(opts, { ...out, ok: true }, () => console.log(`files=${files} lines=${lines} sha256=${sha256}`));
   }));
-  pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", "1-2 sentence verdict summary").option("--verdict <v>", "approve | comment | request_changes | reject", "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...]}). Pass '-' to read stdin — stdin is read ONLY with '-'. Without the flag the command posts ZERO findings, and a bare `… | pr post-review` FAILS LOUDLY (exit 1, nothing posted) instead of dropping the pipe silently: any byte seen on stdin before the review is posted refuses, however slow the producer (issue #427)").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to post --verdict approve on a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the review body").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", "1-2 sentence verdict summary").option("--verdict <v>", `One of: ${LOOP_VERDICTS.join(" | ")}. Anything else is REFUSED (exit 1, nothing posted) — never rewritten to \`comment\` (issue #671)`, "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...]}). Pass '-' to read stdin — stdin is read ONLY with '-'. Without the flag the command posts ZERO findings, and a bare `… | pr post-review` FAILS LOUDLY (exit 1, nothing posted) instead of dropping the pipe silently: any byte seen on stdin before the review is posted refuses, however slow the producer (issue #427)").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to post --verdict approve on a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the review body").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+    const rawVerdict = (opts.verdict ?? "").trim();
+    if (!LOOP_VERDICTS.includes(rawVerdict)) {
+      console.error(`Unknown review verdict "${opts.verdict ?? ""}" — valid: ${LOOP_VERDICTS.join(", ")}`);
+      console.error(`   Nothing was posted. A blocking verdict is \`--verdict request_changes\`.`);
+      process.exit(1);
+    }
+    const verdict = rawVerdict;
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     let rawFindings;
@@ -8874,7 +8881,6 @@ ${opts.body ?? ""}`;
       process.exit(1);
     }
     const findings = Array.isArray(parsed) ? parsed : parsed?.findings ?? [];
-    const verdict = ["approve", "comment", "request_changes", "reject"].includes(opts.verdict ?? "") ? opts.verdict : "comment";
     const census = changedFilesOrNull(repo, number);
     const approving = verdict === "approve";
     let prDiff = null;
