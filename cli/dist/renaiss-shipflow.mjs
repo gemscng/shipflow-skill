@@ -8129,7 +8129,7 @@ ${code}
 ${REVIEW_MARKER}`;
 }
 function normPath(p) {
-  return p.replace(/\\/g, "/").replace(/^\.\//, "").trim();
+  return String(p ?? "").replace(/\\/g, "/").replace(/^\.\//, "").trim();
 }
 var HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 var FILE_RE = /^\+\+\+ b\/(.+)$/;
@@ -8181,7 +8181,8 @@ function buildReviewPayload(opts) {
   if (unanchored.length) {
     lines.push("", "**Further findings (outside the annotated diff lines):**");
     for (const f of unanchored) {
-      const anchor = f.line > 0 ? `${f.path}:${f.line}` : f.path;
+      const p = normPath(f.path);
+      const anchor = f.line > 0 ? `${p}:${f.line}` : p;
       const fbLines = renderFindingBody(f).split(`
 
 ` + REVIEW_MARKER)[0].split(`
@@ -8196,7 +8197,7 @@ function buildReviewPayload(opts) {
     event: "COMMENT",
     body: lines.join(`
 `),
-    comments: inline.map((f) => ({ path: f.path, line: f.line, side: "RIGHT", body: renderFindingBody(f) }))
+    comments: inline.map((f) => ({ path: normPath(f.path), line: f.line, side: "RIGHT", body: renderFindingBody(f) }))
   };
 }
 
