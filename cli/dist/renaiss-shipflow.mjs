@@ -8407,6 +8407,8 @@ function registerPRCommand(program2) {
     const ctx = await loadCtx(program2);
     const branch = currentBranch();
     const issueNumber = opts.issue ? parseInt(opts.issue, 10) : detectIssueFromBranch(branch);
+    if (!issueNumber)
+      console.warn(unlinkedPrWarning(branch));
     const linkMode = opts.partial ? "part-of" : "closes";
     const issueUrl = issueNumber ? `https://github.com/${ctx.project.repoFullName}/issues/${issueNumber}` : undefined;
     const header = buildShipFlowHeader(ctx.project.projectName, issueNumber, issueUrl, linkMode);
@@ -9080,8 +9082,11 @@ function currentBranch() {
   return execSync4("git rev-parse --abbrev-ref HEAD").toString().trim();
 }
 function detectIssueFromBranch(branch) {
-  const m = branch.match(/^(?:issue|fix|feat)\/(\d+)/);
+  const m = branch.match(/^(?:issue|fix|feat)\/(?:issue-)?(\d+)/);
   return m ? parseInt(m[1], 10) : undefined;
+}
+function unlinkedPrWarning(branch) {
+  return `⚠️  No linked issue: --issue was not given and branch "${branch}" carries no detectable issue number ` + "(accepted: issue/<n>, fix/<n>, feat/<n>, fix/issue-<n>, feat/issue-<n>). " + "The PR will open UNLINKED — merging it closes nothing, and any `issue wait --on` timer " + "parked on the intended issue waits forever. Pass --issue <n> to link it.";
 }
 function buildShipFlowHeader(project, issueNumber, issueUrl, linkMode = "closes") {
   const lines = ["## ShipFlow context", `- Project: ${project}`];
