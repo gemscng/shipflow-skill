@@ -34,6 +34,15 @@ refills the queue:
    (`issue evidence <n> --file <shot>`), update the baseline. **Only file
    what you reproduced.**
 
+   **Sweep filings land assigned, on purpose (#673).** Under
+   `pickup-scope=assigned` (the default) `issue create` auto-assigns the
+   current gh login, because an unassigned filing is invisible to `issue
+   next` forever — that is what made #656/#657 dead letters. Don't pass
+   `--no-assign` on a sweep filing: it is the opt-out for a HUMAN filing
+   something the loop should not pick up. If `gh` rejects the login on the
+   target repo, the filing survives **unassigned** with a warning — assign
+   it by hand or it stays out of the queue.
+
    **Near-verbatim duplicate filing is blocked in code (#580) — but the
    check is narrow, so keep searching.** `issue create` scans every open
    issue (`--limit 1000`) and refuses only a near-verbatim restatement. A

@@ -48,6 +48,7 @@ Commands, guardrails, and message contracts are identical across harnesses.
 | "list issues" | `renaiss-shipflow issues list --json` |
 | "export issues to excel" | `renaiss-shipflow issues export` (gh-style filters; `--out <file.xlsx>`) |
 | "file an issue about X" | `renaiss-shipflow issue create --title "X" --body "..."` — body: `references/loop-mode.md` § "Message style"; visible bug → `--screenshot <path...>`. **Exit 12 = duplicate, nothing created** (#580) → `references/feature-issue-detection.md` |
+| ↳ who it lands on | Under `pickup-scope=assigned` (the default) it **auto-assigns the current gh login** (#673) — assignment is the queueing gesture, so an unassigned filing is invisible to `issue next`. `--assignee <login...>` overrides; **`--no-assign`** files it unassigned so the loop does NOT pick it up |
 | feature work with no issue / PR without `Fixes #N` | → `references/feature-issue-detection.md` |
 | "auto-create issues" | `renaiss-shipflow config set auto-issue true` |
 | "pick up #42" | `renaiss-shipflow issue work 42 --json` |

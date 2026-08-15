@@ -5,6 +5,20 @@ argument-hint: <title / description>
 
 Create a ShipFlow issue with `renaiss-shipflow issue create --title "..." --body "..."`, deriving the title and body from: $ARGUMENTS. Note: creating an issue does not claim it.
 
+**Who it lands on (#673).** Under `pickup-scope=assigned` (the default) the
+filing is **auto-assigned to the current gh login** — assignment is the
+queueing gesture (#600), so an unassigned issue is invisible to `issue next`.
+On a shared account that means the loop can pick it up.
+
+| The user wants | Flag |
+|---|---|
+| The loop to work it (default) | none — it is assigned automatically |
+| A backlog item **no agent should claim yet** | `--no-assign` |
+| A specific person on it | `--assignee <login>` (`@me` = the gh login) |
+
+`--no-assign` and `--assignee` are mutually exclusive. The command prints
+`— assigned to @<login>` beside the URL, so say who it landed on.
+
 Derive the body per the **issue-body ladder** (authoritative copy:
 `skills/shipflow/references/loop-mode.md` § "Message style"; live demo: issue #387) — graphical-first, top-down:
 

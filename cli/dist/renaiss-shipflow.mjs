@@ -3743,15 +3743,16 @@ function ghIssueOrPrState(repo, number) {
     return null;
   }
 }
-function ghIssueCreate(repo, title, body, labels = []) {
+function ghIssueCreate(repo, title, body, labels = [], assignees = []) {
   ghEnsureLabel(repo, VIA_SHIPFLOW_LABEL, undefined, "Created by ShipFlow (agent-filed, not human-filed)");
   const allLabels = labels.includes(VIA_SHIPFLOW_LABEL) ? labels : [...labels, VIA_SHIPFLOW_LABEL];
   const labelFlags = allLabels.map((l) => `--label ${shellQuote(l)}`).join(" ");
+  const assigneeFlags = assignees.map((a) => ` --assignee ${shellQuote(a)}`).join("");
   const bodyWithMarker = body.includes(SHIPFLOW_TRIAGED_MARKER) ? body : `${body.replace(/\n+$/, "")}
 
 <sub>\uD83E\uDD16 Filed via ShipFlow</sub>
 ${SHIPFLOW_TRIAGED_MARKER}`;
-  const out = _exec(`gh issue create --repo ${shellQuote(repo)} --title ${shellQuote(title)} --body ${shellQuote(bodyWithMarker)} ${labelFlags}`).toString();
+  const out = _exec(`gh issue create --repo ${shellQuote(repo)} --title ${shellQuote(title)} --body ${shellQuote(bodyWithMarker)} ${labelFlags}${assigneeFlags}`).toString();
   const url = out.split(`
 `).map((s) => s.trim()).filter(Boolean).reverse().find((l) => l.startsWith("http")) ?? out.trim();
   const number = parseInt(url.split("/").pop() || "0", 10);
@@ -6130,17 +6131,64 @@ function duplicatePreflight(repo, title, opts) {
   process.exit(EXIT_DUPLICATE_ISSUE);
 }
 function createIssueGuarded(args, opts, { skipPreflight = false } = {}) {
-  const { repo, title, body, labels } = args;
+  const { repo, title, body, labels, assigneesAuto = false } = args;
+  let assignees = args.assignees ?? [];
   if (!skipPreflight)
     duplicatePreflight(repo, title, opts);
   for (const l of labels)
     ghEnsureLabel(repo, l);
-  const created = ghIssueCreate(repo, title, body, labels);
-  emit(opts, { number: created.number, url: created.url, labels }, () => console.log(created.url));
+  let created;
+  try {
+    created = ghIssueCreate(repo, title, body, labels, assignees);
+  } catch (e) {
+    if (!assigneesAuto || assignees.length === 0)
+      throw e;
+    if (!/\bassign|not found|could not resolve/i.test(ghFailureText(e)))
+      throw e;
+    try {
+      created = ghIssueCreate(repo, title, body, labels, []);
+    } catch {
+      throw e;
+    }
+    assignees = [];
+    console.warn(`⚠️  auto-assign REJECTED by gh (${firstLine(e.message)}) — filed UNASSIGNED; under pickup-scope=assigned this issue is invisible to \`issue next\` until someone assigns it.`);
+  }
+  emit(opts, { number: created.number, url: created.url, labels, assignees }, () => console.log(assignees.length > 0 ? `${created.url} — assigned to ${assignees.map((a) => `@${a}`).join(", ")}` : created.url));
+}
+function firstLine(msg) {
+  return (msg.trim().split(`
+`)[0] ?? "").trim();
+}
+function ghFailureText(e) {
+  const err = e;
+  const stderr = err.stderr != null ? String(err.stderr).trim() : "";
+  if (stderr !== "")
+    return stderr;
+  return (err.message ?? "").replace(/^Command failed:[^\n]*\n?/, "");
+}
+function resolveCreateAssignees(explicit, noAssign = false) {
+  const hasExplicit = explicit !== undefined && explicit.length > 0;
+  if (noAssign) {
+    if (hasExplicit) {
+      throw new UsageError("issue create: --no-assign and --assignee are mutually exclusive — pass one or the other.");
+    }
+    return { assignees: [], auto: false };
+  }
+  if (hasExplicit) {
+    return { assignees: explicit.map((a) => a === "@me" ? resolveMeLogin("issue create --assignee @me") : a), auto: false };
+  }
+  if (resolvePickupScope() !== "assigned")
+    return { assignees: [], auto: true };
+  const me = ghCurrentLogin();
+  if (!me) {
+    console.warn("⚠️  auto-assign skipped: gh login unresolved (`gh api user` failed — auth/network?) — filing UNASSIGNED; under pickup-scope=assigned this issue is invisible to `issue next` until someone assigns it (check `gh auth status`).");
+    return { assignees: [], auto: true };
+  }
+  return { assignees: [me], auto: true };
 }
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
-  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--assignee <login...>", "Assignee(s) for the new issue (@me = the gh login). Default under pickup-scope=assigned: the current login — assignment is the queueing gesture (#600), so an unassigned filing is invisible to `issue next`").option("--no-assign", "File UNASSIGNED, overriding the pickup-scope=assigned auto-assign default — the per-invocation opt-out for a human filing a backlog item that the loop should NOT pick up. Mutually exclusive with --assignee").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const shots = opts.screenshot ?? [];
     const shotCaptions = opts.screenshotCaption ?? [];
     const shotErr = validateScreenshotSelection(shots, shotCaptions);
@@ -6155,6 +6203,7 @@ function registerIssueCommand(program2) {
     for (const p of [...lintMessageBody(body), ...lintBodyLength(body)])
       console.warn(`⚠️  body lint: ${p}`);
     duplicatePreflight(repo, title, opts);
+    const { assignees, auto: assigneesAuto } = resolveCreateAssignees(opts.assignee, opts.assign === false);
     if (shots.length > 0) {
       for (const p of shots) {
         const size = statSync(p).size;
@@ -6198,7 +6247,7 @@ function registerIssueCommand(program2) {
 
 ${section}` : section;
     }
-    createIssueGuarded({ repo, title, body, labels: opts.label ?? [] }, opts, { skipPreflight: true });
+    createIssueGuarded({ repo, title, body, labels: opts.label ?? [], assignees, assigneesAuto }, opts, { skipPreflight: true });
   }));
   issue.command("work <number>").description("Exclusively claim an issue (lock + dump context); exits 3 when another agent holds it").option("--repo <fullname>", "Override target repo").option("--agent <name>", "Agent label recorded on the claim (default: $SHIPFLOW_AGENT or hostname)").option("--ttl <minutes>", "Claim lifetime in minutes (default 120)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
@@ -6227,21 +6276,7 @@ ${section}` : section;
     const agent = opts.agent ?? process.env.SHIPFLOW_AGENT ?? hostname2();
     let assignee = opts.assignee;
     if (assignee === "@me" || assignee === undefined && resolvePickupScope() === "assigned") {
-      let me = "";
-      try {
-        me = ghCurrentLogin();
-      } catch {
-        me = "";
-      }
-      if (!me) {
-        const msg = "pickup-scope=assigned but the gh login could not be resolved (auth/network?) — refusing repo-wide pickup; fix `gh auth status` or set pickup-scope all.";
-        if (opts.json)
-          console.log(JSON.stringify({ error: msg }));
-        else
-          console.error(`⛔ ${msg}`);
-        process.exit(1);
-      }
-      assignee = me;
+      assignee = resolveMeLogin(assignee === "@me" ? "issue next --assignee @me" : "issue next under pickup-scope=assigned (set pickup-scope all to widen)");
     }
     const open = ghIssueListWithAssociations(repo, 200, assignee);
     let claimsUnavailable = false;
