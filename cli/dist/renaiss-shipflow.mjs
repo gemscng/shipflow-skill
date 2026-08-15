@@ -3650,7 +3650,7 @@ ${lines.slice(1).map((l) => prefix + "  " + l).join(`
       return "{}";
     return entries.map(([k, v]) => {
       const inner = toYaml(v, indent + 1);
-      if (typeof v === "object" && v !== null) {
+      if (typeof v === "object" && v !== null && !isEmptyCollection(v)) {
         return `${prefix}${k}:
 ${inner}`;
       }
@@ -3659,6 +3659,9 @@ ${inner}`;
 `);
   }
   return String(value);
+}
+function isEmptyCollection(value) {
+  return Array.isArray(value) ? value.length === 0 : Object.keys(value).length === 0;
 }
 function printTable(headers, rows) {
   const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] || "").length)));
