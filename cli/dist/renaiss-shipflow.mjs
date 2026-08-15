@@ -5797,8 +5797,11 @@ function isActionableForPickup(issue, filter) {
     return false;
   if (filter.label && !labels.includes(filter.label))
     return false;
-  if (filter.assignee && !issue.assignees.some((a) => a.login === filter.assignee))
-    return false;
+  if (filter.assignee) {
+    const wanted = filter.assignee.trim().toLowerCase();
+    if (!issue.assignees.some((a) => String(a.login ?? "").trim().toLowerCase() === wanted))
+      return false;
+  }
   return true;
 }
 function parseDependencyRef(ref, defaultRepo) {
