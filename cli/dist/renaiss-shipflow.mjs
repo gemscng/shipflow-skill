@@ -2227,6 +2227,8 @@ function ciStateOf(checks) {
       pending = true;
     } else if (concl === "SUCCESS" || concl === "NEUTRAL" || concl === "SKIPPED" || state === "SUCCESS") {
       passing = true;
+    } else {
+      pending = true;
     }
   }
   if (failing)
