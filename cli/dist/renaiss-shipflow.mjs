@@ -7379,6 +7379,26 @@ var REVIEW_CONTRACT = {
     { prefix: "src/app/admin", path: "src", owns: false },
     { prefix: "app", path: "src/app/x.ts", owns: false },
     { prefix: "SRC/App", path: "src/app/x.ts", owns: false }
+  ],
+  noiseTestVectors: [
+    { $comment: "Whole-segment match for `noise.substrings` (issue #651): a token (trailing / stripped) is noise ONLY where it equals a full path segment, so nested matches keep working while sibling names that merely CONTAIN a token do not. `scope: featuremapOnly` vectors come from noise.featuremapOnly.substrings: noise for the feature map and the Go server's review filter, NEVER for the loop packet (isNoiseDiffPath must return false). Vectors avoid case-divergent paths — TS lowercases, Go does not (deliberate, per the noise $comment).", path: "app/about/page.tsx", noise: false },
+    { path: "src/layout/Header.tsx", noise: false },
+    { path: "app/checkout/page.tsx", noise: false },
+    { path: "app/logout/route.ts", noise: false },
+    { path: "src/workout/plan.ts", noise: false },
+    { path: "packages/retarget/index.ts", noise: false },
+    { path: "mobile-target/src/main.rs", noise: false },
+    { path: "scripts/rebuild/run.sh", noise: false },
+    { path: "tools/prebuild/step.js", noise: false },
+    { path: "src/main.go", noise: false },
+    { path: "out/static/foo.html", noise: true },
+    { path: "src/node_modules/x.js", noise: true },
+    { path: "node_modules/foo/bar.js", noise: true },
+    { path: "ios/Pods/lib/x.m", noise: true },
+    { path: "build/bundle.js", noise: true },
+    { path: "target/release/y.rs", noise: true },
+    { path: "apps/.claude/commands/shipflow-loop.md", noise: true, scope: "featuremapOnly" },
+    { path: ".claude/skills/foo.md", noise: true, scope: "featuremapOnly" }
   ]
 };
 
@@ -7394,10 +7414,16 @@ var NOISE_SUFFIXES = [
   ...REVIEW_CONTRACT.noise.extensions
 ].map((s) => s.toLowerCase());
 var NOISE_BASENAMES = REVIEW_CONTRACT.noise.basenames.map((s) => s.toLowerCase());
+function matchesNoiseSegment(p, s) {
+  const token = s.replace(/^\/+|\/+$/g, "");
+  if (token === "")
+    return false;
+  return `/${p}/`.includes(`/${token}/`);
+}
 function isNoiseDiffPath(path) {
   const p = path.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
   const base = p.slice(p.lastIndexOf("/") + 1);
-  return NOISE_BASENAMES.includes(base) || NOISE_SUBSTRINGS.some((s) => p.includes(s)) || NOISE_SUFFIXES.some((s) => p.endsWith(s));
+  return NOISE_BASENAMES.includes(base) || NOISE_SUBSTRINGS.some((s) => matchesNoiseSegment(p, s)) || NOISE_SUFFIXES.some((s) => p.endsWith(s));
 }
 function splitUnifiedDiff(diff) {
   const sections = [];
