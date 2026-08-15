@@ -8494,7 +8494,7 @@ function unresolvedThreadsOrBlock(repo, number) {
   }
 }
 async function automergeOnce(ctx, repo, number, opts) {
-  const policy = opts.policy ?? resolveMergePolicy();
+  const policy = (opts.policy?.trim() || undefined) ?? resolveMergePolicy();
   const staleHours = resolveStalePrHours();
   const me = ghCurrentLogin();
   const prView = ghPRView(repo, number);
@@ -8590,10 +8590,19 @@ ${opts.body ?? ""}`;
     }, "Merged but ShipFlow signal failed");
     emit(opts, { number, merged: true, mergedSha: result.mergedSha, mode: opts.mode, signalOk }, () => console.log(`merged: ${result.mergedSha}`));
   }));
-  pr.command("ready <number>").description("Report whether a PR is mergeable under the active merge policy (read-only — used by the loop)").option("--policy <p>", "Override merge policy: manual | auto-on-green | auto-timeout").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  pr.command("ready <number>").description("Report whether a PR is mergeable under the active merge policy (read-only — used by the loop)").option("--policy <p>", `Override merge policy — one of: ${MERGE_POLICIES.join(" | ")}. Anything else is REFUSED (exit 1) — never narrowed to a policy you did not ask for (issue #669)`).option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+    const rawPolicy = opts.policy?.trim();
+    if (rawPolicy !== undefined && !MERGE_POLICIES.includes(rawPolicy)) {
+      const msg = `Unknown merge policy "${opts.policy}" — valid: ${MERGE_POLICIES.join(", ")}. Nothing was evaluated. Omit --policy to use the configured policy.`;
+      if (opts.json)
+        console.log(JSON.stringify({ error: msg }));
+      else
+        console.error(`⛔ ${msg}`);
+      process.exit(1);
+    }
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
-    const policy = opts.policy ?? resolveMergePolicy();
+    const policy = rawPolicy ?? resolveMergePolicy();
     const staleHours = resolveStalePrHours();
     const me = ghCurrentLogin();
     const prView = ghPRView(repo, number);
@@ -8622,7 +8631,18 @@ ${opts.body ?? ""}`;
         console.log(`  [ ] ${b}`);
     }, { pretty: true });
   }));
-  pr.command("automerge [number]").description("Merge a PR only if policy + CI + approval allow it; otherwise no-op and exit 5. The loop's safe auto-merge. --all-ready evaluates every own open PR OLDEST-FIRST in one sweep (issue #608 — merging first minimizes freshness-rebase rounds).").option("--all-ready", "Sweep all own open PRs oldest-first instead of one number").option("--policy <p>", "Override merge policy: manual | auto-on-green | auto-timeout").option("--mode <mode>", "squash | merge | rebase", "squash").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  pr.command("automerge [number]").description("Merge a PR only if policy + CI + approval allow it; otherwise no-op and exit 5. The loop's safe auto-merge. --all-ready evaluates every own open PR OLDEST-FIRST in one sweep (issue #608 — merging first minimizes freshness-rebase rounds).").option("--all-ready", "Sweep all own open PRs oldest-first instead of one number").option("--policy <p>", `Override merge policy — one of: ${MERGE_POLICIES.join(" | ")}. Anything else is REFUSED (exit 1, nothing merged) — never narrowed to a policy you did not ask for (issue #669)`).option("--mode <mode>", "squash | merge | rebase", "squash").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+    const rawPolicy = opts.policy?.trim();
+    if (rawPolicy !== undefined && !MERGE_POLICIES.includes(rawPolicy)) {
+      const msg = `Unknown merge policy "${opts.policy}" — valid: ${MERGE_POLICIES.join(", ")}. Nothing was merged. Omit --policy to use the configured policy.`;
+      if (opts.json)
+        console.log(JSON.stringify({ error: msg }));
+      else
+        console.error(`⛔ ${msg}`);
+      process.exit(1);
+    }
+    if (rawPolicy !== undefined)
+      opts.policy = rawPolicy;
     const ctx = await loadCtx(program2);
     if (!numberStr && !opts.allReady) {
       const msg = "pr automerge needs a PR number or --all-ready";
