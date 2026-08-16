@@ -5586,6 +5586,18 @@ function visibleLineCount(body) {
   }
   return count;
 }
+var EXAMPLE_SIGNAL = /\bexample\b|\brepro/i;
+var OUTCOME_SIGNAL = /\bexpected\b|\boutcome\b/i;
+function lintIssueOutcome(body) {
+  const b = body.trim();
+  if (!b)
+    return [];
+  if (EXAMPLE_SIGNAL.test(b) || OUTCOME_SIGNAL.test(b))
+    return [];
+  return [
+    "body has no Example/Repro and no Expected result/Outcome — add one concrete scenario " + "and the observable behavior once it lands (issue-body ladder, message-style.md)"
+  ];
+}
 var MAX_VISIBLE_BODY_LINES = 50;
 function lintBodyLength(body) {
   const visible = visibleLineCount(body);
@@ -6203,7 +6215,7 @@ function registerIssueCommand(program2) {
     const repo = opts.repo ?? ctx.project.repoFullName;
     const title = opts.title ?? await promptText("Title: ");
     let body = opts.body === "-" ? await readStdin() : opts.body ?? "";
-    for (const p of [...lintMessageBody(body), ...lintBodyLength(body)])
+    for (const p of [...lintMessageBody(body), ...lintBodyLength(body), ...lintIssueOutcome(body)])
       console.warn(`⚠️  body lint: ${p}`);
     duplicatePreflight(repo, title, opts);
     const { assignees, auto: assigneesAuto } = resolveCreateAssignees(opts.assignee, opts.assign === false);

@@ -51,7 +51,7 @@ live demo. Build top-down:
 | # | Element | When | Shape |
 |---|---|---|---|
 | 1 | **Status header** | always — the first line | one blockquote line: `> <priority emoji> **P<n> · <type> · <area> · effort <S/M/L>** · <wave/source>` |
-| 2 | **Body core** | always | bug → the Repro core below; feature/task → **Why** + **What** (≤3 bullets each) |
+| 2 | **Body core** | always | bug → the Repro core below; feature/task → the Why/What/Example core below |
 | 3 | **Mermaid diagram** | the defect or design has a flow, sequence, or state shape | small `flowchart`/`sequenceDiagram`/`stateDiagram` — beats prose causality |
 | 4 | **Evidence table** | any `file:line` claim | `\| Claim \| Where \|` — every claim grounded in `path:line` / links / screenshots |
 | 5 | **Acceptance checklist** | always | `- [ ]` items — the reviewer's coverage gate checks them 1:1 |
@@ -79,6 +79,29 @@ last).
 Screenshots/links land in the evidence table (element 4); the acceptance
 checklist (element 5) still closes a bug body — minimally
 `- [ ] <actual> no longer occurs; <expected> observed`.
+
+**Feature/task-body core** — element 2's shape for non-bugs (blank lines
+are load-bearing):
+
+```
+**Why**
+- <≤3 bullets>
+
+**What**
+- <≤3 bullets>
+
+**Example**
+<one concrete scenario with real values — a command, input, or user action>
+
+**Expected result**
+<the observable outcome once this lands — output, log line, UI state>
+```
+
+**Example** and **Expected result** are REQUIRED, not decoration: a
+reader must be able to act without a clarifying question, and the
+reviewer's spec-coverage gate checks the diff against the stated outcome.
+A bug body already carries the pair as **Expected** / **Actual** — never
+duplicate them there. Issue #712 is the live demo of the non-bug shape.
 
 ### Commit messages: invoke the smart-commit skill
 

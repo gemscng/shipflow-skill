@@ -20,10 +20,10 @@ On a shared account that means the loop can pick it up.
 `— assigned to @<login>` beside the URL, so say who it landed on.
 
 Derive the body per the **issue-body ladder** (authoritative copy:
-`skills/shipflow/references/loop-mode.md` § "Message style"; live demo: issue #387) — graphical-first, top-down:
+`skills/shipflow/references/message-style.md`; live demos: issue #387 bug shape, #712 feature/task shape) — graphical-first, top-down:
 
 1. **Status header** — first line, one blockquote: `> <🔴P0|🟠P1|🟡P2|🟢P3> **P<n> · <type> · <area> · effort <S/M/L>** · hand-filed`
-2. **Core** — bug: `**Repro**` numbered steps + `**Expected**` / `**Actual**` / `**Impact** … · severity:<level>` one-liners; feature/task: **Why** + **What**, ≤3 bullets each
+2. **Core** — bug: `**Repro**` numbered steps + `**Expected**` / `**Actual**` / `**Impact** … · severity:<level>` one-liners; feature/task: **Why** + **What** (≤3 bullets each) + `**Example**` one concrete scenario with real values + `**Expected result**` the observable outcome once it lands
 3. **Mermaid** — only when the defect/design has a flow, sequence, or state shape
 4. **Evidence table** — `| Claim | Where |` for every `file:line` claim or screenshot
 5. **Acceptance checklist** — always; `- [ ]` items the reviewer gates on

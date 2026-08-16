@@ -38,12 +38,13 @@ un-tracked; never create duplicate issues.
      catches restatements only — your semantic step-3 pass still catches
      paraphrases.
 
-   The body follows the **issue-body ladder** (`loop-mode.md` § "Message
-   style"; demo: #387): status-header blockquote (priority emoji · type ·
-   area · effort · source `auto-issue`), **Why** + **What** (≤3 bullets
-   each), an evidence table for any `file:line` claim, always an acceptance
-   checklist; mermaid only for flow/sequence/state shapes, long detail in
-   `<details>`.
+   The body follows the **issue-body ladder** (`message-style.md`; demos:
+   #387 bug, #712 feature/task): status-header blockquote (priority emoji ·
+   type · area · effort · source `auto-issue`), **Why** + **What** (≤3
+   bullets each) + **Example** (one concrete scenario with real values) +
+   **Expected result** (the observable outcome once it lands), an evidence
+   table for any `file:line` claim, always an acceptance checklist; mermaid
+   only for flow/sequence/state shapes, long detail in `<details>`.
 5. Once linked (matched or created), reference it in the PR body (`Fixes #N`).
 
 ## Auto mode
