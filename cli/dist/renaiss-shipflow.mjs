@@ -2551,7 +2551,7 @@ function linkedIssueNumbers(pr) {
   return out;
 }
 function mergeDecision(pr, me, opts) {
-  const cl = classifyPR(pr, me, { staleHours: opts.staleHours, nowMs: opts.nowMs });
+  const cl = classifyPR(pr, me, { staleHours: opts.staleHours, nowMs: opts.nowMs, unresolvedThreads: opts.unresolvedThreads, intentBlocked: opts.intentBlocked });
   const blockers = [];
   if (opts.policy === "manual")
     blockers.push("merge-policy is manual (human merge required)");
@@ -8722,10 +8722,10 @@ ${opts.body ?? ""}`;
     const staleHours = resolveStalePrHours();
     const me = ghCurrentLogin();
     const prView = ghPRView(repo, number);
-    const cl = classifyPR(prView, me, { staleHours });
     const threads = unresolvedThreadsOrBlock(repo, number);
     const unresolvedThreads = threads.count;
     const gate = evalIntentGate(repo, number, prView);
+    const cl = classifyPR(prView, me, { staleHours, unresolvedThreads, intentBlocked: gate.blocked });
     const freshness = ghPRFreshness(repo, prView);
     const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy, behindBy: freshness.behindBy, freshnessUnresolvable: freshness.unresolvable });
     const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
