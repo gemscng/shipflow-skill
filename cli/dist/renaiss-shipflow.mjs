@@ -7637,6 +7637,7 @@ var REVIEW_CONTRACT = {
 // src/packet.ts
 init_shipflow_contract_data();
 init_project();
+init_pr_state();
 var PACKET_PER_FILE_CAP = REVIEW_CONTRACT.budgets.perFileDiffCap;
 var PACKET_TOTAL_CAP = REVIEW_CONTRACT.budgets.packetTotalCap;
 var PACKET_BRIEF_CAP = REVIEW_CONTRACT.budgets.briefCap;
@@ -7706,21 +7707,28 @@ function filterDiffForPacket(diff) {
   return { text: out.join(`
 `), shown, omittedNoise, omittedBudget, truncatedFiles };
 }
+var CI_NOTHING_VALIDATED = "nothing was validated — every reported check is NEUTRAL/SKIPPED";
 function summarizeChecks(checks) {
   let passing = 0, failing = 0, pending = 0;
   const failingChecks = [];
   for (const c of checks) {
-    const concl = (c.conclusion ?? c.state ?? "").toUpperCase();
-    if (concl === "SUCCESS" || concl === "NEUTRAL" || concl === "SKIPPED")
+    const state = ciStateOf([c]);
+    if (state === "passing")
       passing++;
-    else if (concl === "" || concl === "PENDING" || (c.status ?? "").toUpperCase() === "IN_PROGRESS")
-      pending++;
-    else {
+    else if (state === "failing") {
       failing++;
       failingChecks.push(c.name ?? "unnamed");
-    }
+    } else if (state === "pending")
+      pending++;
   }
   return { passing, failing, pending, failingChecks, reported: checks.length > 0 };
+}
+function formatCiSummary(ci) {
+  if (!ci.reported)
+    return "no checks reported";
+  if (ci.passing === 0 && ci.failing === 0 && ci.pending === 0)
+    return CI_NOTHING_VALIDATED;
+  return `${ci.passing} passing · ${ci.failing} failing · ${ci.pending} pending${ci.failingChecks.length ? ` — failing: ${ci.failingChecks.join(", ")}` : ""}`;
 }
 function extractEvidenceLines(comments) {
   const lines = [];
@@ -8022,12 +8030,7 @@ function buildReviewPacket(input) {
   }
   b.push(`
 ## CI`);
-  const ci = summarizeChecks(pr.statusCheckRollup ?? []);
-  if (!ci.reported) {
-    b.push("no checks reported");
-  } else {
-    b.push(`${ci.passing} passing · ${ci.failing} failing · ${ci.pending} pending${ci.failingChecks.length ? ` — failing: ${ci.failingChecks.join(", ")}` : ""}`);
-  }
+  b.push(formatCiSummary(summarizeChecks(pr.statusCheckRollup ?? [])));
   if (input.threadsUnavailable) {
     b.push(`
 ## External review threads (UNAVAILABLE)`);
