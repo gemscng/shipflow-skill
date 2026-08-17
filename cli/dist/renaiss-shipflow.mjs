@@ -2561,11 +2561,13 @@ function mergeDecision(pr, me, opts) {
     blockers.push("CI still running");
   let unsatisfiable = false;
   if (opts.requireCi && cl.ciState === "none") {
+    const rollup = pr.statusCheckRollup ?? [];
+    const zeroChecks = rollup.length === 0;
     const zeroCheckAgeH = hoursSince(pr.createdAt, opts.nowMs);
     const noCiComing = pr.createdAt != null && zeroCheckAgeH >= NO_CI_GRACE_HOURS;
     if (opts.policy !== "manual" && noCiComing) {
       unsatisfiable = true;
-      blockers.push("require-ci is on but no CI has reported and none is coming — add a workflow that runs on PRs, or run: renaiss-shipflow config set require-ci false");
+      blockers.push(zeroChecks ? "require-ci is on but no CI has reported and none is coming — add a workflow that runs on PRs, or run: renaiss-shipflow config set require-ci false" : "require-ci is on but checks ran and validated nothing — fix path filters or configure a required/always-run check, or run: renaiss-shipflow config set require-ci false");
     } else {
       blockers.push("no CI checks to confirm (set require-ci=false to allow)");
     }
