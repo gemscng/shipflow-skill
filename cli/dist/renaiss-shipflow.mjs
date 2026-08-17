@@ -8326,6 +8326,7 @@ init_sh();
 init_pr_state();
 init_helpers();
 init_project();
+var LINT_MODES = ["warn", "strict"];
 var APPROVED_LABEL = SHIPFLOW_CONTRACT.labels.names.shipflowApproved;
 var REPORTER_REVIEW_LABEL = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
 function evalIntentGate(repo, number, prView) {
@@ -8648,7 +8649,12 @@ async function automergeOnce(ctx, repo, number, opts) {
 }
 function registerPRCommand(program2) {
   const pr = program2.command("pr").description("Pull request actions");
-  pr.command("create").description("Open a PR; prepends ShipFlow context to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (added under ShipFlow header)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR)", "warn").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  pr.command("create").description("Open a PR; prepends ShipFlow context to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (added under ShipFlow header)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").addOption(new Option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR). Anything else is REFUSED (exit 1, no PR) — never treated as warn (issue #648)").choices([...LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    const rawLint = opts.lint ?? "";
+    if (!LINT_MODES.includes(rawLint)) {
+      console.error(`Unknown lint mode "${opts.lint ?? ""}" — valid: ${LINT_MODES.join(", ")}. Nothing was created.`);
+      process.exit(1);
+    }
     if (!opts.allowSuspiciousEmail) {
       const bad = findSuspiciousEmails(branchAuthorEmails(), hostname3());
       if (bad.length) {
