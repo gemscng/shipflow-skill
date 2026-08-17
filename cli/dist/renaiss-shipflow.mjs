@@ -3693,7 +3693,16 @@ function toYaml(value, indent) {
     return "null";
   if (typeof value === "string")
     return yamlScalar(value, prefix);
-  if (typeof value === "number" || typeof value === "boolean")
+  if (typeof value === "number") {
+    if (Number.isNaN(value))
+      return ".nan";
+    if (value === Infinity)
+      return ".inf";
+    if (value === -Infinity)
+      return "-.inf";
+    return String(value);
+  }
+  if (typeof value === "boolean")
     return String(value);
   if (Array.isArray(value)) {
     if (value.length === 0)
