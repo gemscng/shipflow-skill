@@ -141,6 +141,9 @@ comments (`references/pr-feedback.md`) and reply; or rebase a moved base —
 `--keep-conflicts` + `references/conflict-resolution.md` (resolve by intent,
 test, force-with-lease, comment) instead of escalating. Pull `features --json`
 when a fix risks touching more than the PR's own feature. Push when done.
+An immediate post-push `pr reviews` zero is **not** a settled measurement —
+external bots post 1–2 minutes later. automerge owns the 120s settle wait;
+do not merge on that zero.
 
 ## Before you return — self-verify
 Your completion contract — don't return until each holds (or you genuinely

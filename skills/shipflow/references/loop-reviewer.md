@@ -90,7 +90,9 @@ mean "irrelevant", they stop meaning anything.
    `pr approve` refuses (exit 7), the merge gate blocks; `request_changes`,
    handing the orchestrator each thread. External reviewers post a minute or
    two after the PR opens — none yet ≠ approve; let the next reconcile tick
-   catch them.
+   catch them. An immediate post-push `pr reviews` zero is **not** a settled
+   measurement — bots post 1–2 minutes later. automerge owns the 120s settle
+   + the pre-merge re-read; do not treat that zero as "no review is coming".
    **"unresolved: 0" is a MEASUREMENT, not a default.** `(UNAVAILABLE)` +
    `⚠️ review threads UNAVAILABLE` = count never determined, precondition
    unsatisfiable — `request_changes`. Zero-by-default is the false green this
@@ -334,7 +336,8 @@ Never return `approve` unless all hold:
       gate ran; degraded = `request_changes`. (A `not applicable` note or a
       ⚠️ quoted from the issue/PR body is not a degradation.)
 - [ ] `renaiss-shipflow pr reviews <n>`: zero unresolved threads (external
-      bots included) — a *measured* zero, never undetermined.
+      bots included) — a *measured* zero, never undetermined. An immediate
+      post-push zero is not settled; wait for the 120s window or a later tick.
 - [ ] Brief met; CI green (or none required); no un-flagged cross-feature
       regression risk.
 - [ ] Health delta not negative (or explained + accepted).

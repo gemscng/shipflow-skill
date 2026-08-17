@@ -2559,6 +2559,34 @@ function linkedIssueNumbers(pr) {
       out.push(n);
   return out;
 }
+function settleReviewLogin(r) {
+  if (typeof r.author === "string")
+    return r.author.trim();
+  return (r.author?.login ?? "").trim();
+}
+function reviewSettle(input) {
+  const settleMs = input.settleMs ?? REVIEW_SETTLE_MS;
+  const headMs = Date.parse(input.lastHeadAt ?? "");
+  if (input.lastHeadAt == null || Number.isNaN(headMs)) {
+    return { settled: false, remainingMs: 0, reason: "unavailable" };
+  }
+  const remainingMs = Math.max(0, settleMs - (input.nowMs - headMs));
+  if (input.nowMs - headMs >= settleMs)
+    return { settled: true, remainingMs: 0 };
+  const me = input.me.trim().toLowerCase();
+  if (me !== "") {
+    for (const r of input.reviews) {
+      const login = settleReviewLogin(r);
+      if (!login || login.toLowerCase() === me)
+        continue;
+      const submitted = Date.parse(r.submittedAt ?? "");
+      if (Number.isNaN(submitted) || submitted < headMs)
+        continue;
+      return { settled: true, remainingMs };
+    }
+  }
+  return { settled: false, remainingMs, reason: "pending" };
+}
 function mergeDecision(pr, me, opts) {
   const cl = classifyPR(pr, me, { staleHours: opts.staleHours, nowMs: opts.nowMs, unresolvedThreads: opts.unresolvedThreads, intentBlocked: opts.intentBlocked });
   const blockers = [];
@@ -2607,6 +2635,18 @@ function mergeDecision(pr, me, opts) {
   if (opts.intentBlocked) {
     blockers.push(opts.intentBlockedBy ? `${INTENT_BLOCKER} (${INTENT_BLOCKED_BY_DETAIL[opts.intentBlockedBy]})` : INTENT_BLOCKER);
   }
+  if (opts.lastHeadAt !== undefined) {
+    const settle = reviewSettle({
+      lastHeadAt: opts.lastHeadAt,
+      nowMs: opts.nowMs ?? Date.now(),
+      reviews: [...pr.reviews ?? [], ...opts.settleReviews ?? []],
+      me,
+      settleMs: opts.settleMs
+    });
+    if (!settle.settled) {
+      blockers.push(settle.reason === "unavailable" ? REVIEW_SETTLE_UNAVAILABLE : REVIEW_SETTLE_BLOCKER);
+    }
+  }
   return { policy: opts.policy, wouldMerge: blockers.length === 0, blockers, ...unsatisfiable ? { unsatisfiable: true } : {} };
 }
 function headTrust(pr) {
@@ -2627,7 +2667,7 @@ function foreignConflictedPRs(mine, all, me, opts = {}) {
     return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
   });
 }
-var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", ESCALATE_ONCE_REASONS, INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, TRUSTED_AUTHOR_ASSOCIATIONS;
+var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", ESCALATE_ONCE_REASONS, INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
 var init_pr_state = __esm(() => {
   init_shipflow_contract_data();
   FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
@@ -4103,6 +4143,19 @@ ${err.message ?? ""}`;
     return /HTTP 404|\bNot Found\b/i.test(detail) ? { behindBy: null, unresolvable: true } : { behindBy: null };
   }
 }
+function ghPRLastHeadAt(repo, number) {
+  const [owner, name] = repo.split("/");
+  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){" + "commits(last:1){nodes{commit{committedDate}}}}}}";
+  const payload = JSON.parse(_exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString());
+  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
+  }
+  const date = payload?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.committedDate;
+  if (typeof date !== "string" || date.trim() === "" || Number.isNaN(Date.parse(date))) {
+    throw new Error(`GraphQL returned no last-head committedDate for ${repo}#${number}`);
+  }
+  return date;
+}
 function ghPRView(repo, number) {
   const out = _exec(`gh pr view ${number} --repo ${shellQuote(repo)} --json ${PR_FIELDS}`).toString();
   return JSON.parse(out);
@@ -4264,18 +4317,26 @@ function ghCreateReview(repo, number, payload) {
 }
 function ghReviewThreads(repo, number) {
   const [owner, name] = repo.split("/");
-  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){" + "reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{path line author{login} body}}}}}}}";
-  const out = _exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString();
-  const nodes = JSON.parse(out)?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){" + "reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{path line author{login} body createdAt}}}}}}}";
+  const payload = JSON.parse(_exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString());
+  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
+  }
+  const pr = payload?.data?.repository?.pullRequest;
+  if (!pr)
+    throw new Error(`GraphQL returned no pull request ${repo}#${number} (repository null or unreadable)`);
+  const nodes = pr.reviewThreads?.nodes ?? [];
   return nodes.map((t) => {
     const c = t.comments?.nodes?.[0] ?? {};
+    const submittedAt = typeof c.createdAt === "string" && c.createdAt.trim() !== "" ? String(c.createdAt) : undefined;
     return {
       id: String(t.id),
       isResolved: !!t.isResolved,
       path: c.path ?? "",
       line: c.line ?? null,
       author: c.author?.login ?? "",
-      body: (c.body ?? "").slice(0, 240)
+      body: (c.body ?? "").slice(0, 240),
+      ...submittedAt ? { submittedAt } : {}
     };
   });
 }
@@ -8642,10 +8703,27 @@ function countDiffLines(diff) {
 }
 function unresolvedThreadsOrBlock(repo, number) {
   try {
-    return { count: ghReviewThreads(repo, number).filter((t) => !t.isResolved).length, unavailable: false };
+    const all = ghReviewThreads(repo, number);
+    return {
+      count: all.filter((t) => !t.isResolved).length,
+      unavailable: false,
+      settleReviews: all.map((t) => ({ author: t.author, submittedAt: t.submittedAt }))
+    };
   } catch {
     return { count: 0, unavailable: true };
   }
+}
+function lastHeadAtOrBlock(repo, number) {
+  try {
+    return { lastHeadAt: ghPRLastHeadAt(repo, number), unavailable: false };
+  } catch {
+    return { lastHeadAt: null, unavailable: true };
+  }
+}
+var defaultReviewSettleSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+var reviewSettleSleep = defaultReviewSettleSleep;
+function isSettleBlocker(b) {
+  return b === REVIEW_SETTLE_BLOCKER || b === REVIEW_SETTLE_UNAVAILABLE;
 }
 async function automergeOnce(ctx, repo, number, opts) {
   const policy = (opts.policy?.trim() || undefined) ?? resolveMergePolicy();
@@ -8656,12 +8734,71 @@ async function automergeOnce(ctx, repo, number, opts) {
   const unresolvedThreads = threads.count;
   const gate = await freshProbeIntentGate(evalIntentGate(repo, number, prView), liveIntentGateFreshReads(repo, number));
   const freshness = ghPRFreshness(repo, prView);
-  const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy, behindBy: freshness.behindBy, freshnessUnresolvable: freshness.unresolvable });
+  const lastHead = lastHeadAtOrBlock(repo, number);
+  const nowMs = Date.now();
+  const lastHeadAt = lastHead.unavailable ? null : lastHead.lastHeadAt;
+  const settleReviews = threads.settleReviews ?? [];
+  const decide = (head, at) => mergeDecision(prView, me, {
+    policy,
+    requireCi: resolveRequireCi(),
+    staleHours,
+    unresolvedThreads,
+    intentBlocked: gate.blocked,
+    intentBlockedBy: gate.blockedBy,
+    behindBy: freshness.behindBy,
+    freshnessUnresolvable: freshness.unresolvable,
+    lastHeadAt: head,
+    nowMs: at,
+    settleReviews
+  });
+  const decision = decide(lastHeadAt, nowMs);
   const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
   const wouldMerge = decision.wouldMerge && !threads.unavailable;
+  const otherWouldMerge = !threads.unavailable && decision.blockers.every(isSettleBlocker);
   if (!wouldMerge) {
+    const settle = lastHeadAt ? reviewSettle({ lastHeadAt, nowMs, reviews: [...prView.reviews ?? [], ...settleReviews], me }) : { settled: false, remainingMs: 0 };
+    if (otherWouldMerge && lastHeadAt && settle.remainingMs > 0 && !settle.settled) {
+      await reviewSettleSleep(Math.min(settle.remainingMs, REVIEW_SETTLE_MS));
+      const again = lastHeadAtOrBlock(repo, number);
+      const retry = decide(again.unavailable ? null : again.lastHeadAt, Date.now());
+      if (!retry.wouldMerge) {
+        const retryBlockers = threads.unavailable ? ["review threads unavailable", ...retry.blockers] : retry.blockers;
+        const arm = armIntentGate(repo, number, gate, liveIntentGateWriters);
+        const allBlockers = [...retryBlockers, ...arm.blockers];
+        if (!arm.armed) {
+          console.error(`❌ ${GATE_ARM_BLOCKER} — the reporter is not confirmed to have been asked: ${arm.gateArmError}`);
+        }
+        return {
+          number,
+          merged: false,
+          policy,
+          blockers: allBlockers,
+          ...arm.attempted ? { gateArmed: arm.armed } : {},
+          ...arm.gateArmError ? { gateArmError: arm.gateArmError } : {},
+          ...retry.unsatisfiable ? { unsatisfiable: true } : {}
+        };
+      }
+    } else {
+      const arm = armIntentGate(repo, number, gate, liveIntentGateWriters);
+      const allBlockers = [...blockers, ...arm.blockers];
+      if (!arm.armed) {
+        console.error(`❌ ${GATE_ARM_BLOCKER} — the reporter is not confirmed to have been asked: ${arm.gateArmError}`);
+      }
+      return {
+        number,
+        merged: false,
+        policy,
+        blockers: allBlockers,
+        ...arm.attempted ? { gateArmed: arm.armed } : {},
+        ...arm.gateArmError ? { gateArmError: arm.gateArmError } : {},
+        ...decision.unsatisfiable ? { unsatisfiable: true } : {}
+      };
+    }
+  }
+  const preMerge = unresolvedThreadsOrBlock(repo, number);
+  if (preMerge.count > 0 || preMerge.unavailable) {
+    const late = preMerge.unavailable ? ["review threads unavailable"] : [`${preMerge.count} unresolved review thread(s) — address + resolve them first`];
     const arm = armIntentGate(repo, number, gate, liveIntentGateWriters);
-    const allBlockers = [...blockers, ...arm.blockers];
     if (!arm.armed) {
       console.error(`❌ ${GATE_ARM_BLOCKER} — the reporter is not confirmed to have been asked: ${arm.gateArmError}`);
     }
@@ -8669,10 +8806,9 @@ async function automergeOnce(ctx, repo, number, opts) {
       number,
       merged: false,
       policy,
-      blockers: allBlockers,
+      blockers: [...late, ...arm.blockers],
       ...arm.attempted ? { gateArmed: arm.armed } : {},
-      ...arm.gateArmError ? { gateArmError: arm.gateArmError } : {},
-      ...decision.unsatisfiable ? { unsatisfiable: true } : {}
+      ...arm.gateArmError ? { gateArmError: arm.gateArmError } : {}
     };
   }
   const result = ghPRMerge(repo, number, opts.mode ?? "squash", true);
@@ -8770,7 +8906,8 @@ ${opts.body ?? ""}`;
     const gate = evalIntentGate(repo, number, prView);
     const cl = classifyPR(prView, me, { staleHours, unresolvedThreads, intentBlocked: gate.blocked });
     const freshness = ghPRFreshness(repo, prView);
-    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy, behindBy: freshness.behindBy, freshnessUnresolvable: freshness.unresolvable });
+    const lastHead = lastHeadAtOrBlock(repo, number);
+    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy, behindBy: freshness.behindBy, freshnessUnresolvable: freshness.unresolvable, lastHeadAt: lastHead.unavailable ? null : lastHead.lastHeadAt, settleReviews: threads.settleReviews ?? [] });
     const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
     const wouldMerge = decision.wouldMerge && !threads.unavailable;
     const out = {

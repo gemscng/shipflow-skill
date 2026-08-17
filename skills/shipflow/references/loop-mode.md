@@ -243,8 +243,13 @@ worker scoped to that PR; loop A until nothing in-flight `needsAttention`:
 - `approved_ready` → reviewer already added `shipflow-approved` (B step 4)
   → `renaiss-shipflow pr automerge <n> --json` (merges only if
   `merge-policy` + CI + approval allow **and no review thread is
-  unresolved** — hard gate; parks on `manual`). **A merge that lands →
-  POST-MERGE drift check (§0) before the next dispatch.**
+  unresolved** — hard gate; parks on `manual`). **automerge owns
+  review-settle (#687):** an immediate thread count of 0 is not settled.
+  It waits up to 120s since the last head (or until an external review
+  lands; the loop's own reviews / `shipflow-approved` do not count), then
+  re-reads threads immediately before merge. After 120s, zero is accepted.
+  `pr ready` reports the settle blocker and does not sleep. **A merge
+  that lands → POST-MERGE drift check (§0) before the next dispatch.**
   **`"unsatisfiable": true` = ESCALATE, do not re-poll** (#305): the
   blocker can never clear by waiting (e.g. `require-ci` on, repo has NO
   CI). `issue escalate <issue> --category external-dependency --reason
@@ -440,7 +445,9 @@ only in a tick that itself opened `cap` PRs.
    - **request changes** → list every fix incl. each external thread;
      re-dispatch a worker to fix + `pr resolve`, then re-review. Never
      approve with open threads. External reviewers are async — none posted
-     yet → leave parked; A's next tick catches the late review.
+     yet → leave parked; A's next tick catches the late review. An
+     immediate post-push `pr reviews` 0 is **not** settled — automerge
+     owns the 120s wait + the pre-merge re-read.
 
 No `issue done` here — the claim stays until the PR merges (A's automerge
 releases it), keeping the issue out of `issue next` meanwhile.
@@ -484,7 +491,7 @@ still parks forever).
 | `review_comments` | unaddressed comments | pr-feedback (may already be handled) → reply |
 | `ci_pending` | checks running | park — re-check next tick |
 | (automerge blocker "behind base", **and it is the only blocker**) | green+approved but the head predates the current base — CI proved code against a base that no longer exists | worker: checkout, `pr sync <n> --no-push` (rebase), run the tests, THEN `git push --force-with-lease` — `pr sync` pushes by default, and a clean textual rebase can still fail the build, so never let it push an unverified head. Merge lands next tick on the rebased head (#530). Any other blocker present (`manual` policy, red CI, open threads, unconfirmed intent) → handle/park that first; rebasing a PR the policy can't merge is churn every base advance repeats. Rebase conflicts → the `conflict` protocol. `unsatisfiable: true` → escalate once |
-| `approved_ready` | approved + CI green | `pr automerge` (parks on `manual`) |
+| `approved_ready` | approved + CI green | `pr automerge` (parks on `manual`; automerge owns the 120s review-settle + pre-merge thread re-read — an immediate 0 is not settled) |
 | `stale` | green, unreviewed, old | nudge the PR; escalate if blocked on a human |
 | `awaiting_review` | green, no feedback yet | park |
 
