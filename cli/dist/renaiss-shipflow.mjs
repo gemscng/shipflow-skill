@@ -2211,6 +2211,20 @@ var init_shipflow_contract_data = __esm(() => {
 function escalationReasonsOwed(cl) {
   return ESCALATE_ONCE_REASONS.filter((r) => cl.reasons.includes(r));
 }
+function classifyCheck(c) {
+  const concl = (c.conclusion ?? "").toUpperCase();
+  const status = (c.status ?? "").toUpperCase();
+  const state = (c.state ?? "").toUpperCase();
+  if (FAILING.has(concl) || FAILING.has(state))
+    return "failing";
+  if (status && status !== "COMPLETED" || PENDING.has(state))
+    return "pending";
+  if (concl === "SUCCESS" || state === "SUCCESS")
+    return "passing";
+  if (NO_VERDICT.has(concl))
+    return "none";
+  return "pending";
+}
 function ciStateOf(checks) {
   if (!checks || checks.length === 0)
     return "none";
@@ -2218,18 +2232,13 @@ function ciStateOf(checks) {
   let pending = false;
   let passing = false;
   for (const c of checks) {
-    const concl = (c.conclusion ?? "").toUpperCase();
-    const status = (c.status ?? "").toUpperCase();
-    const state = (c.state ?? "").toUpperCase();
-    if (FAILING.has(concl) || FAILING.has(state)) {
+    const one = classifyCheck(c);
+    if (one === "failing")
       failing = true;
-    } else if (status && status !== "COMPLETED" || PENDING.has(state)) {
+    else if (one === "pending")
       pending = true;
-    } else if (concl === "SUCCESS" || state === "SUCCESS") {
+    else if (one === "passing")
       passing = true;
-    } else if (NO_VERDICT.has(concl)) {} else {
-      pending = true;
-    }
   }
   if (failing)
     return "failing";
@@ -8366,24 +8375,33 @@ var liveIntentGateFreshReads = (repo, number) => ({
   clearance: () => ghIntentGateClearance(repo, number, REPORTER_REVIEW_LABEL),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms))
 });
+function tsvCol2ToCheck(raw) {
+  const s = raw.trim().toLowerCase();
+  if (!s || s === "skipping" || s === "skipped" || s === "-")
+    return { conclusion: "SKIPPED" };
+  if (s === "neutral")
+    return { conclusion: "NEUTRAL" };
+  if (s === "pass" || s === "success")
+    return { conclusion: "SUCCESS" };
+  if (s === "fail" || s === "failure")
+    return { conclusion: "FAILURE" };
+  if (s === "error")
+    return { conclusion: "ERROR" };
+  if (s === "cancelled" || s === "canceled")
+    return { conclusion: "CANCELLED" };
+  if (s === "timed_out")
+    return { conclusion: "TIMED_OUT" };
+  if (s === "action_required")
+    return { conclusion: "ACTION_REQUIRED" };
+  return { status: "IN_PROGRESS" };
+}
 function classifyChecks(lines) {
-  let sawPass = false;
-  let pending = false;
-  for (const l of lines) {
-    const state = (l.split("\t")[1] ?? "").trim().toLowerCase();
-    if (!state || state === "skipping" || state === "skipped" || state === "neutral" || state === "-")
-      continue;
-    if (state === "fail" || state === "failure" || state === "error" || state === "cancelled" || state === "canceled" || state === "timed_out" || state === "action_required")
-      return "fail";
-    if (state === "pass" || state === "success") {
-      sawPass = true;
-      continue;
-    }
-    pending = true;
-  }
-  if (pending || !sawPass)
-    return "pending";
-  return "pass";
+  const state = ciStateOf(lines.map((l) => tsvCol2ToCheck(l.split("\t")[1] ?? "")));
+  if (state === "failing")
+    return "fail";
+  if (state === "passing")
+    return "pass";
+  return "pending";
 }
 function renderPrNoteBody(body, reworkFrom) {
   const parts = [body, "", SHIPFLOW_CONTRACT.markers.loop];
