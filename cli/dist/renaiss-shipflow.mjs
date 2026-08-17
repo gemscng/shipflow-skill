@@ -2225,9 +2225,9 @@ function ciStateOf(checks) {
       failing = true;
     } else if (status && status !== "COMPLETED" || PENDING.has(state)) {
       pending = true;
-    } else if (concl === "SUCCESS" || concl === "NEUTRAL" || concl === "SKIPPED" || state === "SUCCESS") {
+    } else if (concl === "SUCCESS" || state === "SUCCESS") {
       passing = true;
-    } else {
+    } else if (NO_VERDICT.has(concl)) {} else {
       pending = true;
     }
   }
@@ -2616,11 +2616,12 @@ function foreignConflictedPRs(mine, all, me, opts = {}) {
     return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
   });
 }
-var FAILING, PENDING, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", ESCALATE_ONCE_REASONS, INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, TRUSTED_AUTHOR_ASSOCIATIONS;
+var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", ESCALATE_ONCE_REASONS, INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, TRUSTED_AUTHOR_ASSOCIATIONS;
 var init_pr_state = __esm(() => {
   init_shipflow_contract_data();
   FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
   PENDING = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"]);
+  NO_VERDICT = new Set(["NEUTRAL", "SKIPPED"]);
   APPROVAL_LABELS = new Set([SHIPFLOW_CONTRACT.labels.names.shipflowApproved, "approved", "✅ approved"]);
   REPORTER_REVIEW_REASON = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
   ESCALATE_ONCE_REASONS = [
@@ -3616,16 +3617,71 @@ function toYamlString(data) {
 function printYaml(data) {
   console.log(toYamlString(data));
 }
+function isPlainSafe(s) {
+  if (s === "")
+    return false;
+  if (/^\s|\s$/.test(s))
+    return false;
+  if (CONTROL_CHARS.test(s))
+    return false;
+  if (LEADING_INDICATOR.test(s))
+    return false;
+  if (/:(?:\s|$)/.test(s))
+    return false;
+  if (/\s#/.test(s))
+    return false;
+  if (NUMBER_LEAD_DASHED.test(s) || DOC_MARKER.test(s))
+    return false;
+  return !RESOLVES_NON_STRING.test(s);
+}
+function isBlockSafe(s) {
+  if (CONTROL_CHARS_NO_LF.test(s))
+    return false;
+  if (s.startsWith(`
+`) || s.endsWith(`
+
+`))
+    return false;
+  return s.split(`
+`).every((l) => l === "" || !/^\s|\s$/.test(l));
+}
+function doubleQuote(s) {
+  const escaped = s.replace(/[\\"\u0000-\u001f\u007f\u0085\u2028\u2029]/g, (c) => {
+    const mapped = DQ_ESCAPES[c];
+    if (mapped)
+      return mapped;
+    const code = c.charCodeAt(0);
+    return code <= 255 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u${code.toString(16).padStart(4, "0")}`;
+  });
+  return `"${escaped}"`;
+}
+function yamlScalar(value, prefix) {
+  if (isPlainSafe(value))
+    return value;
+  if (CONTROL_CHARS_NO_LF.test(value))
+    return doubleQuote(value);
+  if (value.includes(`
+`)) {
+    if (!isBlockSafe(value))
+      return doubleQuote(value);
+    const clip = value.endsWith(`
+`);
+    const body = clip ? value.slice(0, -1) : value;
+    const header = clip ? "|" : "|-";
+    const indented = body.split(`
+`).map((l) => l === "" ? "" : prefix + "  " + l);
+    return `${header}
+${indented.join(`
+`)}`;
+  }
+  return `'${value.replace(/'/g, "''")}'`;
+}
 function toYaml(value, indent) {
   const prefix = "  ".repeat(indent);
   if (value === null || value === undefined)
     return "null";
   if (typeof value === "string")
-    return value.includes(`
-`) ? `|
-${value.split(`
-`).map((l) => prefix + "  " + l).join(`
-`)}` : value;
+    return yamlScalar(value, prefix);
   if (typeof value === "number" || typeof value === "boolean")
     return String(value);
   if (Array.isArray(value)) {
@@ -3687,6 +3743,22 @@ function formatOutput(format, data, tableFormatter, { prettyJson = true } = {}) 
 function emit(opts, jsonValue, humanPrint, { pretty = false } = {}) {
   formatOutput(resolveFormat(opts), jsonValue, humanPrint, { prettyJson: pretty });
 }
+var RESOLVES_NON_STRING, LEADING_INDICATOR, NUMBER_LEAD_DASHED, DOC_MARKER, CONTROL_CHARS, CONTROL_CHARS_NO_LF, DQ_ESCAPES;
+var init_output = __esm(() => {
+  RESOLVES_NON_STRING = /^(?:~|null|true|false|yes|no|on|off|y|n|[-+]?\.(?:inf|nan)|[-+]?0[xXoObB][0-9a-fA-F_]+|[-+]?(?:\d[\d_]*(?::[0-5]?\d)+(?:\.\d*)?|(?:\d[\d_]*(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?))$/i;
+  LEADING_INDICATOR = /^[-?:,[\]{}#&*!|>'"%@`]/;
+  NUMBER_LEAD_DASHED = /^[+.]?\d.*-/;
+  DOC_MARKER = /(?:---|\.\.\.)(?:\s|$)/;
+  CONTROL_CHARS = /[\u0000-\u001f\u007f\u0085\u2028\u2029]/;
+  CONTROL_CHARS_NO_LF = /[\u0000-\u0009\u000b-\u001f\u007f\u0085\u2028\u2029]/;
+  DQ_ESCAPES = {
+    "\\": "\\\\",
+    '"': "\\\"",
+    "\n": "\\n",
+    "\t": "\\t",
+    "\r": "\\r"
+  };
+});
 
 // src/sh.ts
 import { execSync as execSync2, spawnSync } from "node:child_process";
@@ -3746,20 +3818,30 @@ function ghIssueOrPrState(repo, number) {
     return null;
   }
 }
-function ghIssueCreate(repo, title, body, labels = [], assignees = []) {
+function ghIssueCreate(repo, title, body, labels = []) {
   ghEnsureLabel(repo, VIA_SHIPFLOW_LABEL, undefined, "Created by ShipFlow (agent-filed, not human-filed)");
   const allLabels = labels.includes(VIA_SHIPFLOW_LABEL) ? labels : [...labels, VIA_SHIPFLOW_LABEL];
   const labelFlags = allLabels.map((l) => `--label ${shellQuote(l)}`).join(" ");
-  const assigneeFlags = assignees.map((a) => ` --assignee ${shellQuote(a)}`).join("");
   const bodyWithMarker = body.includes(SHIPFLOW_TRIAGED_MARKER) ? body : `${body.replace(/\n+$/, "")}
 
 <sub>\uD83E\uDD16 Filed via ShipFlow</sub>
 ${SHIPFLOW_TRIAGED_MARKER}`;
-  const out = _exec(`gh issue create --repo ${shellQuote(repo)} --title ${shellQuote(title)} --body ${shellQuote(bodyWithMarker)} ${labelFlags}${assigneeFlags}`).toString();
+  const out = _exec(`gh issue create --repo ${shellQuote(repo)} --title ${shellQuote(title)} --body ${shellQuote(bodyWithMarker)} ${labelFlags}`).toString();
   const url = out.split(`
 `).map((s) => s.trim()).filter(Boolean).reverse().find((l) => l.startsWith("http")) ?? out.trim();
   const number = parseInt(url.split("/").pop() || "0", 10);
   return { url, number };
+}
+function ghIssueAddAssignees(repo, number, logins) {
+  if (!logins.length)
+    return;
+  const flags = logins.map((a) => `--add-assignee ${shellQuote(a)}`).join(" ");
+  _exec(`gh issue edit ${number} --repo ${shellQuote(repo)} ${flags}`);
+}
+function ghIssueAssignees(repo, number) {
+  const out = _exec(`gh issue view ${number} --repo ${shellQuote(repo)} --json assignees`).toString();
+  const parsed = JSON.parse(out);
+  return (parsed.assignees ?? []).map((a) => String(a.login ?? "")).filter(Boolean);
 }
 function assertResolvedFilter(value, flag, command) {
   if (value !== undefined && value.trim() === "") {
@@ -4320,7 +4402,9 @@ var init_helpers = __esm(() => {
   init_client();
   init_config();
   init_project();
+  init_output();
   init_gh();
+  init_output();
   UsageError = class UsageError extends Error {
   };
 });
@@ -4386,6 +4470,7 @@ function registerAuthCommands(program2) {
 
 // src/commands/repos.ts
 init_helpers();
+init_output();
 
 // src/term-render.ts
 function meter(n, total) {
@@ -4472,6 +4557,7 @@ function registerRepoCommands(program2) {
 
 // src/commands/workflows.ts
 init_helpers();
+init_output();
 function registerWorkflowCommands(program2) {
   const workflows = program2.command("workflows").description("Manage repository workflows");
   workflows.command("list").description("List workflows for a repository").requiredOption("--repo <repo>", "Repository name").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (opts, cmd) => {
@@ -4526,6 +4612,7 @@ function collectKeyValue(value, prev) {
 
 // src/commands/activity.ts
 init_helpers();
+init_output();
 function registerActivityCommand(program2) {
   program2.command("activity").description("View recent workflow activity").option("--last <n>", "Number of recent events to show", "10").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (opts, cmd) => {
     const { client, org, format } = getApiCtx(cmd);
@@ -4550,6 +4637,7 @@ function registerActivityCommand(program2) {
 
 // src/commands/channels.ts
 init_helpers();
+init_output();
 init_shipflow_contract_data();
 function registerChannelCommands(program2) {
   const channels = program2.command("channels").description("Manage notification channels");
@@ -4584,6 +4672,7 @@ function registerChannelCommands(program2) {
 
 // src/commands/stats.ts
 init_helpers();
+init_output();
 var STAGE_TABLE_HEADERS = [
   "Stage",
   "Requests",
@@ -5854,8 +5943,11 @@ function isActionableForPickup(issue, filter) {
     return false;
   if (filter.intakeMode !== "off" && labels.includes(NEEDS_REPORTER_APPROVAL_LABEL))
     return false;
-  if (filter.label && !labels.includes(filter.label))
-    return false;
+  if (filter.label) {
+    const wantedLabel = filter.label.trim().toLowerCase();
+    if (!labels.some((name) => name.trim().toLowerCase() === wantedLabel))
+      return false;
+  }
   if (filter.assignee) {
     const wanted = filter.assignee.trim().toLowerCase();
     if (!issue.assignees.some((a) => String(a.login ?? "").trim().toLowerCase() === wanted))
@@ -6147,28 +6239,43 @@ function duplicatePreflight(repo, title, opts) {
 }
 function createIssueGuarded(args, opts, { skipPreflight = false } = {}) {
   const { repo, title, body, labels, assigneesAuto = false } = args;
-  let assignees = args.assignees ?? [];
+  const requested = args.assignees ?? [];
   if (!skipPreflight)
     duplicatePreflight(repo, title, opts);
   for (const l of labels)
     ghEnsureLabel(repo, l);
-  let created;
-  try {
-    created = ghIssueCreate(repo, title, body, labels, assignees);
-  } catch (e) {
-    if (!assigneesAuto || assignees.length === 0)
-      throw e;
-    if (!/\bassign|not found|could not resolve/i.test(ghFailureText(e)))
-      throw e;
-    try {
-      created = ghIssueCreate(repo, title, body, labels, []);
-    } catch {
-      throw e;
-    }
-    assignees = [];
-    console.warn(`⚠️  auto-assign REJECTED by gh (${firstLine(e.message)}) — filed UNASSIGNED; under pickup-scope=assigned this issue is invisible to \`issue next\` until someone assigns it.`);
-  }
+  const created = ghIssueCreate(repo, title, body, labels);
+  const assignees = attachAssignees(repo, created, requested, assigneesAuto);
   emit(opts, { number: created.number, url: created.url, labels, assignees }, () => console.log(assignees.length > 0 ? `${created.url} — assigned to ${assignees.map((a) => `@${a}`).join(", ")}` : created.url));
+}
+function attachAssignees(repo, created, requested, auto) {
+  if (requested.length === 0)
+    return [];
+  try {
+    ghIssueAddAssignees(repo, created.number, requested);
+  } catch (e) {
+    return assignmentFailed(repo, created, requested, [], auto, firstLine(ghFailureText(e)) || "gh exited non-zero with no stderr");
+  }
+  let actual;
+  try {
+    actual = ghIssueAssignees(repo, created.number);
+  } catch (e) {
+    console.warn(`⚠️  assignment NOT VERIFIED for ${created.url} (gh issue view failed: ${firstLine(ghFailureText(e)) || "no stderr"}) — reporting ${requested.map((a) => `@${a}`).join(", ")} as requested; confirm on the issue if pickup matters.`);
+    return requested;
+  }
+  const lower = new Set(actual.map((a) => a.toLowerCase()));
+  const missing = requested.filter((a) => !lower.has(a.toLowerCase()));
+  if (missing.length === 0)
+    return actual;
+  return assignmentFailed(repo, created, requested, actual, auto, `gh exited 0 but GitHub did not attach ${missing.map((a) => `@${a}`).join(", ")} (a login with no push access on ${repo} is dropped silently)`);
+}
+function assignmentFailed(repo, created, requested, actual, auto, reason) {
+  const repair = `gh issue edit ${created.number} --repo ${repo} ${requested.map((a) => `--add-assignee ${a}`).join(" ")}`;
+  if (!auto) {
+    throw new Error(`Issue #${created.number} WAS created (${created.url}) but assigning ${requested.map((a) => `@${a}`).join(", ")} failed: ${reason}. The issue is filed${actual.length > 0 ? ` and assigned to ${actual.map((a) => `@${a}`).join(", ")}` : " and UNASSIGNED"} — do NOT re-file it; assign by hand: ${repair}`);
+  }
+  console.warn(`⚠️  auto-assign REJECTED by gh (${reason}) — ${created.url} is filed${actual.length > 0 ? ` but only assigned to ${actual.map((a) => `@${a}`).join(", ")}` : " UNASSIGNED"}; under pickup-scope=assigned this issue is invisible to \`issue next\` until someone assigns it.`);
+  return actual;
 }
 function firstLine(msg) {
   return (msg.trim().split(`
@@ -6176,10 +6283,7 @@ function firstLine(msg) {
 }
 function ghFailureText(e) {
   const err = e;
-  const stderr = err.stderr != null ? String(err.stderr).trim() : "";
-  if (stderr !== "")
-    return stderr;
-  return (err.message ?? "").replace(/^Command failed:[^\n]*\n?/, "");
+  return err.stderr != null ? String(err.stderr).trim() : "";
 }
 function resolveCreateAssignees(explicit, noAssign = false) {
   const hasExplicit = explicit !== undefined && explicit.length > 0;
@@ -9571,6 +9675,7 @@ function detectRunner(root) {
 }
 
 // src/commands/regression.ts
+init_output();
 init_project();
 init_helpers();
 import { execSync as execSync5 } from "node:child_process";
