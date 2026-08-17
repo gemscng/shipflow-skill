@@ -3716,6 +3716,11 @@ function toYaml(value, indent) {
 ${lines.slice(1).map((l) => prefix + "  " + l).join(`
 `)}`;
       }
+      if (Array.isArray(item) && item.length > 0) {
+        const childPrefix = "  ".repeat(indent + 1);
+        const compact = inner.startsWith(childPrefix) ? inner.slice(childPrefix.length) : inner;
+        return `${prefix}- ${compact}`;
+      }
       return `${prefix}- ${inner}`;
     }).join(`
 `);
