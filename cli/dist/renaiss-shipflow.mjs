@@ -6213,6 +6213,9 @@ function sortIssuesForPickup(issues) {
   });
 }
 
+// src/commands/issue.ts
+init_shipflow_contract_data();
+
 // src/evidence.ts
 var IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"];
 function isImagePath(p) {
@@ -6453,6 +6456,15 @@ function resolveCreateAssignees(explicit, noAssign = false) {
   }
   return { assignees: [me], auto: true };
 }
+function renderReadmitBody(dep) {
+  const parts = [
+    `✅ Dependency ${dep.repo}#${dep.number} closed — re-admitted to the loop queue.`,
+    "",
+    SHIPFLOW_CONTRACT.markers.loop
+  ];
+  return parts.join(`
+`);
+}
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
   issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--assignee <login...>", "Assignee(s) for the new issue (@me = the gh login). Default under pickup-scope=assigned: the current login — assignment is the queueing gesture (#600), so an unassigned filing is invisible to `issue next`").option("--no-assign", "File UNASSIGNED, overriding the pickup-scope=assigned auto-assign default — the per-invocation opt-out for a human filing a backlog item that the loop should NOT pick up. Mutually exclusive with --assignee").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
@@ -6632,7 +6644,7 @@ ${section}` : section;
           continue;
         ghIssueRemoveLabel(repo, i.number, WAITING_ON_LABEL);
         i.labels = i.labels.filter((l) => l.name !== WAITING_ON_LABEL);
-        ghIssueComment(repo, i.number, `✅ Dependency ${dep.repo}#${dep.number} closed — re-admitted to the loop queue.`);
+        ghIssueComment(repo, i.number, renderReadmitBody(dep));
         console.warn(`⏳ #${i.number}: dependency ${dep.repo}#${dep.number} closed — cleared "${WAITING_ON_LABEL}", competing this tick.`);
       } catch (e) {
         console.warn(`waiting-on heal failed for #${i.number} (still waiting): ${e.message}`);
