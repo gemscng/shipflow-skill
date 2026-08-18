@@ -132,10 +132,11 @@ Same posture as Loop mode's continuous default, made mandatory.
 Only when the user explicitly asks to loop through and fix issues autonomously
 (or `/shipflow-loop`): read `references/loop-mode.md` and follow it — a thin
 orchestrator dispatching each item to fresh-context subagents, governed by the
-policy knobs in `config list`. Everything else stays a single command from the
-table above. Companions: `loop-worker.md` / `loop-reviewer.md` (role contracts),
-`browser-testing.md`, `bug-taxonomy.md`, `qa-report.md`, `pr-feedback.md`,
-`conflict-resolution.md`.
+policy knobs in `config list`. Load `loop-setup.md` once per run (tick 0 /
+before the cycle), not every tick. Everything else stays a single command from
+the table above. Companions: `loop-setup.md` (run start), `loop-worker.md` /
+`loop-reviewer.md` (role contracts), `browser-testing.md`, `bug-taxonomy.md`,
+`qa-report.md`, `pr-feedback.md`, `conflict-resolution.md`.
 
 ## First run
 
