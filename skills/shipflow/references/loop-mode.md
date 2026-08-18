@@ -399,6 +399,10 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    "failed command" silently drops the deferred scope: on **12** read
    `{blocked: true, candidates: […]}`, link the existing issue or re-file
    with **`--allow-duplicate`**; never read 12 as "filed" or "broken".
+   The comparison window is `ghIssueList(repo, "open",
+   DUPLICATE_SCAN_LIMIT)` — closed issues and merged PRs are never
+   scored, so a restatement of a closed issue always files clean
+   (defensible; a refile is often deliberate).
    **Post the brief's "Unknowns & assumptions" on the issue**, comment
    ending `<!-- shipflow:loop -->` (never trips the needs-human
    auto-unblock), before dispatching — a reply IS the veto (Phase A treats
