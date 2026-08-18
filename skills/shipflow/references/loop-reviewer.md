@@ -316,7 +316,7 @@ The #190 **intent gate** — a merge blocker under every policy until the
 | Rule | Detail |
 | --- | --- |
 | **Every comment you post carries a marker** | `pr post-review` / `pr approve --comment` stamp `<!-- shipflow:loop-review -->`; a bare `gh pr comment` posts as a *human* |
-| **You never release the gate** | only the reporter does, with a reply that is ONLY `confirmed` / `confirm` / `/confirm` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / `+1` / 👍 and nothing else. Exact token, whole reply — prose that reads as consent (`Confirmed — ship it`), or a token with a correction or a thank-you after it, does not clear it |
+| **You never release the gate** | only the reporter does, with a reply that is ONLY `/confirm` / `confirm` / `confirmed` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / 👍 / `+1` and nothing else. Exact token, whole reply — prose that reads as consent (`Confirmed — ship it`), or a token with a correction or a thank-you after it, does not clear it |
 | **A second, narrower door exists** | a numbered `N: answer` decision reply can also release it, under four preconditions — read them in `loop-gate.md` (→ `contracts/shipflow-contract.json` → `intentGate.$comment`), not from a copy here. You use neither door |
 | **Approving does not clear it** | `shipflow-approved` + a cleared intent gate are separate conditions; approve normally, let the PR park |
 | **A vanished label with no audit comment is a BUG** | every server-side removal posts `✅ needs-reporter-review cleared` naming the actor; no comment = no confirmation — say so in your verdict |

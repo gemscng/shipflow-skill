@@ -26,7 +26,7 @@ card ONLY when one of those states is in play.
   A reporter who wants the PR merged replies `confirmed` (or another token) as
   the whole reply; anything more is a correction.
 
-  | **Releasing the gate** | only the reporter, with a reply that is ONLY `confirmed` / `confirm` / `/confirm` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / `+1` / 👍 and nothing else — never the loop |
+  | **Releasing the gate** | only the reporter, with a reply that is ONLY `/confirm` / `confirm` / `confirmed` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / 👍 / `+1` and nothing else — never the loop |
   | **Releasing it the other way** — the numbered `N: answer` door | a decision reply to an escalation ALSO releases it, under **four** preconditions, every one required: the block is the whole quote-stripped reply; **every** line of that block is itself a decision line; **every** answer is a `confirmationTokens` entry; and the thread carries an escalation banner. That fourth one is weaker than it sounds — `escalationOutstanding` returns true on the **first banner found anywhere in the comment history**, with no answered/resolved/superseded check, so a **stale** banner still opens this door (#486). The rule is single-sourced in `contracts/shipflow-contract.json` → `intentGate.$comment` — read it there; do **not** restate the matcher here (two hand-written copies is how #411 happened) |
   | **Correcting the reading** | leaves the gate ON, by design: rework the PR — the loop now DOES, via `reporter_corrected` (see below) |
   | **A QUALIFIED yes** | also leaves it ON — `yes but change the copy first` is a correction, not consent |
