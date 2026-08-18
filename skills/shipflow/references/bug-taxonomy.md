@@ -79,16 +79,70 @@ renaiss-shipflow issue create --title "<bug>" --body "<body — see shape below>
 The reviewer uses the same severity words in its verdict bullets
 (`critical|high|medium|low`; `loop-reviewer.md`).
 
-The body follows the **issue-body ladder** (`message-style.md` § "Issue-body
-ladder" — the one authoritative copy; `loop-mode.md` § "Message style" is now a
-pointer stub). Sweep-filed bug shape: status-header blockquote
-(`> 🟡 **P2 · bug · <area> · effort S** · auto-qa sweep`), **Repro** steps,
-**Expected**/**Actual**/**Impact** one-liners (Impact carries
-`severity:<level>`), an `| Evidence | Where |` table (claim → path:line /
-screenshot), and an acceptance checkbox
-(`- [ ] <actual> no longer occurs; <expected> observed`). Mermaid only for
-flow/sequence/state-shaped defects; long logs in `<details>`; blank lines are
-load-bearing (GitHub collapses single newlines).
+The body follows the **issue-body ladder** (`message-style.md`; demos:
+#387 bug, #712 feature/task). Status-header source: `auto-qa sweep`.
+
+### Issue-body ladder — every ShipFlow-filed issue body
+
+**Authoritative for EVERY issue body ShipFlow files** — loop bug-sweep /
+auto-qa issues, Phase-B follow-up sub-issues, feature-relate auto-issues,
+harvest-filed issues, hand-filed `/shipflow-new-issue`. Issue #387 is the
+live demo. Build top-down:
+
+| # | Element | When | Shape |
+|---|---|---|---|
+| 1 | **Status header** | always — the first line | one blockquote line: `> <priority emoji> **P<n> · <type> · <area> · effort <S/M/L>** · <wave/source>` |
+| 2 | **Body core** | always | bug → the Repro core below; feature/task → the Why/What/Example core below |
+| 3 | **Mermaid diagram** | the defect or design has a flow, sequence, or state shape | small `flowchart`/`sequenceDiagram`/`stateDiagram` — beats prose causality |
+| 4 | **Evidence table** | any `file:line` claim | `\| Claim \| Where \|` — every claim grounded in `path:line` / links / screenshots |
+| 5 | **Acceptance checklist** | always | `- [ ]` items — the reviewer's coverage gate checks them 1:1 |
+| 6 | **`<details>` folds** | long logs, alt options, raw data | collapsed at the bottom, never unfolded |
+
+Priority emoji: 🔴 P0 · 🟠 P1 · 🟡 P2 · 🟢 P3. Wave/source examples:
+`auto-qa sweep`, `Part of #N`, `wave 3`, `hand-filed`. All general rules
+above apply (≤30 words per cell, blank line between sections, prose
+last).
+
+**Bug-body core** — element 2's shape (blank lines are load-bearing):
+
+```
+**Repro**
+1. <step>
+2. <step>
+
+**Expected** <one line>
+
+**Actual** <one line>
+
+**Impact** <one line> · severity:<level>
+```
+
+Screenshots/links land in the evidence table (element 4); the acceptance
+checklist (element 5) still closes a bug body — minimally
+`- [ ] <actual> no longer occurs; <expected> observed`.
+
+**Feature/task-body core** — element 2's shape for non-bugs (blank lines
+are load-bearing):
+
+```
+**Why**
+- <≤3 bullets>
+
+**What**
+- <≤3 bullets>
+
+**Example**
+<one concrete scenario with real values — a command, input, or user action>
+
+**Expected result**
+<the observable outcome once this lands — output, log line, UI state>
+```
+
+**Example** and **Expected result** are REQUIRED, not decoration: a
+reader must be able to act without a clarifying question, and the
+reviewer's spec-coverage gate checks the diff against the stated outcome.
+A bug body already carries the pair as **Expected** / **Actual** — never
+duplicate them there. Issue #712 is the live demo of the non-bug shape.
 
 ## 4. Per-page QA checklist (the bug sweep's method)
 
