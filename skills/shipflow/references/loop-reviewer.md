@@ -155,12 +155,14 @@ mean "irrelevant", they stop meaning anything.
    | `--scan-digest <hex>` | it was **these** bytes | absent, or ≠ the diff GitHub serves now |
 
    Refusal → nothing posted, no label. The attestation comment precedes
-   `shipflow-approved`: no approved PR without its scan record. `--json`
-   carries `scan: {files, expected, verdict}`; the PR text carries numbers +
-   digest — `ran: true` is falsifiable. `--verdict request_changes` is never
-   blocked by this gate. Honest limit: the digest proves the attestation used
-   the PR's real bytes, unmoved since — not that you understood them; Step 2
-   stays yours.
+   `shipflow-approved`: no approved PR without its scan record. That comment
+   also stamps `<!-- shipflow:approved-head sha=… -->` (the reviewed head);
+   a later head move makes the label not-approved until you re-approve.
+   `--json` carries `scan: {files, expected, verdict}`; the PR text carries
+   numbers + digest — `ran: true` is falsifiable. `--verdict request_changes`
+   is never blocked by this gate. Honest limit: the digest proves the
+   attestation used the PR's real bytes, unmoved since — not that you
+   understood them; Step 2 stays yours.
 
    **Why YOU, not `security-review`:** its diff collector reads AMBIENT git
    state, not steerable by prompt — detached-HEAD self-diff → fully-formed
