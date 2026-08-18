@@ -491,7 +491,7 @@ still parks forever).
 | `review_comments` | unaddressed comments | pr-feedback (may already be handled) → reply |
 | `ci_pending` | checks running | park — re-check next tick |
 | (automerge blocker "behind base", **and it is the only blocker**) | green+approved but the head predates the current base — CI proved code against a base that no longer exists | worker: checkout, `pr sync <n> --no-push` (rebase), run the tests, THEN `git push --force-with-lease` — `pr sync` pushes by default, and a clean textual rebase can still fail the build, so never let it push an unverified head. Merge lands next tick on the rebased head (#530). Any other blocker present (`manual` policy, red CI, open threads, unconfirmed intent) → handle/park that first; rebasing a PR the policy can't merge is churn every base advance repeats. Rebase conflicts → the `conflict` protocol. `unsatisfiable: true` → escalate once |
-| `approved_ready` | approved + CI green | `pr automerge` (parks on `manual`; automerge owns the 120s review-settle + pre-merge thread re-read — an immediate 0 is not settled) |
+| `approved_ready` | approved + CI green | `pr automerge` (parks on `manual`; automerge owns the 120s review-settle + pre-merge thread re-read — an immediate 0 is not settled). Residual reviews that land after that window auto-file follow-up issues. |
 | `stale` | green, unreviewed, old | nudge the PR; escalate if blocked on a human |
 | `awaiting_review` | green, no feedback yet | park |
 
