@@ -9080,6 +9080,7 @@ ${opts.body ?? ""}`;
       console.error(guard.message);
       process.exit(1);
     }
+    const beforeSha = localHeadSha();
     try {
       execSync4(`git fetch origin ${shellQuote(base)}`, { stdio: "ignore" });
     } catch (e) {
@@ -9139,7 +9140,8 @@ ${opts.body ?? ""}`;
       }
       pushed = true;
     }
-    emit(opts, { number, rebased: true, conflict: false, base, pushed }, () => console.log(`\uD83D\uDD00 PR #${number}: rebased "${head}" onto ${base}${pushed ? " and pushed" : ""}.`));
+    const droppedApproval = dropApprovedLabelIfNeeded({ pushed, beforeSha, afterSha: localHeadSha() }, () => ghIssueRemoveLabel(repo, number, APPROVED_LABEL));
+    emit(opts, { number, rebased: true, conflict: false, base, pushed, droppedApproval }, () => console.log(`\uD83D\uDD00 PR #${number}: rebased "${head}" onto ${base}${pushed ? " and pushed" : ""}${droppedApproval ? " — dropped shipflow-approved (head moved)" : ""}.`));
   }));
   pr.command("conflict-check").description("Fail if the working tree still has unmerged paths or leftover conflict markers — the gate to run BEFORE `git rebase --continue` and before any force-with-lease push (exit 8 = not clean). Local only, no network.").option("--base <ref>", "Also scan every file this branch changed against <ref> (e.g. origin/main) — additive, never a replacement. Omitted, the base is resolved automatically: the in-flight rebase's `onto`, else origin/HEAD, else the repo default branch. Every ref actually scanned is listed in the JSON `bases`").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const resolved = resolveScanBase({
@@ -9861,6 +9863,25 @@ function syncEntryGuard(i) {
     return { ok: false, message: `On branch "${i.currentBranch}" but PR #${i.number} is "${i.head}". Check it out first: ${checkout}` };
   }
   return { ok: true };
+}
+function shouldDropApprovedLabel(i) {
+  return i.pushed && i.headMoved;
+}
+function localHeadSha() {
+  try {
+    return commitSha(execSync4("git rev-parse HEAD").toString());
+  } catch {
+    return null;
+  }
+}
+function dropApprovedLabelIfNeeded(i, remove) {
+  const before = commitSha(i.beforeSha);
+  const after = commitSha(i.afterSha);
+  const headMoved = before !== null && after !== null && before !== after;
+  if (!shouldDropApprovedLabel({ pushed: i.pushed, headMoved }))
+    return false;
+  remove();
+  return true;
 }
 
 // src/commands/test.ts
