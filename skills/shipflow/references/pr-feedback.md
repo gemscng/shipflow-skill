@@ -6,11 +6,14 @@ then reply via `renaiss-shipflow pr note <n> --body …` (#603 — the marked pa
 
 ## 1. Gather every comment — don't miss inline ones
 
-`pr reviews --json` is the worklist (unresolved threads block approval/merge);
-`gh pr view --comments` misses line-level inline comments — fetch separately:
+`pr reviews --json` is a read-only query like `pr ready` — the worklist
+(unresolved threads block approval/merge). Parse JSON `blocking` +
+`unresolvedThreads`; rc is not the signal (always 0). Gates stay
+`pr approve` (exit 7) and `pr automerge` (exit 5). `gh pr view --comments`
+misses line-level inline comments — fetch separately:
 
 ```bash
-renaiss-shipflow pr reviews <n> --json    # unresolved threads (node-id, author, path, body) — the worklist
+renaiss-shipflow pr reviews <n> --json    # read-only query (like pr ready): parse blocking/unresolvedThreads — rc is not the signal
 gh pr view <n> --comments                 # general + review bodies
 gh pr view <n> --json reviews,statusCheckRollup,headRefName  # verdicts + CI + branch
 gh pr checks <n>                          # CI status

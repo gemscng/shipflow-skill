@@ -9373,7 +9373,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
     emit(opts, { number, approved: true, label: APPROVED_LABEL, scan: scanField, ...degradedField(ctx) }, () => console.log(`✅ PR #${number} approved — labelled "${APPROVED_LABEL}" (automerge can proceed under an auto-* policy).
    ${scanAttestationLine(scan, opts.scanReport, opts.scanDigest)}`));
   }));
-  pr.command("reviews <number>").description("External review state: unresolved review threads (incl. bot reviewers) the loop must fix before approving").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  pr.command("reviews <number>").description("Read-only query of unresolved review threads (incl. bots) — parse JSON blocking/unresolvedThreads; rc is not the signal (always 0, like pr ready)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const me = ghCurrentLogin();

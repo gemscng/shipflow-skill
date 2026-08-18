@@ -64,7 +64,7 @@ Commands, guardrails, and message contracts are identical across harnesses.
 | "attach test evidence to #42" | `renaiss-shipflow issue evidence 42 --pr <pr> --before … --after … --label … --caption …` — one labeled pair per changed surface; `--file` video-only; bug w/o fix → `--actual` |
 | "open a PR" | `renaiss-shipflow pr create --json` (after committing) |
 | "is PR 87 mergeable" | `renaiss-shipflow pr ready 87 --json` |
-| "open review threads on 87" | `renaiss-shipflow pr reviews 87 --json` (incl. bots) |
+| "open review threads on 87" | `renaiss-shipflow pr reviews 87 --json` (read-only query like `pr ready`; parse `blocking`/`unresolvedThreads` — rc is not the signal) |
 | "resolve the threads I fixed" | `renaiss-shipflow pr resolve 87 --thread <id>` |
 | "capture PR 87's diff for a scan" | `renaiss-shipflow pr diff 87 --out /tmp/pr-87.patch` (GitHub's bytes, never local git; exit 9 = empty capture) |
 | "approve PR 87" (reviewer verdict) | `renaiss-shipflow pr approve 87 --comment "..." --scan-files <N> --scan-report <path> --scan-digest <sha256>` (exit 7 = open threads; exit 9 = bad scan attestation) |
