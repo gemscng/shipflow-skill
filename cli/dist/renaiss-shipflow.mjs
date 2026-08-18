@@ -6809,6 +6809,8 @@ ${section}` : section;
       process.exit(1);
     }
     let precedent;
+    let disclosure;
+    let surfaced = false;
     if (opts.category && !opts.update && !once) {
       try {
         precedent = await ctx.client.matchPrecedent(ctx.creds.org, ctx.project.projectId, {
@@ -6817,12 +6819,22 @@ ${section}` : section;
           repo,
           issue: number
         });
+        if (precedent?.outcome === "apply" && precedent.precedent) {
+          disclosure = formatPrecedentDisclosure(precedent);
+        } else if (precedent && (precedent.outcome === "suggest" || precedent.outcome === "reconfirm") && precedent.precedent) {
+          body = `${body}
+
+${formatPrecedentSuggestion(precedent)}`;
+          surfaced = true;
+        }
       } catch {
         precedent = undefined;
+        disclosure = undefined;
+        surfaced = false;
       }
     }
-    if (precedent?.outcome === "apply" && precedent.precedent) {
-      ghIssueComment(repo, number, formatPrecedentDisclosure(precedent));
+    if (precedent?.outcome === "apply" && precedent.precedent && disclosure !== undefined) {
+      ghIssueComment(repo, number, disclosure);
       emit(opts, {
         number,
         escalated: false,
@@ -6834,11 +6846,6 @@ ${section}` : section;
       }, () => console.log(`\uD83D\uDD01 #${number} auto-resolved from your #${precedent.precedent.sourceIssue} decision — disclosure posted, reply \`undo\` to reverse.`));
       return;
     }
-    const surfaced = precedent && (precedent.outcome === "suggest" || precedent.outcome === "reconfirm") && precedent.precedent;
-    if (surfaced)
-      body = `${body}
-
-${formatPrecedentSuggestion(precedent)}`;
     ghEnsureLabel(repo, NEEDS_HUMAN_LABEL, "d93f0b", "ShipFlow loop needs a human to decide");
     ghIssueAddLabels(repo, number, [NEEDS_HUMAN_LABEL]);
     if (!opts.keepInProgress)
