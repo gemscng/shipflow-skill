@@ -31,37 +31,15 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    duplicate/invalid issue. Otherwise proceed.
 
    **The `issue escalate --reason` IS the comment a human reads — act-on-able,
-   not a wall of text.** Point form, ≤ ~20 words/sentence; no dense paragraphs
-   or inline `(a)`/`(1)` enumerations — real markdown lists. Sections, in
-   order:
-   - `### 👤 Action needed` — lead with it: numbered steps ending "remove the
-     `needs-human` label" so the loop resumes. The only section rendering
-     unfolded; the CLI rejects lines in it over 30 words (per cell in table
-     rows) — split long steps.
-   - `### Why it's blocked` — 1–4 bullets (blocker + decision needed);
-     collapsed (`<details>`) — never anything the human must see to act.
-   - `### Ready once unblocked` (if applicable) — collapsed.
-   Always state an action (minimum: "remove the `needs-human` label to resume").
-
-   **Escalation contract — the CLI lints and rejects violations:**
-   - No open questions: every question carries a `**Recommendation:**` line
-     (answer + why). Never ask "who decides": `--owner <login>` when the
-     issue names someone; else the CLI resolves `signoff-owner` config →
-     issue author. ONE accountable human, always.
-   - Self-contained: never "see the issue body" — inline the substance.
-   - `--category` (`money-write`, `prod-config`, `security`, `missing-secret`,
-     `external-dependency`, `invalid`) appends the standard
-     blast-radius/reversibility rationale.
-   - Shape matches ask: decisions → table in Action-needed, `#` matching the
-     `N: answer` protocol: `| # | Decision | Options | Recommendation |`;
-     actions (go-live, flag flip, provisioning) → exact runnable checklist
-     (env var names, commands, verification, "remove the label").
-   - Re-escalating: `--update` edits the 🚧 comment in place; shrink to what
-     remains open, mark settled "resolved by #N". One live escalation per
-     issue.
-   The CLI adds banner/owner/footer and collapses all but Action-needed — it
-   must stand alone. Lint rejection (overlong step lines included) → fix the
-   reason; `--force` is for humans, not the loop.
+   not a wall of text.** Shape is `lintEscalationReason`
+   (`apps/renaissshipflow-cli/src/escalation-format.ts`) — fix a rejected
+   reason; `--force` is for humans, not the loop. Process: `--category`
+   (`money-write`, `prod-config`, `security`, `missing-secret`,
+   `external-dependency`, `invalid`); `--owner <login>` when the issue
+   names someone, else the CLI resolves `signoff-owner` → issue author.
+   Re-escalating: `--update` edits the 🚧 comment in place; shrink to what
+   remains open, mark settled "resolved by #N". One live escalation per
+   issue.
 1b. **Product priority — check before any "worth building now?" escalation.**
    `renaiss-shipflow priorities --json` parses `docs/PRIORITIES.md` (owner's
    ordered work-class greenlist + WIP share). Human-edited ONLY — the loop

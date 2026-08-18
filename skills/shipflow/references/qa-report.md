@@ -37,11 +37,8 @@ evidence`, the delta in the caption:
 `health <before>→<after> (Δ<+/-N>)` (exact invocation:
 `browser-testing.md` §6).
 
-Fix evidence uses `--before`/`--after` **pairs** (one per changed surface),
-never `--file` — the CLI rejects an image there (`--file` is for supplementary
-media, e.g. a recording). The only no-pair case is a **bug report** (no fix
-yet) — `--actual` (`bug-taxonomy.md` §3). Full contract:
-`references/loop-worker.md` §6. Reviewer: a dropping score is a regression
+Fix evidence: `validateEvidenceSelection`
+(`apps/renaissshipflow-cli/src/evidence.ts`). Reviewer: a dropping score is a regression
 signal — don't approve a negative delta unless it's an intentional, explained
 tradeoff. Auto-merge gate: a negative delta = an open thread — park, don't
 merge.

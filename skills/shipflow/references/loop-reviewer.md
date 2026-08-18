@@ -381,8 +381,4 @@ binds every autonomous LLM-judge decision:
 
 ## Message style — everything you write on GitHub
 
-All GitHub writes (comments, PR bodies, issue bodies) follow the one **Message
-style** contract — graphical-first (tables / mermaid / checklists / meters
-before bullets, ≤12 words/bullet), plus the PR-body template and the
-issue-body ladder — in `message-style.md`. Don't restate it
-here.
+All GitHub writes follow `message-style.md`. Don't restate it here.

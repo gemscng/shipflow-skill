@@ -129,11 +129,8 @@ renaiss-shipflow issue evidence <n> --pr <pr> \
   --caption "Verified: <what you tested> · health <before>→<after> (Δ<+/-N>) · 0 new console errors"
 ```
 
-`--before` and `--after` are both required, with equal counts — `before[i]`
-pairs with `after[i]`, `--label` names pairs by position; a lone before/after
-or mismatched counts is rejected. Multiple/labeled pairs render as a
-side-by-side `| Surface | 🔴 Before | 🟢 After |` table; a single unlabeled
-pair as stacked "Before/After the fix" headings. `--pr` lands the comment on
+Pair/mix: `validateEvidenceSelection`
+(`apps/renaissshipflow-cli/src/evidence.ts`). `--pr` lands the comment on
 the PR (plus the reporter's chat thread; issue linked via `Fixes #<n>`);
 without it, an issue comment. `--file demo.mp4` adds a screen recording for
 flows that need motion.

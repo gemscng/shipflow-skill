@@ -87,11 +87,11 @@ judge the stale link on its merits.
    (plugin-qualified — a bare name can resolve to another plugin's copy,
    #544; message-style.md § "Commit messages": no AI-attribution trailer, skip
    the human-confirm gate). Push, then
-   `renaiss-shipflow pr create --json --lint=strict` — MANDATORY: the prose
-   lint (#196) exits 2 on a prose-shaped body (≥3 parallel facts, no
-   table/checklist/bullets), creating nothing; restructure and re-run, never
-   drop the flag. Never bump versions in the PR or state them in the body —
-   auto-bump versions main after merge (#548).
+   `renaiss-shipflow pr create --json --lint=strict` — MANDATORY; never drop
+   `--lint`. `lintMessageBody`
+   (`apps/renaissshipflow-cli/src/message-lint.ts`) exits 2 on a rejected
+   body — restructure and re-run. Never bump versions in the PR or state
+   them in the body — auto-bump versions main after merge (#548).
    **Readable-body contract (#464)** — HEADLINE (un-collapsed) ≤ ~25 visible
    lines: TLDR (≤4 sentences — what/why/risk), "What changed" (≤3 bullets),
    one Verified line; everything else in `<details><summary><b>Section
@@ -130,14 +130,12 @@ judge the stale link on its merits.
    --before <s1-before.png> <s2-before.png> --after <s1-after.png> <s2-after.png>
    --label "<surface 1>" "<surface 2>"
    --caption "Verified: <what> · health <before>→<after> (Δ<+/-N>)"`.
-   Before+after pairs required — `before[i]` pairs with `after[i]`, `--label`
-   names each pair; lone shots / mismatched counts are rejected. `--file`:
-   supplementary screen recording only. `--actual`: bug-filing only (no fix
-   yet), never fix evidence — the CLI refuses to mix it with a pair. Pass
+   Pair/mix: `validateEvidenceSelection`
+   (`apps/renaissshipflow-cli/src/evidence.ts`). Pass
    `--touched "<feature>"…` (features the diff touches): the gallery renders
    a red gap card for any touched feature lacking a proof pair.
-   **One pair per changed surface, one proof per feature** — the reviewer
-   blocks multi-feature PRs with fewer proofs than touched features.
+   **One proof per touched feature** — the reviewer blocks multi-feature
+   PRs with fewer proofs than touched features.
    **One claim per image** — a caption asserts only what its image shows;
    needs "and" → split into more labeled pairs.
    **Mark the change, don't cover it** — before each after-shot, outline the
@@ -205,8 +203,7 @@ Keep `summary` to one line — no diffs or logs.
 
 ## Message style — everything you write on GitHub
 
-All GitHub writing (comments, PR bodies, issue bodies) follows the **Message
-style** contract — `message-style.md`; don't restate it here.
-Machine-checked: `pr create --lint=strict` (step 5) rejects pure prose when ≥3
-parallel facts exist; `issue create` warns on the same shape. Fix the body,
-never bypass the lint.
+All GitHub writing follows `message-style.md`. Don't restate it here.
+Machine check: `lintMessageBody`
+(`apps/renaissshipflow-cli/src/message-lint.ts`) via step 5's
+`--lint=strict`.

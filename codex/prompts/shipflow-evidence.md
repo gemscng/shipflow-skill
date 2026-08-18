@@ -16,21 +16,15 @@ renaiss-shipflow issue evidence <number> [--pr <pr>] \
   --caption "one-line summary of what was verified"
 ```
 
-- `before[i]` pairs with `after[i]`; `--label` names each pair by position.
-- Multiple (or labeled) pairs render as a side-by-side `| Surface | 🔴 Before | 🟢 After |`
-  table; a single unlabeled pair renders under stacked Before/After headings.
-- `--before-caption`/`--after-caption` describe each shot **by position** and render
-  directly under that image, so a shot can't be mislabeled by a blanket summary. Pass
-  one per screenshot; skip a shot with an empty string. `--caption` stays the optional
-  one-line summary. (`--image-caption` captions supplementary `--image`/`--file` items.)
-- **One claim per image**: a caption asserts only what its own image shows — if it
-  needs "and" or lists surfaces/viewports, split into more labeled pairs.
-- **Mark the change without covering it**: before each after-shot, outline the changed
-  element (`outline: 3px solid #ff3b30; outline-offset: 3px` via your browser tool's
-  JS eval) — the outline surrounds the change; never overlay content with boxes/arrows.
-- `--file` is only for supplementary media (a screen recording); `--pr` lands the
-  comment on the PR for reviewers. The reporter's chat thread is pinged either way.
-- Capture flow (headed browser, per-surface loop): `references/browser-testing.md` §4.
+Pair/mix: `validateEvidenceSelection`
+(`apps/renaissshipflow-cli/src/evidence.ts`).
+**One claim per image**: a caption asserts only what its own image shows — if it
+needs "and" or lists surfaces/viewports, split into more labeled pairs.
+**Mark the change without covering it**: before each after-shot, outline the changed
+element (`outline: 3px solid #ff3b30; outline-offset: 3px` via your browser tool's
+JS eval) — the outline surrounds the change; never overlay content with boxes/arrows.
+`--pr` lands the comment on the PR for reviewers. Capture flow (headed browser,
+per-surface loop): `references/browser-testing.md` §4.
 
 <!-- Codex CLI custom prompt (generated from .claude/commands/shipflow-evidence.md).
      Install per codex/README.md; harness adaptation: skills/shipflow/references/codex.md -->
