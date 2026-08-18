@@ -1,9 +1,21 @@
 # Loop worker subagent
 
 One **worker** per work item, dispatched via the Task tool; it runs in its
-**own context** and returns only a compact payload (see Return). Solo: run in
-the loop worktree. **Parallel mode**: your own worktree (`shipflow-loop-<n>`),
-never shared (`loop-mode.md` § Setup).
+**own context** and returns only a compact payload (see Return). **Default
+(parallel, #744):** your own worktree — create it first, remove it last —
+`.worktrees/shipflow-loop-<issue>` (fix) or
+`.worktrees/shipflow-loop-pr-<n>` (reconcile), never the shared loop
+worktree (`loop-mode.md` § Setup). Solo (`loop-concurrency 1` only): you
+MAY run in the loop worktree.
+
+**Scratch isolation (#683).** Workers run concurrently and the session
+scratchpad is SHARED. Prefer composing scratch artifacts (PR body, scan
+notes) inside your OWN worktree — untracked; check `git status` before
+committing so none land in a commit. Anything written to the shared
+scratchpad MUST be keyed to your item — `<scratchpad>/issue-<n>/…`
+(reconcile: `<scratchpad>/pr-<n>/…`) — never a bare shared filename like
+`<scratchpad>/pr-body.md`: the second writer wins silently and a PR can
+publish another issue's body (measured, #683).
 
 ## Input the orchestrator passes
 - `issue` number + `triage` payload (relatedFiles / relatedCommits / features)
@@ -34,8 +46,12 @@ in <repo> — no acceptance brief to load` (`--json` `spec.notReadable: true`) �
 judge the stale link on its merits.
 
 ## What a fix worker does (one issue, end-to-end)
-1. **Branch** — `git fetch origin && git checkout -b fix/issue-<n>-<slug> origin/<default>`,
-   then `renaiss-shipflow git-identity --fix` **before the first commit** —
+1. **Branch** — default: from the repo root, `git fetch origin &&
+   git worktree add .worktrees/shipflow-loop-<n> -b fix/issue-<n>-<slug>
+   origin/<default>`, then work in that worktree only. Solo
+   (`loop-concurrency 1` only): `git checkout -b fix/issue-<n>-<slug>
+   origin/<default>` in the loop worktree. Then
+   `renaiss-shipflow git-identity --fix` **before the first commit** —
    unmatched author emails block deployments, and `pr create` refuses such
    branches.
 2. **Map, then fix** — `renaiss-shipflow features --json` (or `--category
@@ -135,15 +151,26 @@ Too risky / ambiguous / unreproducible / unverifiable → do **not** open a PR;
 report `blocked` with the reason (the orchestrator will `issue escalate`).
 
 ## What a reconcile worker does (one PR)
-One PR + the reason(s) from `inbox`: fix failing CI; or address review
-comments (`references/pr-feedback.md`) and reply; or rebase a moved base —
-`renaiss-shipflow pr sync <n>`, resolving conflicts agentically via
-`--keep-conflicts` + `references/conflict-resolution.md` (resolve by intent,
-test, force-with-lease, comment) instead of escalating. Pull `features --json`
-when a fix risks touching more than the PR's own feature. Push when done.
-An immediate post-push `pr reviews` zero is **not** a settled measurement —
-external bots post 1–2 minutes later. automerge owns the 120s settle wait;
-do not merge on that zero.
+**Worktree first.** Default (parallel, #744): from the repo root,
+`git fetch origin && git worktree add .worktrees/shipflow-loop-pr-<n>
+<pr-branch>` (the existing PR branch). If the local branch is missing,
+`git worktree add -b <pr-branch> .worktrees/shipflow-loop-pr-<n>
+origin/<pr-branch>`. Work only there. **Never** `git checkout` / `gh pr
+checkout` into the shared loop worktree — Phase A fans independent PRs
+and a shared checkout clobbers siblings. Skip `pr-feedback.md`'s `gh pr
+checkout` (you are already on the branch). Last act: `git worktree remove
+.worktrees/shipflow-loop-pr-<n>` after push, or on `blocked`. Solo
+(`loop-concurrency 1` only): checkout the PR branch in the loop worktree.
+
+Then: one PR + the reason(s) from `inbox`: fix failing CI; or address
+review comments (`references/pr-feedback.md`) and reply; or rebase a
+moved base — `renaiss-shipflow pr sync <n>`, resolving conflicts
+agentically via `--keep-conflicts` + `references/conflict-resolution.md`
+(resolve by intent, test, force-with-lease, comment) instead of
+escalating. Pull `features --json` when a fix risks touching more than
+the PR's own feature. Push when done. An immediate post-push `pr reviews`
+zero is **not** a settled measurement — external bots post 1–2 minutes
+later. automerge owns the 120s settle wait; do not merge on that zero.
 
 ## Before you return — self-verify
 Your completion contract — don't return until each holds (or you genuinely
@@ -157,6 +184,10 @@ hit a wall):
       — evidence + health delta attached.
 - [ ] `blocked: true` only after trying: reproduce, dev server, test DB, git
       history — never on first friction.
+- [ ] Parallel mode: your worktree removed (`git worktree remove
+      .worktrees/shipflow-loop-<n>` or, reconcile,
+      `.worktrees/shipflow-loop-pr-<n>`) — after push, or on `blocked`;
+      the pushed branch is the artifact.
 
 A `verified: true` you can't defend is worse than an honest `blocked`.
 

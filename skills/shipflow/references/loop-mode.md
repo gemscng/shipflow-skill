@@ -15,7 +15,7 @@ Roles.
 
 ## Contents
 
-1. **Setup** — one reusable worktree
+1. **Setup** — orchestrator worktree + per-worker worktrees
 2. **Policies** — the knobs
 3. **Roles** — orchestrator · reviewer · worker
 4. **The cycle** — 0 CLI drift check · A reconcile · B admit · C bug sweep · D repeat/stop
@@ -29,21 +29,42 @@ Sub-references: `loop-worker.md` · `loop-reviewer.md` (PR gate) ·
 
 ## Setup — run in a worktree (once, before the cycle)
 
-Always in a git worktree, never the user's live checkout — ONE worktree reused
-for every iteration:
+Always in a git worktree, never the user's live checkout.
 
-- Prefer `EnterWorktree` with the fixed name `shipflow-loop`; else
-  `git worktree add .worktrees/shipflow-loop -b shipflow-loop/base origin/<default>`
-  (`.worktrees/` gitignored) and `cd` in. Resuming → reuse it.
-- All branching/fixing/committing/pushing happens here. Merged `fix/issue-*`
-  branches are pruned at merge time by `pr automerge`/`pr merge`; PRs merged
-  OUTSIDE those commands are healed by the **merged-branch GC** `inbox` runs
-  each tick (#455) — a local `fix/*` branch whose PR merged at exactly the
-  local tip gets the same cleanup; unpushed commits / uncommitted edits are
-  kept and reported (`summary.gcUnpushedKept`). At run end — once no owned
-  PRs are in flight — `ExitWorktree`, else `git worktree remove
-  .worktrees/shipflow-loop` + `git branch -D shipflow-loop/base`; surface
-  path + branch first; keep it if only pausing.
+**Orchestrator worktree** — ONE, reused across ticks, for serial work only
+(`inbox`, `issue next`, automerge, ledger). Prefer `EnterWorktree` with the
+fixed name `shipflow-loop`; else
+`git worktree add .worktrees/shipflow-loop -b shipflow-loop/base origin/<default>`
+(`.worktrees/` gitignored) and `cd` in. Resuming → reuse it. **No worker
+checks out, branches, or commits here** — default `loop-concurrency` is 3;
+a shared checkout clobbers in-flight siblings.
+
+Merged `fix/issue-*` branches are pruned at merge time by `pr automerge`/
+`pr merge`; PRs merged OUTSIDE those commands are healed by the
+**merged-branch GC** `inbox` runs each tick (#455) — a local `fix/*` branch
+whose PR merged at exactly the local tip gets the same cleanup; unpushed
+commits / uncommitted edits are kept and reported (`summary.gcUnpushedKept`).
+At run end — once no owned PRs are in flight — `ExitWorktree`, else
+`git worktree remove .worktrees/shipflow-loop` + `git branch -D
+shipflow-loop/base`; surface path + branch first; keep it if only pausing.
+
+**Workers — one worktree each (#744).** Default (and whenever more than one
+worker can be in flight): each dispatched worker creates its OWN worktree
+as its first act —
+`git worktree add .worktrees/shipflow-loop-<issue> -b fix/issue-<n>-<slug>
+origin/<default>` (fix) or
+`git worktree add .worktrees/shipflow-loop-pr-<n> <pr-branch>` (reconcile)
+— and removes it as its last (`git worktree remove <path>`, after push —
+the pushed branch is the artifact; remove on `blocked` too). Never the
+shared loop worktree; this is the convention `loop-worker.md` points at.
+Scratch artifacts follow the same isolation — per-item paths, never a
+shared filename (#683; `loop-worker.md` § Scratch isolation). Run-end
+cleanup: `git worktree prune` after the orchestrator-worktree teardown
+catches leftovers.
+
+**Solo exception** (`loop-concurrency 1` / `concurrency=1` only): workers
+MAY branch and commit in the orchestrator worktree — the old
+one-at-a-time flow. Do not take this path under the default.
 
 **Preflight — test baseline (once).** No test framework (no `*.config`, no
 `test/`/`spec/`) → dispatch a worker to bootstrap one first: framework for
@@ -72,6 +93,13 @@ Read with `renaiss-shipflow config list`; set with `config set <key> <v>`
 | `require-review` | `true` | route every issue (intake) and PR (pre-merge) through the reviewer subagent first |
 | `cli-drift-poll-seconds` | `180` | how long the post-merge CLI drift check waits for npm to publish before continuing degraded (§0) |
 
+**`loop-concurrency` (default 3, #744)** is invocation-only — a
+`concurrency=N` token or `$SHIPFLOW_LOOP_CONCURRENCY`. Not a CLI
+preference (`config list` does not show it; there is no persistable
+key). `1` = fully serial. Claims, merges, and the drift check stay
+serial regardless. Each in-flight worker uses its own worktree +
+scratch dir (§ Setup).
+
 Same surface, not a loop policy: **`app-slug`** — the ShipFlow GitHub App
 slug trusted to record an intent-gate clearance. Resolution:
 `SHIPFLOW_APP_SLUG` → `GITHUB_APP_SLUG` → `config set app-slug` → contract
@@ -92,7 +120,10 @@ the heavy work never enters yours.
 
 - **orchestrator** = you. Read compact JSON (`inbox`, `issue next`,
   `features`, subagent returns), decide, dispatch, count vs `cap`. **Never
-  read source files or diffs yourself.**
+  read source files or diffs yourself.** Independent workers go out in ONE
+  message (parallel Task calls), up to `loop-concurrency` in flight (#744);
+  the SERIAL steps — claims, merges, drift check, ledger — you run yourself,
+  one at a time, between dispatch waves.
 - **reviewer** — the mandatory gate (`require-review`, default on). Pulls
   `renaiss-shipflow features --json`, reviews an **issue at intake**
   (validate, map to features, acceptance brief) and a **PR before merge**
@@ -226,7 +257,11 @@ binary.
 
 Tick-start drift probe (§0, one call), then `renaiss-shipflow inbox --json`
 (compact — all *you* read). Per PR whose `state` needs action, dispatch a
-worker scoped to that PR; loop A until nothing in-flight `needsAttention`:
+worker scoped to that PR — workers for DIFFERENT PRs may run concurrently,
+up to `loop-concurrency`, each in its own worktree (§ Setup, #744); what
+never fans out: `pr automerge` (one call, oldest-first), post-merge syncs
+(dispatch after automerge returns), and the post-merge drift check. Loop A
+until nothing in-flight `needsAttention`:
 
 - `ci_failing` → worker fixes failing checks (`gh pr checks <n>`), pushes.
   Track attempts across ticks; `max-fix-attempts` still red →
@@ -327,10 +362,23 @@ WIP counts **actionable** open PRs only — `summary.wipActionable` from
 `inbox --json` (#451): reporter-parked (`awaiting_reporter`) PRs are a
 timer like `issue wait --on #X` and would jam admission (a PR whose PARENT
 issue is `needs-human`-escalated still counts; PR #470). `wipActionable` ≥
-`wip-limit` → skip B (drain A). Else, while PRs-opened-THIS-PASS < `cap`,
-admit ONE issue — each step a fresh subagent. **Cap is per pass, not per
-session** (#451): continuous mode RESETS the counter each tick; "🛑 at cap"
-only in a tick that itself opened `cap` PRs.
+`wip-limit` → skip B (drain A). Else admit up to **`loop-concurrency`**
+issues at once (default 3, #744) while in-flight fix workers +
+PRs-opened-THIS-PASS < `cap` — each step still a fresh subagent:
+
+- Steps 1–2 run per issue. **Picks are SERIAL** — the `issue next` claim is
+  the mutex; never two Picks in flight. Intake reviews may fan out.
+- Step 3: dispatch the admitted batch's fix workers in **ONE message**
+  (parallel Task calls), each in its own worktree + scratch dir (§ Setup).
+- Step 4 dispatches per worker as it returns; a freed slot re-admits
+  immediately (back to step 1) while under `cap`.
+- Serial stays serial at ANY concurrency: claims, merges (ONE
+  `pr automerge --all-ready`, oldest-first — Phase A), the post-merge drift
+  check, ledger bookkeeping. `loop-concurrency 1` = the old one-at-a-time
+  flow, unchanged.
+
+**Cap is per pass, not per session** (#451): continuous mode RESETS the
+counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
 
 1. **Pick** — `renaiss-shipflow issue next --json` (claims the next
    open/unclaimed issue **assigned to the account running the loop** —
@@ -402,8 +450,10 @@ only in a tick that itself opened `cap` PRs.
    auto-unblock), before dispatching — a reply IS the veto (Phase A treats
    it as the decision).
 3. **Worker — fix.** Dispatch with issue + triage + brief. It pulls the
-   feature map itself (`features --json`); in the loop worktree: branch
-   `fix/issue-<n>-<slug>` off `origin/<default>`, fix, run project tests
+   feature map itself (`features --json`); creates
+   `.worktrees/shipflow-loop-<n>` off `origin/<default>` and works only
+   there (`loop-worker.md` § Branch — **never** the shared loop worktree
+   under default concurrency), fix, run project tests
    **and** a diff-scoped E2E browser pass with before/after screenshots +
    **health score** (`references/browser-testing.md`), **add a regression
    test**, open the PR via `renaiss-shipflow pr create --json` (full fix →
@@ -490,7 +540,7 @@ still parks forever).
 | `changes_requested` | reviewer wants changes | pr-feedback → fix → push → reply |
 | `review_comments` | unaddressed comments | pr-feedback (may already be handled) → reply |
 | `ci_pending` | checks running | park — re-check next tick |
-| (automerge blocker "behind base", **and it is the only blocker**) | green+approved but the head predates the current base — CI proved code against a base that no longer exists | worker: checkout, `pr sync <n> --no-push` (rebase), run the tests, THEN `git push --force-with-lease` — `pr sync` pushes by default, and a clean textual rebase can still fail the build, so never let it push an unverified head. Merge lands next tick on the rebased head (#530). Any other blocker present (`manual` policy, red CI, open threads, unconfirmed intent) → handle/park that first; rebasing a PR the policy can't merge is churn every base advance repeats. Rebase conflicts → the `conflict` protocol. `unsatisfiable: true` → escalate once |
+| (automerge blocker "behind base", **and it is the only blocker**) | green+approved but the head predates the current base — CI proved code against a base that no longer exists | worker: in `.worktrees/shipflow-loop-pr-<n>`, `pr sync <n> --no-push` (rebase), run the tests, THEN `git push --force-with-lease` — `pr sync` pushes by default, and a clean textual rebase can still fail the build, so never let it push an unverified head. Merge lands next tick on the rebased head (#530). Any other blocker present (`manual` policy, red CI, open threads, unconfirmed intent) → handle/park that first; rebasing a PR the policy can't merge is churn every base advance repeats. Rebase conflicts → the `conflict` protocol. `unsatisfiable: true` → escalate once |
 | `approved_ready` | approved + CI green | `pr automerge` (parks on `manual`; automerge owns the 120s review-settle + pre-merge thread re-read — an immediate 0 is not settled). Residual reviews that land after that window auto-file follow-up issues. |
 | `stale` | green, unreviewed, old | nudge the PR; escalate if blocked on a human |
 | `awaiting_review` | green, no feedback yet | park |

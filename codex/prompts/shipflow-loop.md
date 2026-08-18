@@ -20,16 +20,23 @@ file's real section headings (§) — follow them there, never from memory.
 | `stop` | stop continuous mode (delete the trigger) |
 | `watch=<dur>` | override the re-run interval (default `15m`) |
 | `cap=N` | how many PRs to open per pass before pausing; `cap=all` drains the queue |
+| `concurrency=N` | max issues/PRs worked at once (#744); `concurrency=1` = fully serial |
 | anything else | an `issue next` filter (e.g. `--label bug`) |
 
 **Cap precedence:** a user `cap=N` token → `$SHIPFLOW_LOOP_CAP` → **5**.
+**Concurrency precedence:** a user `concurrency=N` token →
+`$SHIPFLOW_LOOP_CONCURRENCY` → **3**. Not a CLI preference — do not
+`config get` / `config set` a `loop-concurrency` key (unknown key, exit 1).
 
 ## The tick — skeleton (each step lives in loop-mode.md at the § named)
 
-1. **Setup, once** — ONE reusable worktree, never the live checkout: prefer
+1. **Setup, once** — orchestrator worktree, never the live checkout: prefer
    `EnterWorktree` named `shipflow-loop`, else `git worktree add
    .worktrees/shipflow-loop -b shipflow-loop/base origin/<default>`; reuse if it
-   exists. § "Setup — run in a worktree (once, before the cycle)".
+   exists. Serial claims/inbox/merges run here. Workers never checkout here —
+   each adds `.worktrees/shipflow-loop-<issue>` (fix) or
+   `.worktrees/shipflow-loop-pr-<n>` (reconcile) (#744). § "Setup — run in a
+   worktree (once, before the cycle)".
 2. Honour the policy knobs (`renaiss-shipflow config list`) and dispatch
    through the three roles — thin orchestrator, mandatory reviewer, worker —
    as fresh subagents: § "Policies — the three knobs (set once, then trust
@@ -42,7 +49,9 @@ file's real section headings (§) — follow them there, never from memory.
    `state` until nothing `needsAttention`: § "A. Reconcile in-flight work —
    dispatch a worker per item" and § "Reconcile playbook (inbox `state` →
    action)".
-6. **B. Admit new work** under the WIP limit, up to `cap` per pass —
+6. **B. Admit new work** under the WIP limit, up to `cap` per pass and up to
+   `loop-concurrency` (default 3) issues in flight at once — serial Picks,
+   parallel fix workers each in its own worktree (#744) —
    `renaiss-shipflow issue next --json` claims only issues **assigned to the
    loop's account** (`pickup-scope` default `assigned`, #600; assign an issue
    to queue it, `config set pickup-scope all` for repo-wide): § "B. Admit new
