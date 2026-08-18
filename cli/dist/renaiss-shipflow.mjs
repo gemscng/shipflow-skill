@@ -9430,6 +9430,60 @@ var STATE_ICONS = {
   stale: "\uD83D\uDD70️",
   awaiting_review: "·"
 };
+function collectInboxPrRows(repo, me, opts) {
+  const { sweepEnabled, staleHours, maxReworks } = opts;
+  let escalatedIssues = null;
+  const parentIsEscalated = (issueNumbers) => {
+    escalatedIssues ??= new Set(ghIssueListByLabel(repo, NEEDS_HUMAN_LABEL).map((i) => i.number));
+    return issueNumbers.some((n) => escalatedIssues.has(n));
+  };
+  const parentMarkers = new Map;
+  const parentReadFailed = new Set;
+  const parentWasEscalatedFor = (issueNumbers, prNumber, reason) => {
+    let unknown = false;
+    const filed = issueNumbers.some((n) => {
+      let bodies = parentMarkers.get(n);
+      if (!bodies) {
+        if (parentReadFailed.has(n)) {
+          unknown = true;
+          return false;
+        }
+        try {
+          bodies = ghIssueComments(repo, n).filter((c) => c.viewerDidAuthor !== false).map((c) => c.body);
+        } catch {
+          parentReadFailed.add(n);
+          unknown = true;
+          console.warn(`⚠️  #${n}: could not read comments for the escalate-once key — PR #${prNumber} holds its escalation until the next tick.`);
+          return false;
+        }
+        parentMarkers.set(n, bodies);
+      }
+      return bodies.some((b) => hasEscalateOnceMarker(b, prNumber, reason));
+    });
+    if (filed)
+      return true;
+    return unknown ? "unknown" : false;
+  };
+  const minePrs = ghPRListMine(repo);
+  const scanned = minePrs.map((pr) => {
+    const { count: unresolvedThreads, degraded } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
+    const intentBlocked = inboxIntentBlocked(repo, pr);
+    const gateClearedAt = gateClearanceReadFor(pr.number, intentBlocked, (n) => ghIntentGateLastClearedAt(repo, n));
+    const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks, gateClearedAt, headSha: pr.headRefOid });
+    return { pr, row: minePrRow(pr, cl, { unresolvedThreads, degraded, parentIsEscalated, parentWasEscalatedFor }) };
+  });
+  if (sweepEnabled) {
+    try {
+      for (const entry of foreignConflictedPRs(minePrs, ghPRListAll(repo), me, { enabled: true })) {
+        const foreignGated = inboxIntentBlocked(repo, entry.pr);
+        const gateClearedAt = gateClearanceReadFor(entry.pr.number, foreignGated, (n) => ghIntentGateLastClearedAt(repo, n));
+        const cl = classifyPR(entry.pr, me, { staleHours, intentBlocked: foreignGated, maxReworks, gateClearedAt, headSha: entry.pr.headRefOid });
+        scanned.push({ pr: entry.pr, row: foreignPrRow(entry, cl) });
+      }
+    } catch {}
+  }
+  return scanned;
+}
 function registerInboxCommand(program2) {
   program2.command("inbox").description("Reconciler view: open PRs (by state: conflict / ci_failing / changes_requested / approved_ready / stale …) and in-progress issues with new comments. With the OPT-IN repo-wide conflict sweep (`config set conflict-sweep true`, or --conflict-sweep) it also lists conflicted PRs by other authors — trusted same-repo heads only (issue #393)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Force the repo-wide foreign-PR conflict sweep on for this run (default: the `conflict-sweep` config key, which is off)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { project } = await loadCtx(program2);
@@ -9438,38 +9492,6 @@ function registerInboxCommand(program2) {
     const staleHours = resolveStalePrHours();
     const sweepEnabled = opts.conflictSweep === true || resolveConflictSweep();
     const maxReworks = resolveMaxFixAttempts();
-    let escalatedIssues = null;
-    const parentIsEscalated = (issueNumbers) => {
-      escalatedIssues ??= new Set(ghIssueListByLabel(repo, NEEDS_HUMAN_LABEL).map((i) => i.number));
-      return issueNumbers.some((n) => escalatedIssues.has(n));
-    };
-    const parentMarkers = new Map;
-    const parentReadFailed = new Set;
-    const parentWasEscalatedFor = (issueNumbers, prNumber, reason) => {
-      let unknown = false;
-      const filed = issueNumbers.some((n) => {
-        let bodies = parentMarkers.get(n);
-        if (!bodies) {
-          if (parentReadFailed.has(n)) {
-            unknown = true;
-            return false;
-          }
-          try {
-            bodies = ghIssueComments(repo, n).filter((c) => c.viewerDidAuthor !== false).map((c) => c.body);
-          } catch {
-            parentReadFailed.add(n);
-            unknown = true;
-            console.warn(`⚠️  #${n}: could not read comments for the escalate-once key — PR #${prNumber} holds its escalation until the next tick.`);
-            return false;
-          }
-          parentMarkers.set(n, bodies);
-        }
-        return bodies.some((b) => hasEscalateOnceMarker(b, prNumber, reason));
-      });
-      if (filed)
-        return true;
-      return unknown ? "unknown" : false;
-    };
     const gc = gcMergedLocalBranches(repo);
     for (const c of gc.cleaned) {
       console.warn(`\uD83E\uDDF9 ${c.name}: PR #${c.prNumber} merged externally — local branch/worktree cleaned.`);
@@ -9486,14 +9508,7 @@ function registerInboxCommand(program2) {
     if (gc.lookupsSkipped > 0) {
       console.warn(`⏱ merged-branch GC: ${gc.lookupsSkipped} candidate lookup(s) deferred to the next tick (time budget).`);
     }
-    const minePrs = ghPRListMine(repo);
-    const prs = minePrs.map((pr) => {
-      const { count: unresolvedThreads, degraded: degraded2 } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
-      const intentBlocked = inboxIntentBlocked(repo, pr);
-      const gateClearedAt = gateClearanceReadFor(pr.number, intentBlocked, (n) => ghIntentGateLastClearedAt(repo, n));
-      const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks, gateClearedAt, headSha: pr.headRefOid });
-      return minePrRow(pr, cl, { unresolvedThreads, degraded: degraded2, parentIsEscalated, parentWasEscalatedFor });
-    });
+    const prs = collectInboxPrRows(repo, me, { sweepEnabled, staleHours, maxReworks }).map((s) => s.row);
     const issues = ghIssueListByLabel(repo, IN_PROGRESS_LABEL).map((i) => {
       const reply = issueNeedsReply(i.comments ?? [], me);
       return {
@@ -9504,16 +9519,6 @@ function registerInboxCommand(program2) {
         needsAttention: !!reply
       };
     });
-    if (sweepEnabled) {
-      try {
-        for (const entry of foreignConflictedPRs(minePrs, ghPRListAll(repo), me, { enabled: true })) {
-          const foreignGated = inboxIntentBlocked(repo, entry.pr);
-          const gateClearedAt = gateClearanceReadFor(entry.pr.number, foreignGated, (n) => ghIntentGateLastClearedAt(repo, n));
-          const cl = classifyPR(entry.pr, me, { staleHours, intentBlocked: foreignGated, maxReworks, gateClearedAt, headSha: entry.pr.headRefOid });
-          prs.push(foreignPrRow(entry, cl));
-        }
-      } catch {}
-    }
     const count = (s) => prs.filter((p) => p.state === s).length;
     const degraded = prs.filter((p) => p.degraded).length;
     const threadsDegraded = prs.filter((p) => p.threadsDegraded).length;
@@ -9572,6 +9577,264 @@ function registerInboxCommand(program2) {
           i.title
         ]);
         for (const l of renderTable(["Issue", "New comment", "Title"], rows))
+          console.log(`  ${l}`);
+      }
+    }, { pretty: true });
+  }));
+}
+
+// src/commands/loop.ts
+init_config();
+init_gh();
+
+// src/loop-plan.ts
+init_config();
+var PLAN_ACTION_BY_STATE = {
+  reporter_corrected: "rework",
+  awaiting_reporter: "park",
+  conflict: "resolve_conflict",
+  ci_failing: "fix_ci",
+  changes_requested: "address_review",
+  review_comments: "address_comments",
+  ci_pending: "park",
+  approved_ready: "automerge",
+  stale: "nudge",
+  awaiting_review: "park"
+};
+function planAction(state, flags = {}) {
+  if (flags.humanOnly)
+    return "park";
+  if (flags.unsatisfiable)
+    return "escalate_once";
+  if (flags.escalateOnce)
+    return "escalate_once";
+  if (flags.behindBaseOnly && state === "approved_ready")
+    return "sync_no_push";
+  return PLAN_ACTION_BY_STATE[state];
+}
+var BEHIND_BASE_RE = /behind base/i;
+function isBehindBaseOnly(blockers) {
+  return blockers.length === 1 && BEHIND_BASE_RE.test(blockers[0] ?? "");
+}
+function mergePlanFlags(decision) {
+  return {
+    ...decision.unsatisfiable ? { unsatisfiable: true } : {},
+    ...isBehindBaseOnly(decision.blockers) ? { behindBaseOnly: true } : {}
+  };
+}
+function resolveLoopCap() {
+  const env = process.env.SHIPFLOW_LOOP_CAP;
+  if (env != null && env.trim().toLowerCase() === "all")
+    return "all";
+  if (env != null && env !== "")
+    return parseIntOr(env, 5);
+  return 5;
+}
+function capSlots(cap) {
+  return cap === "all" ? Number.MAX_SAFE_INTEGER : cap;
+}
+function issuePriorityLabel(issue) {
+  let best = null;
+  let bestRank = 0;
+  for (const l of issue.labels) {
+    const name = l.name.toLowerCase();
+    if (!name.startsWith("priority:"))
+      continue;
+    const token = name.slice("priority:".length);
+    const rank = token === "critical" ? 4 : token === "high" ? 3 : token === "medium" ? 2 : token === "low" ? 1 : 0;
+    if (rank >= bestRank) {
+      bestRank = rank;
+      best = token || null;
+    }
+  }
+  return best;
+}
+function deferReason(issue, filter) {
+  if (isActionableForPickup(issue, filter))
+    return null;
+  if (filter.claimed)
+    return "claimed";
+  const labels = issue.labels.map((l) => l.name);
+  if (labels.includes(NEEDS_HUMAN_LABEL))
+    return "needs-human";
+  if (labels.includes(IN_PROGRESS_LABEL))
+    return "in-progress";
+  if (labels.includes(WAITING_ON_LABEL))
+    return "waiting-on";
+  if (filter.intakeMode !== "off" && labels.includes(NEEDS_REPORTER_APPROVAL_LABEL)) {
+    return "needs-reporter-approval";
+  }
+  if (filter.label) {
+    const wanted = filter.label.trim().toLowerCase();
+    if (!labels.some((name) => name.trim().toLowerCase() === wanted))
+      return "label-filter";
+  }
+  if (filter.assignee) {
+    const wanted = filter.assignee.trim().toLowerCase();
+    if (!issue.assignees.some((a) => String(a.login ?? "").trim().toLowerCase() === wanted)) {
+      return "unassigned";
+    }
+  }
+  return "filtered";
+}
+function planReconcile(prs) {
+  return prs.map((p) => {
+    const action = planAction(p.state, {
+      escalateOnce: p.escalateOnce,
+      humanOnly: p.humanOnly,
+      unsatisfiable: p.unsatisfiable,
+      behindBaseOnly: p.behindBaseOnly
+    });
+    return {
+      number: p.number,
+      state: p.state,
+      action,
+      ...p.escalateOnce ? { escalateOnce: true } : {},
+      ...p.unsatisfiable ? { unsatisfiable: true } : {}
+    };
+  });
+}
+function planAdmission(opts) {
+  const deferred = [];
+  const candidates = [];
+  for (const issue of opts.issues) {
+    const filter = {
+      claimed: opts.claimed.has(issue.number),
+      assignee: opts.assignee,
+      intakeMode: opts.intakeMode,
+      label: opts.label
+    };
+    const reason = deferReason(issue, filter);
+    if (reason) {
+      deferred.push({ number: issue.number, reason });
+      continue;
+    }
+    candidates.push(issue);
+  }
+  const ordered = sortIssuesForPickup(candidates);
+  const wipSlots = Math.max(0, opts.wipLimit - opts.wipActionable);
+  const slots = Math.min(capSlots(opts.cap), wipSlots);
+  const overflowReason = wipSlots <= capSlots(opts.cap) ? "wip-limit" : "over-cap";
+  const admit = [];
+  for (const [i, issue] of ordered.entries()) {
+    if (i < slots) {
+      admit.push({ number: issue.number, title: issue.title, priority: issuePriorityLabel(issue) });
+    } else {
+      deferred.push({ number: issue.number, reason: overflowReason });
+    }
+  }
+  return { admit, deferred };
+}
+function buildLoopPlan(input) {
+  const { admit, deferred } = planAdmission({
+    issues: input.issues,
+    claimed: input.claimed,
+    cap: input.policies.cap,
+    wipActionable: input.wipActionable,
+    wipLimit: input.policies.wipLimit,
+    assignee: input.assignee,
+    intakeMode: input.intakeMode,
+    label: input.label
+  });
+  return {
+    policies: input.policies,
+    reconcile: planReconcile(input.prs),
+    admit,
+    deferred
+  };
+}
+
+// src/commands/loop.ts
+init_pr_state();
+init_helpers();
+function registerLoopCommand(program2) {
+  const loop = program2.command("loop").description("Autonomous loop planner");
+  loop.command("plan").description("Tick decision table: classifyPR state → action. Admit list is read-only (never claims)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Include foreign conflicted PRs (same as inbox)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    const ctx = await loadCtx(program2);
+    const repo = opts.repo ?? ctx.project.repoFullName;
+    const me = ghCurrentLogin();
+    const staleHours = resolveStalePrHours();
+    const sweepEnabled = opts.conflictSweep === true || resolveConflictSweep();
+    const maxReworks = resolveMaxFixAttempts();
+    const policy = resolveMergePolicy();
+    const requireCi = resolveRequireCi();
+    const pickupScope = resolvePickupScope();
+    const policies = {
+      mergePolicy: policy,
+      requireCi,
+      cap: resolveLoopCap(),
+      wipLimit: resolveWipLimit(),
+      pickupScope,
+      intentGate: resolveIntentGateMode()
+    };
+    const scanned = collectInboxPrRows(repo, me, { sweepEnabled, staleHours, maxReworks });
+    const prs = scanned.map(({ pr, row }) => {
+      let extra = {};
+      if (row.state === "approved_ready") {
+        const freshness = ghPRFreshness(repo, pr);
+        extra = mergePlanFlags(mergeDecision(pr, me, {
+          policy,
+          requireCi,
+          staleHours,
+          unresolvedThreads: row.unresolvedThreads,
+          intentBlocked: row.reasons.includes(REPORTER_REVIEW_REASON),
+          behindBy: freshness.behindBy,
+          freshnessUnresolvable: freshness.unresolvable,
+          headSha: pr.headRefOid
+        }));
+      }
+      return {
+        number: row.number,
+        state: row.state,
+        ...row.escalateOnce ? { escalateOnce: true } : {},
+        ...row.humanOnly ? { humanOnly: true } : {},
+        ...extra
+      };
+    });
+    let assignee;
+    if (pickupScope === "assigned") {
+      assignee = resolveMeLogin("loop plan under pickup-scope=assigned (set pickup-scope all to widen)");
+    }
+    const open = ghIssueListWithAssociations(repo, 200, assignee);
+    let claimed = new Set;
+    try {
+      const claims = await ctx.client.listClaims(ctx.creds.org, ctx.project.projectId);
+      claimed = new Set(claims.filter((c) => c.repo === repo).map((c) => c.issueNumber));
+    } catch {
+      console.warn("⚠️ claims API unreachable — treating issues as unclaimed for the plan (read-only; nothing claimed).");
+    }
+    const { reconcile, admit, deferred } = buildLoopPlan({
+      policies,
+      prs,
+      issues: open,
+      claimed,
+      wipActionable: actionableWip(scanned.map((s) => s.row)),
+      intakeMode: resolveIntakeApproval(),
+      assignee
+    });
+    emit(opts, withProvenance({ policies, reconcile, admit, deferred }), () => {
+      console.log(`\uD83D\uDCCB Loop plan for ${repo}`);
+      console.log(`Policies: merge-policy=${policies.mergePolicy} · require-ci=${policies.requireCi} · cap=${policies.cap} · wip-limit=${policies.wipLimit} · pickup-scope=${policies.pickupScope} · intent-gate=${policies.intentGate}`);
+      if (reconcile.length) {
+        console.log("");
+        const rows = reconcile.map((r) => [
+          `#${r.number}`,
+          r.state,
+          r.action + (r.escalateOnce ? " · escalateOnce" : "") + (r.unsatisfiable ? " · unsatisfiable" : "")
+        ]);
+        for (const l of renderTable(["PR", "State", "Action"], rows))
+          console.log(`  ${l}`);
+      }
+      if (admit.length) {
+        console.log("");
+        const rows = admit.map((a) => [`#${a.number}`, a.priority ?? "—", a.title]);
+        for (const l of renderTable(["Admit", "Priority", "Title"], rows))
+          console.log(`  ${l}`);
+      }
+      if (deferred.length) {
+        console.log("");
+        const rows = deferred.map((d) => [`#${d.number}`, d.reason]);
+        for (const l of renderTable(["Deferred", "Reason"], rows))
           console.log(`  ${l}`);
       }
     }, { pretty: true });
@@ -10305,6 +10568,7 @@ registerVersionCommand(program2, pkg.version);
 registerIssuesCommand(program2);
 registerIssueCommand(program2);
 registerInboxCommand(program2);
+registerLoopCommand(program2);
 registerFeaturesCommand(program2);
 registerPrioritiesCommand(program2);
 registerConfigCommand(program2);

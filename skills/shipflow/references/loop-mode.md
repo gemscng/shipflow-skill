@@ -82,18 +82,18 @@ the heavy work never enters yours.
 ## The cycle — each tick
 
 **Tick 1 only — lay out the Initial Plan before ANY dispatch (#600).** After
-the drift probe and first `inbox --json`, read the queue WITHOUT claiming
-(`renaiss-shipflow issues list --assignee @me --state open --json` under the
-default `pickup-scope assigned`; drop `--assignee` when scope is `all` —
-show the queue the loop will ACTUALLY pick from; a read, never `issue next`)
-and print one plan block:
+the drift probe, run `renaiss-shipflow loop plan --json` (READ-only — never
+`issue next`) and render its envelope as the plan block. Do not rebuild it
+from `inbox --json` or `renaiss-shipflow issues list --assignee @me
+--state open --json`, and do not re-derive actions from this file's
+playbook table.
 
-| Section | Content |
+| Envelope | Render as |
 |---|---|
-| Policies | merge-policy · require-ci · cap · wip-limit · pickup-scope · intent-gate, one line |
-| Reconcile | one row per in-flight PR: `#N · state · planned action` |
-| Admission queue | the scope's eligible issues in pickup order (priority → severity → newest), up to `cap`, each `#N · priority · title` |
-| Deferred | anything visible but not actionable this run (parked, waiting-on, over-cap) with the reason |
+| `policies` | merge-policy · require-ci · cap · wip-limit · pickup-scope · intent-gate, one line |
+| `reconcile[]` | one row per in-flight PR: `#N · state · action` (`escalateOnce` / `unsatisfiable` when set) |
+| `admit[]` | the scope's eligible issues in pickup order, up to `cap`: `#N · priority · title` |
+| `deferred[]` | anything visible but not actionable this run (`reason`: parked / waiting-on / over-cap / …) |
 
 The operator's chance to interrupt a wrong plan before workers spend tokens;
 later ticks print only the one-line summary — never repeat the plan block.
@@ -500,6 +500,10 @@ loop is continuous**: post the one-line summary and end the turn; a
 
 ## Reconcile playbook (inbox `state` → action)
 
+Authoritative action for each PR is `reconcile[].action` from
+`renaiss-shipflow loop plan --json` — same `classifyPR` inbox uses, no
+second ladder. This table is the human-readable projection of that map.
+
 Ladder, highest first: `reporter_corrected` › `awaiting_reporter` ›
 `conflict` › `ci_failing` › `changes_requested` › `review_comments` ›
 `ci_pending` › `approved_ready` › `stale` › `awaiting_review`.
@@ -513,18 +517,18 @@ else loosens (label stays, `pr automerge` still refuses `unconfirmed
 interpretation`, rebase/merge withheld, the reworked PR re-arms; silence
 still parks forever).
 
-| `state` | What it means | Action |
+| `state` | What it means | Action (`loop plan` token) |
 |---|---|---|
-| `reporter_corrected` (→ `loop-gate.md`) | still gated, and the reporter replied with a correction | rework per § "A reporter correction IS the human answering" — brief it as settled; the gate stays ON |
-| `awaiting_reporter` (→ `loop-gate.md`) | approved + green, interpretation unconfirmed (`needs-reporter-review`) | park — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable` / `reporter_gate_stale`) → `issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` ONCE, nothing else — **never a PR comment** |
-| `ci_failing` | a check is red | fix on branch, push; escalate after `max-fix-attempts` |
-| `changes_requested` | reviewer wants changes | pr-feedback → fix → push → reply |
-| `review_comments` | unaddressed comments | pr-feedback (may already be handled) → reply |
-| `ci_pending` | checks running | park — re-check next tick |
-| (automerge blocker "behind base", **and it is the only blocker**) | green+approved but the head predates the current base — CI proved code against a base that no longer exists | worker: in `.worktrees/shipflow-loop-pr-<n>`, `pr sync <n> --no-push` (rebase), run the tests, THEN `git push --force-with-lease` — `pr sync` pushes by default, and a clean textual rebase can still fail the build, so never let it push an unverified head. Merge lands next tick on the rebased head (#530). Any other blocker present (`manual` policy, red CI, open threads, unconfirmed intent) → handle/park that first; rebasing a PR the policy can't merge is churn every base advance repeats. Rebase conflicts → the `conflict` protocol. `unsatisfiable: true` → escalate once |
-| `approved_ready` | approved + CI green | `pr automerge` (parks on `manual`; automerge owns the 120s review-settle + pre-merge thread re-read — an immediate 0 is not settled). Residual reviews that land after that window auto-file follow-up issues. |
-| `stale` | green, unreviewed, old | nudge the PR; escalate if blocked on a human |
-| `awaiting_review` | green, no feedback yet | park |
+| `reporter_corrected` (→ `loop-gate.md`) | still gated, and the reporter replied with a correction | `rework` per § "A reporter correction IS the human answering" — brief it as settled; the gate stays ON |
+| `awaiting_reporter` (→ `loop-gate.md`) | approved + green, interpretation unconfirmed (`needs-reporter-review`) | `park` — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable` / `reporter_gate_stale`) → `escalate_once`: `issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` ONCE, nothing else — **never a PR comment** |
+| `ci_failing` | a check is red | `fix_ci` — fix on branch, push; escalate after `max-fix-attempts` |
+| `changes_requested` | reviewer wants changes | `address_review` — pr-feedback → fix → push → reply |
+| `review_comments` | unaddressed comments | `address_comments` — pr-feedback (may already be handled) → reply |
+| `ci_pending` | checks running | `park` — re-check next tick |
+| (automerge blocker "behind base", **and it is the only blocker**) | green+approved but the head predates the current base — CI proved code against a base that no longer exists | `sync_no_push` — worker: in `.worktrees/shipflow-loop-pr-<n>`, `pr sync <n> --no-push` (rebase), run the tests, THEN `git push --force-with-lease` — `pr sync` pushes by default, and a clean textual rebase can still fail the build, so never let it push an unverified head. Merge lands next tick on the rebased head (#530). Any other blocker present (`manual` policy, red CI, open threads, unconfirmed intent) → handle/park that first; rebasing a PR the policy can't merge is churn every base advance repeats. Rebase conflicts → the `conflict` protocol. `unsatisfiable: true` → `escalate_once` |
+| `approved_ready` | approved + CI green | `automerge` — `pr automerge` (parks on `manual`; automerge owns the 120s review-settle + pre-merge thread re-read — an immediate 0 is not settled). Residual reviews that land after that window auto-file follow-up issues. |
+| `stale` | green, unreviewed, old | `nudge` the PR; escalate if blocked on a human |
+| `awaiting_review` | green, no feedback yet | `park` |
 
 ## Guardrails
 
