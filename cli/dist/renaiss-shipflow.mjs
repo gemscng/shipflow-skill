@@ -8736,6 +8736,13 @@ var reviewSettleSleep = defaultReviewSettleSleep;
 function isSettleBlocker(b) {
   return b === REVIEW_SETTLE_BLOCKER || b === REVIEW_SETTLE_UNAVAILABLE;
 }
+function allReadySweepExit(evaluated, merged) {
+  return evaluated > 0 && merged === 0 ? 5 : 0;
+}
+function allReadySweepLine(evaluated, merged) {
+  const body = `merged ${merged}/${evaluated} ready PR(s) oldest-first`;
+  return merged < evaluated ? body : `✅ ${body}`;
+}
 async function automergeOnce(ctx, repo, number, opts) {
   const policy = (opts.policy?.trim() || undefined) ?? resolveMergePolicy();
   const staleHours = resolveStalePrHours();
@@ -8974,7 +8981,10 @@ ${opts.body ?? ""}`;
         }
       }
       const merged = results.filter((r2) => r2.merged).length;
-      emit(opts, { allReady: true, evaluated: results.length, merged, results }, () => console.log(`✅ merged ${merged}/${results.length} ready PR(s) oldest-first`), { pretty: true });
+      const evaluated = results.length;
+      emit(opts, { allReady: true, evaluated, merged, results }, () => console.log(allReadySweepLine(evaluated, merged)), { pretty: true });
+      if (allReadySweepExit(evaluated, merged) !== 0)
+        process.exit(5);
       return;
     }
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
