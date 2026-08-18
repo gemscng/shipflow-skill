@@ -2204,6 +2204,41 @@ var init_shipflow_contract_data = __esm(() => {
     readability: {
       $comment: "Deterministic message-readability cap shared across GitHub surfaces: any single line that renders UNFOLDED over this many words is dense prose, not a scannable point — its detail belongs in a folded section. Enforced by the server's readability.VisibleLineWordCap (PR review + triage rendering) and the CLI's ACTION_LINE_WORD_LIMIT (loop escalation lint). ~20-word sentences plus room for a code reference.",
       visibleLineWordCap: 30
+    },
+    packetMarkers: {
+      $comment: "Packet/triage markers the loop-reviewer blocking + neutral tables restate (issue #762). `cli` is today's emitter from packet.ts / project.ts (REVIEW_THREADS_UNAVAILABLE_MARKER, specUnavailableMarker, featureMapSkippedWarning, TRIAGE_UNAVAILABLE_MARKER, featureMapNotApplicableNote, specNotReadableIssueNote, plus the inline missing-brief line), placeholders #N / <repo> / … — no new wording, emitters stay byte-identical this slice. `cell` is today's skill-doc table cell (elided where the table already elided). Drift: scripts/check-degradation-markers.mjs binds contract.cell == fragment == consumer docs, and the CLI functions to contract.cli.",
+      blocking: {
+        reviewThreadsUnavailable: {
+          cli: "⚠️ review threads UNAVAILABLE — unresolved count NOT determined",
+          cell: "⚠️ review threads UNAVAILABLE — unresolved count NOT determined"
+        },
+        specUnavailable: {
+          cli: "⚠️ **Brief NOT loaded — issue #N could not be read.** The brief is UNAVAILABLE, not absent: do NOT judge this PR without it, and do NOT hold the missing brief against the author. Re-run the packet, or read the issue directly.",
+          cell: "⚠️ Brief NOT loaded — issue #N could not be read"
+        },
+        featureMapSkipped: {
+          cli: "⚠️ WARNING shipflow-api feature map unavailable — per-feature evidence coverage NOT checked; packet omits the coverage lines: …",
+          cell: "⚠️ WARNING shipflow-api feature map unavailable … NOT checked"
+        },
+        triageUnavailable: {
+          cli: "⚠️ triage unavailable — ShipFlow context and relatedFiles NOT loaded",
+          cell: "⚠️ triage unavailable — ShipFlow context and relatedFiles NOT loaded"
+        }
+      },
+      neutral: {
+        featureMapNotApplicable: {
+          cli: "NOTE per-feature evidence coverage not applicable — no ShipFlow feature map covers <repo> (cross-repo --repo target); the coverage lines are omitted by design, not by failure.",
+          cell: "NOTE per-feature evidence coverage not applicable — no ShipFlow feature map covers <repo> (cross-repo --repo target)"
+        },
+        specNotReadable: {
+          cli: "NOTE #N is not a readable issue in <repo> — no acceptance brief to load; GitHub answered about it, so nothing went dark (the link is stale or names a PR).",
+          cell: "NOTE #N is not a readable issue in <repo> — no acceptance brief to load"
+        },
+        missingBrief: {
+          cli: "⚠️ **No linked issue/brief found.** Do NOT infer the spec from the diff — reviewing against a self-derived spec is a known silent failure. Flag the missing brief in your verdict.",
+          cell: "⚠️ **No linked issue/brief found.**"
+        }
+      }
     }
   };
 });

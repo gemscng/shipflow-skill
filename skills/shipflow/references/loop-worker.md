@@ -38,12 +38,12 @@ marks inputs it failed to obtain in its own output (not only stderr):
 
 Missing marker = the check ran — never add one by hand. Present marker = never
 a footnote — the reviewer treats any `degraded[]` entry or marker above as
-`request_changes`. Scoped to these markers only — the packet's own ⚠️ (missing
-brief / thin coverage) and two neutral `NOTE` lines are not degradations:
-`NOTE per-feature evidence coverage not applicable — no ShipFlow feature map
-covers <repo> (cross-repo --repo target)` and `NOTE #N is not a readable issue
-in <repo> — no acceptance brief to load` (`--json` `spec.notReadable: true`) —
-judge the stale link on its merits.
+`request_changes`. Scoped to these markers only — the packet's own
+`⚠️ **No linked issue/brief found.**` (thin coverage) and two neutral `NOTE`
+lines are not degradations:
+`NOTE per-feature evidence coverage not applicable — no ShipFlow feature map covers <repo> (cross-repo --repo target)`
+and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
+(`--json` `spec.notReadable: true`) — judge the stale link on its merits.
 
 ## What a fix worker does (one issue, end-to-end)
 1. **Branch** — default: from the repo root, `git fetch origin &&
