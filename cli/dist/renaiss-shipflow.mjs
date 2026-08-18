@@ -6920,731 +6920,15 @@ init_config();
 init_gh();
 init_pr_state();
 init_escalation_format();
-init_shipflow_contract_data();
 init_helpers();
-init_pr_state();
-function safeUnresolvedThreadCount(fetchThreads) {
-  try {
-    return { count: fetchThreads().filter((t) => !t.isResolved).length, degraded: false };
-  } catch {
-    return { count: 0, degraded: true };
-  }
-}
-function gateClearanceReadFor(prNumber, intentBlocked, read) {
-  return intentBlocked ? read(prNumber) : undefined;
-}
-function hasReporterReviewLabel(pr) {
-  return (pr.labels ?? []).some((l) => l.name === SHIPFLOW_CONTRACT.labels.names.needsReporterReview);
-}
-function foreignPrRow(entry, cl) {
-  const { pr, trusted, distrust } = entry;
-  return {
-    number: pr.number,
-    title: pr.title,
-    branch: pr.headRefName,
-    base: pr.baseRefName ?? "",
-    url: pr.url,
-    draft: pr.isDraft,
-    reviewDecision: pr.reviewDecision || "none",
-    unresolvedThreads: 0,
-    closesIssues: (pr.closingIssuesReferences ?? []).map((i) => i.number),
-    state: cl.state,
-    ciState: cl.ciState,
-    approved: cl.approved,
-    ageHours: Math.round(cl.ageHours),
-    needsAttention: trusted && cl.needsAction && cl.state === "conflict",
-    reasons: trusted ? cl.reasons : [...cl.reasons, `untrusted_head:${distrust}`],
-    foreign: true,
-    author: pr.author?.login ?? "",
-    trustedHead: trusted,
-    ...trusted ? {} : { distrust, humanOnly: true }
-  };
-}
-function minePrRow(pr, cl, ctx) {
-  const corrections = cl.state === "reporter_corrected" ? reporterCorrectionsOn(pr) : [];
-  const closesIssues = (pr.closingIssuesReferences ?? []).map((i) => i.number);
-  const parentIssues = linkedIssueNumbers(pr);
-  let escalateOnceUnknown = false;
-  const owedReason = parentIssues.length > 0 ? escalationReasonsOwed(cl).find((r) => {
-    const filed = ctx.parentWasEscalatedFor(parentIssues, pr.number, r);
-    if (filed === "unknown")
-      escalateOnceUnknown = true;
-    return filed === false;
-  }) ?? null : null;
-  const escalateOnce = owedReason !== null;
-  return {
-    number: pr.number,
-    title: pr.title,
-    branch: pr.headRefName,
-    base: pr.baseRefName ?? "",
-    url: pr.url,
-    draft: pr.isDraft,
-    reviewDecision: pr.reviewDecision || "none",
-    unresolvedThreads: ctx.unresolvedThreads,
-    closesIssues,
-    state: cl.state,
-    ciState: cl.ciState,
-    approved: cl.approved,
-    ageHours: Math.round(cl.ageHours),
-    needsAttention: cl.needsAction || escalateOnce,
-    reasons: cl.reasons,
-    ...cl.gateAgeHours !== undefined ? { gateAgeHours: Math.round(cl.gateAgeHours) } : {},
-    ...corrections.length ? {
-      correction: reporterCorrectionRow(corrections[0]),
-      corrections: corrections.map(reporterCorrectionRow),
-      parentNeedsHuman: ctx.parentIsEscalated(parentIssues)
-    } : {},
-    ...escalateOnce ? { escalateOnce: true, escalateOnceReason: owedReason, parentNeedsHuman: ctx.parentIsEscalated(parentIssues) } : {},
-    ...ctx.degraded ? { threadsDegraded: true } : {},
-    ...escalateOnceUnknown ? { escalateOnceUnknown: true } : {},
-    ...ctx.degraded || escalateOnceUnknown ? { degraded: true } : {}
-  };
-}
-function actionableConflicts(prs) {
-  return prs.filter((p) => p.state === "conflict" && !p.humanOnly).length;
-}
-function escalateOnceNote(row) {
-  if (row.reasons.includes(REWORK_CEILING_REASON))
-    return "\uD83C\uDD98 escalate once (no rework left)";
-  if (row.reasons.includes(CORRECTION_UNREADABLE_REASON))
-    return "\uD83C\uDD98 escalate once (correction unreadable)";
-  if (row.reasons.includes(REPORTER_GATE_STALE_REASON)) {
-    return `\uD83C\uDD98 escalate once (gate stale — waiting ${Math.round(row.gateAgeHours ?? 0)}h)`;
-  }
-  return "\uD83C\uDD98 escalate once";
-}
-var PARKED_STATES = ["awaiting_review", "ci_pending", "awaiting_reporter"];
-function parkedCount(prs) {
-  return prs.filter((p) => p.needsAttention !== true && (PARKED_STATES.includes(p.state) || p.foreign === true && p.state === "reporter_corrected")).length;
-}
-function actionableCorrections(prs) {
-  return prs.filter((p) => p.state === "reporter_corrected" && p.foreign !== true).length;
-}
-function actionableWip(prs) {
-  return prs.filter((p) => p.foreign !== true && p.state !== "awaiting_reporter").length;
-}
-var GC_LOOKUP_BUDGET_MS = 20000;
-function gcMergedLocalBranches(repo, deps = {}) {
-  const {
-    matches = localRepoMatches,
-    candidates = localGcCandidates,
-    lookup = ghPRMergedByHead,
-    cleanup = cleanupMergedLocalBranch,
-    isDirty = branchWorktreeDirty,
-    isAncestor = isAncestorOfMergedHead,
-    stillExists = localBranchExists,
-    nowMs = Date.now
-  } = deps;
-  const empty = { cleaned: [], unpushed: [], dirty: [], failed: [], lookupsSkipped: 0 };
-  try {
-    if (!matches(repo))
-      return empty;
-    const branches = candidates();
-    if (!branches.length)
-      return empty;
-    const deadline = nowMs() + GC_LOOKUP_BUDGET_MS;
-    let lookupsSkipped = 0;
-    const mergedByHead = new Map;
-    for (const b of branches) {
-      if (nowMs() > deadline) {
-        lookupsSkipped++;
-        continue;
-      }
-      try {
-        const pr = lookup(repo, b.name);
-        if (pr)
-          mergedByHead.set(b.name, pr);
-      } catch {}
-    }
-    const plan = planMergedBranchGc(branches, mergedByHead);
-    const cleanable = [...plan.clean];
-    const unpushed = [];
-    for (const u of plan.unpushed) {
-      const tip = branches.find((b) => b.name === u.name)?.tip ?? "";
-      const head = mergedByHead.get(u.name)?.headRefOid ?? "";
-      if (tip && head && isAncestor(tip, head))
-        cleanable.push(u);
-      else
-        unpushed.push(u);
-    }
-    const cleaned = [];
-    const dirty = [];
-    const failed = [];
-    for (const c of cleanable) {
-      if (isDirty(c.name)) {
-        dirty.push(c);
-        continue;
-      }
-      cleanup(c.name);
-      if (stillExists(c.name))
-        failed.push(c);
-      else
-        cleaned.push(c);
-    }
-    return { cleaned, unpushed, dirty, failed, lookupsSkipped };
-  } catch {
-    return empty;
-  }
-}
-var STATE_ICONS = {
-  reporter_corrected: "\uD83D\uDCE3",
-  awaiting_reporter: "\uD83D\uDE4B",
-  conflict: "\uD83D\uDD00",
-  ci_failing: "\uD83D\uDD34",
-  changes_requested: "✏️",
-  review_comments: "\uD83D\uDCAC",
-  ci_pending: "⏳",
-  approved_ready: "✅",
-  stale: "\uD83D\uDD70️",
-  awaiting_review: "·"
-};
-function registerInboxCommand(program2) {
-  program2.command("inbox").description("Reconciler view: open PRs (by state: conflict / ci_failing / changes_requested / approved_ready / stale …) and in-progress issues with new comments. With the OPT-IN repo-wide conflict sweep (`config set conflict-sweep true`, or --conflict-sweep) it also lists conflicted PRs by other authors — trusted same-repo heads only (issue #393)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Force the repo-wide foreign-PR conflict sweep on for this run (default: the `conflict-sweep` config key, which is off)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
-    const { project } = await loadCtx(program2);
-    const repo = opts.repo ?? project.repoFullName;
-    const me = ghCurrentLogin();
-    const staleHours = resolveStalePrHours();
-    const sweepEnabled = opts.conflictSweep === true || resolveConflictSweep();
-    const maxReworks = resolveMaxFixAttempts();
-    let escalatedIssues = null;
-    const parentIsEscalated = (issueNumbers) => {
-      escalatedIssues ??= new Set(ghIssueListByLabel(repo, NEEDS_HUMAN_LABEL).map((i) => i.number));
-      return issueNumbers.some((n) => escalatedIssues.has(n));
-    };
-    const parentMarkers = new Map;
-    const parentReadFailed = new Set;
-    const parentWasEscalatedFor = (issueNumbers, prNumber, reason) => {
-      let unknown = false;
-      const filed = issueNumbers.some((n) => {
-        let bodies = parentMarkers.get(n);
-        if (!bodies) {
-          if (parentReadFailed.has(n)) {
-            unknown = true;
-            return false;
-          }
-          try {
-            bodies = ghIssueComments(repo, n).filter((c) => c.viewerDidAuthor !== false).map((c) => c.body);
-          } catch {
-            parentReadFailed.add(n);
-            unknown = true;
-            console.warn(`⚠️  #${n}: could not read comments for the escalate-once key — PR #${prNumber} holds its escalation until the next tick.`);
-            return false;
-          }
-          parentMarkers.set(n, bodies);
-        }
-        return bodies.some((b) => hasEscalateOnceMarker(b, prNumber, reason));
-      });
-      if (filed)
-        return true;
-      return unknown ? "unknown" : false;
-    };
-    const gc = gcMergedLocalBranches(repo);
-    for (const c of gc.cleaned) {
-      console.warn(`\uD83E\uDDF9 ${c.name}: PR #${c.prNumber} merged externally — local branch/worktree cleaned.`);
-    }
-    for (const u of gc.unpushed) {
-      console.warn(`⚠️  ${u.name}: PR #${u.prNumber} merged, but the local tip has commits the PR never saw — kept (unpushed work).`);
-    }
-    for (const d of gc.dirty) {
-      console.warn(`⚠️  ${d.name}: PR #${d.prNumber} merged, but its worktree has uncommitted edits — kept (removal would destroy them).`);
-    }
-    for (const f of gc.failed) {
-      console.warn(`⚠️  ${f.name}: PR #${f.prNumber} merged but cleanup could not remove the branch (busy worktree?) — will retry next tick.`);
-    }
-    if (gc.lookupsSkipped > 0) {
-      console.warn(`⏱ merged-branch GC: ${gc.lookupsSkipped} candidate lookup(s) deferred to the next tick (time budget).`);
-    }
-    const minePrs = ghPRListMine(repo);
-    const prs = minePrs.map((pr) => {
-      const { count: unresolvedThreads, degraded: degraded2 } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
-      const intentBlocked = hasReporterReviewLabel(pr);
-      const gateClearedAt = gateClearanceReadFor(pr.number, intentBlocked, (n) => ghIntentGateLastClearedAt(repo, n));
-      const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks, gateClearedAt, headSha: pr.headRefOid });
-      return minePrRow(pr, cl, { unresolvedThreads, degraded: degraded2, parentIsEscalated, parentWasEscalatedFor });
-    });
-    const issues = ghIssueListByLabel(repo, IN_PROGRESS_LABEL).map((i) => {
-      const reply = issueNeedsReply(i.comments ?? [], me);
-      return {
-        number: i.number,
-        title: i.title,
-        url: i.url,
-        newComment: reply ? { author: reply.author?.login, at: reply.createdAt } : null,
-        needsAttention: !!reply
-      };
-    });
-    if (sweepEnabled) {
-      try {
-        for (const entry of foreignConflictedPRs(minePrs, ghPRListAll(repo), me, { enabled: true })) {
-          const foreignGated = hasReporterReviewLabel(entry.pr);
-          const gateClearedAt = gateClearanceReadFor(entry.pr.number, foreignGated, (n) => ghIntentGateLastClearedAt(repo, n));
-          const cl = classifyPR(entry.pr, me, { staleHours, intentBlocked: foreignGated, maxReworks, gateClearedAt, headSha: entry.pr.headRefOid });
-          prs.push(foreignPrRow(entry, cl));
-        }
-      } catch {}
-    }
-    const count = (s) => prs.filter((p) => p.state === s).length;
-    const degraded = prs.filter((p) => p.degraded).length;
-    const threadsDegraded = prs.filter((p) => p.threadsDegraded).length;
-    const degradedInputs = [
-      ...threadsDegraded ? ["github-graphql"] : [],
-      ...prs.some((p) => p.escalateOnceUnknown) ? ["escalate-once-markers"] : []
-    ];
-    const summary = {
-      prsNeedingAttention: prs.filter((p) => p.needsAttention).length,
-      issuesNeedingAttention: issues.filter((i) => i.needsAttention).length,
-      readyToMerge: count("approved_ready"),
-      ciFailing: count("ci_failing"),
-      changesRequested: count("changes_requested"),
-      conflicts: actionableConflicts(prs),
-      stale: count("stale"),
-      reporterCorrected: actionableCorrections(prs),
-      parked: parkedCount(prs),
-      degraded,
-      degradedInputs,
-      escalateOnceUnknown: prs.filter((p) => p.escalateOnceUnknown).length,
-      conflictSweep: sweepEnabled,
-      humanOnlyConflicts: prs.filter((p) => p.humanOnly).length,
-      wipActionable: actionableWip(prs),
-      gcCleaned: gc.cleaned.length,
-      gcUnpushedKept: gc.unpushed.length + gc.dirty.length,
-      gcFailed: gc.failed.length
-    };
-    emit(opts, withProvenance({ repo, prs, issues, summary, gc }), () => {
-      console.log(`\uD83D\uDCE5 Inbox for ${repo}`);
-      console.log(`Needs action: ${meter(summary.prsNeedingAttention, prs.length)} PRs · ${meter(summary.issuesNeedingAttention, issues.length)} issues · ✅ ${summary.readyToMerge} ready to merge`);
-      if (threadsDegraded)
-        console.log(`⚠️  ${threadsDegraded} PR(s) with partial review-thread data (fetch blipped) — marked "degraded".`);
-      if (summary.escalateOnceUnknown) {
-        console.log(`⚠️  ${summary.escalateOnceUnknown} PR(s) parked on an escalate-once key that could NOT be read — this inbox is INCOMPLETE, re-read before concluding there is no work.`);
-      }
-      if (summary.humanOnlyConflicts) {
-        console.log(`\uD83D\uDD12 ${summary.humanOnlyConflicts} conflicted PR(s) on an untrusted head (fork / non-collaborator) — reported only, never checked out by the loop.`);
-      }
-      if (prs.length) {
-        console.log("");
-        const rows = prs.map((p) => [
-          `${STATE_ICONS[p.state] ?? "·"} #${p.number}`,
-          p.state,
-          `ci:${p.ciState}`,
-          `${p.ageHours}h`,
-          p.title + (p.correction ? ` \uD83D\uDCE3 @${p.correction.author} corrected the reading` : "") + (p.corrections && p.corrections.length > 1 ? ` (+${p.corrections.length - 1} more unanswered)` : "") + (p.escalateOnce ? ` ${escalateOnceNote(p)}` : "") + (p.parentNeedsHuman ? " (parent is needs-human)" : "") + (p.degraded ? " ⚠️ degraded" : "") + (p.humanOnly ? ` \uD83D\uDD12 ${p.distrust} — human only` : "")
-        ]);
-        for (const l of renderTable(["PR", "State", "CI", "Age", "Title"], rows))
-          console.log(`  ${l}`);
-      }
-      if (issues.length) {
-        console.log("");
-        const rows = issues.map((i) => [
-          `${i.needsAttention ? "\uD83D\uDCAC" : "·"} #${i.number}`,
-          i.newComment ? `@${i.newComment.author}` : "—",
-          i.title
-        ]);
-        for (const l of renderTable(["Issue", "New comment", "Title"], rows))
-          console.log(`  ${l}`);
-      }
-    }, { pretty: true });
-  }));
-}
-
-// src/commands/features.ts
-init_helpers();
-function registerFeaturesCommand(program2) {
-  program2.command("features").description("ShipFlow's feature map for this project (features → file paths/test info) — the reviewer's whole-system view").option("--json", "Output the raw feature map").option("--yaml", "Output YAML").option("--category <name>", "Filter to one category").action(runAction(async (opts) => {
-    const { creds, client, project } = await loadCtx(program2);
-    const fm = await client.getFeatureMapping(creds.org, project.projectId);
-    const features = fm.features ?? {};
-    const keys = Object.keys(features).filter((k) => !opts.category || (features[k].category ?? "") === opts.category);
-    const jsonOut = opts.category ? { ...fm, features: Object.fromEntries(keys.map((k) => [k, features[k]])) } : fm;
-    emit(opts, jsonOut, () => {
-      if (!keys.length) {
-        console.log("No feature map for this project yet. Generate it from the ShipFlow dashboard.");
-        return;
-      }
-      const byCat = new Map;
-      for (const k of keys) {
-        const cat = features[k].category || "uncategorized";
-        if (!byCat.has(cat))
-          byCat.set(cat, []);
-        byCat.get(cat).push(k);
-      }
-      console.log(`\uD83D\uDDFA️  Feature map — ${keys.length} feature(s)${fm.lastUpdated ? ` (updated ${fm.lastUpdated})` : ""}`);
-      for (const [cat, ks] of [...byCat].sort((a, b) => a[0].localeCompare(b[0]))) {
-        console.log(`
-${cat}`);
-        const rows = ks.sort().map((k) => {
-          const f = features[k];
-          const paths = f.paths ?? [];
-          const shown = paths.length ? paths.slice(0, 3).join(", ") + (paths.length > 3 ? " …" : "") : "";
-          return [f.name || k, f.test_priority ?? "", shown];
-        });
-        for (const l of renderTable(["Feature", "Priority", "Paths"], rows))
-          console.log(`  ${l}`);
-      }
-    }, { pretty: true });
-  }));
-}
-
-// src/commands/priorities.ts
-init_helpers();
-
-// src/priorities.ts
-init_sh();
-import { existsSync as existsSync3, readFileSync as readFileSync4 } from "node:fs";
-import { join as join4 } from "node:path";
-var PRIORITIES_DOC_RELPATH = "docs/PRIORITIES.md";
-function tableCells(line) {
-  const t = line.trim();
-  if (!t.startsWith("|") || !t.endsWith("|") || t.length < 2)
-    return null;
-  return t.slice(1, -1).split("|").map((c) => c.trim());
-}
-var isDividerRow = (cells) => cells.every((c) => /^:?-{3,}:?$/.test(c));
-function parseWorkClasses(markdown) {
-  const lines = markdown.split(`
-`);
-  let inTable = false;
-  const classes = [];
-  for (const line of lines) {
-    const cells = tableCells(line);
-    if (!cells) {
-      if (inTable && classes.length)
-        break;
-      inTable = false;
-      continue;
-    }
-    if (!inTable) {
-      if (cells.some((c) => c.toLowerCase().replace(/\s+/g, " ").includes("work class")))
-        inTable = true;
-      continue;
-    }
-    if (isDividerRow(cells))
-      continue;
-    const rawRank = cells[0] ?? "";
-    if (!/^\d+$/.test(rawRank))
-      continue;
-    classes.push({
-      rank: Number.parseInt(rawRank, 10),
-      workClass: cells[1] ?? "",
-      wipShare: cells[2] ?? "",
-      notes: cells[3] ?? ""
-    });
-  }
-  return classes;
-}
-function repoRoot() {
-  try {
-    return _exec("git rev-parse --show-toplevel", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim() || process.cwd();
-  } catch {
-    return process.cwd();
-  }
-}
-function loadPrioritiesDoc(root = repoRoot()) {
-  const path = join4(root, PRIORITIES_DOC_RELPATH);
-  if (!existsSync3(path))
-    return { found: false, path, classes: [] };
-  const classes = parseWorkClasses(readFileSync4(path, "utf8"));
-  if (!classes.length) {
-    return {
-      found: true,
-      path,
-      classes,
-      warning: "doc exists but no ordered work-class table parsed — treat as off-doc (escalate as today)"
-    };
-  }
-  return { found: true, path, classes };
-}
-
-// src/commands/priorities.ts
-function registerPrioritiesCommand(program2) {
-  program2.command("priorities").description(`Standing priorities doc (${PRIORITIES_DOC_RELPATH}) consulted at loop intake — greenlit work classes + WIP share (human-edited only)`).option("--json", "Output the parsed doc as JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
-    const doc = loadPrioritiesDoc();
-    emit(opts, doc, () => {
-      if (!doc.found) {
-        console.log(`No standing priorities doc at ${PRIORITIES_DOC_RELPATH} — loop intake escalates product-priority sign-off as before.`);
-        return;
-      }
-      if (doc.warning) {
-        console.log(`⚠️  ${doc.warning}`);
-        console.log(`   ${doc.path}`);
-        return;
-      }
-      console.log(`\uD83D\uDCCB Standing priorities — ${doc.classes.length} greenlit work class(es) (${PRIORITIES_DOC_RELPATH}, human-edited only)`);
-      const rows = doc.classes.map((c) => [String(c.rank), c.workClass, c.wipShare, c.notes]);
-      for (const l of renderTable(["#", "Work class", "WIP share", "Notes"], rows))
-        console.log(`  ${l}`);
-      console.log(`
-Greenlit class + normal slice → intake may proceed; deploy-blast-radius work ALWAYS needs per-item sign-off; off-doc work escalates as today (#211).`);
-    }, { pretty: true });
-  }));
-}
-
-// src/commands/config.ts
-init_config();
-init_helpers();
-var MERGE_POLICIES2 = ["manual", "auto-on-green", "auto-timeout"];
-var SETTINGS = [
-  {
-    key: "auto-issue",
-    field: "autoIssue",
-    set: (v, c) => String(c.autoIssue = parseBoolStrict("auto-issue", v)),
-    effective: resolveAutoIssue
-  },
-  {
-    key: "live-reload",
-    field: "liveReload",
-    set: (v, c) => String(c.liveReload = parseBoolStrict("live-reload", v)),
-    effective: resolveLiveReload
-  },
-  {
-    key: "require-ci",
-    field: "requireCi",
-    set: (v, c) => String(c.requireCi = parseBoolStrict("require-ci", v)),
-    effective: resolveRequireCi
-  },
-  {
-    key: "merge-policy",
-    field: "mergePolicy",
-    set: (v, c) => {
-      const p = v.trim();
-      if (!MERGE_POLICIES2.includes(p))
-        throw new Error(`merge-policy must be one of: ${MERGE_POLICIES2.join(", ")}`);
-      return c.mergePolicy = p;
-    },
-    effective: resolveMergePolicy
-  },
-  {
-    key: "max-fix-attempts",
-    field: "maxFixAttempts",
-    set: (v, c) => String(c.maxFixAttempts = parseIntStrict("max-fix-attempts", v)),
-    effective: resolveMaxFixAttempts
-  },
-  {
-    key: "wip-limit",
-    field: "wipLimit",
-    set: (v, c) => String(c.wipLimit = parseIntStrict("wip-limit", v)),
-    effective: resolveWipLimit
-  },
-  {
-    key: "stale-pr-hours",
-    field: "stalePrHours",
-    set: (v, c) => String(c.stalePrHours = parseIntStrict("stale-pr-hours", v)),
-    effective: resolveStalePrHours
-  },
-  {
-    key: "bug-hunt",
-    field: "bugHunt",
-    set: (v, c) => String(c.bugHunt = parseBoolStrict("bug-hunt", v)),
-    effective: resolveBugHunt
-  },
-  {
-    key: "bug-hunt-cap",
-    field: "bugHuntCap",
-    set: (v, c) => String(c.bugHuntCap = parseIntStrict("bug-hunt-cap", v)),
-    effective: resolveBugHuntCap
-  },
-  {
-    key: "require-review",
-    field: "requireReview",
-    set: (v, c) => String(c.requireReview = parseBoolStrict("require-review", v)),
-    effective: resolveRequireReview
-  },
-  {
-    key: "signoff-owner",
-    field: "signoffOwner",
-    set: (v, c) => c.signoffOwner = v.trim().replace(/^@/, ""),
-    effective: resolveSignoffOwner
-  },
-  {
-    key: "conflict-sweep",
-    field: "conflictSweep",
-    set: (v, c) => String(c.conflictSweep = parseBoolStrict("conflict-sweep", v)),
-    effective: resolveConflictSweep
-  },
-  {
-    key: "pickup-scope",
-    field: "pickupScope",
-    set: (v, c) => {
-      const m = v.trim();
-      if (!PICKUP_SCOPES.includes(m))
-        throw new Error(`pickup-scope must be one of: ${PICKUP_SCOPES.join(", ")}`);
-      return c.pickupScope = m;
-    },
-    effective: resolvePickupScope
-  },
-  {
-    key: "intent-gate",
-    field: "intentGate",
-    set: (v, c) => {
-      const m = v.trim();
-      if (!INTENT_GATE_MODES.includes(m))
-        throw new Error(`intent-gate must be one of: ${INTENT_GATE_MODES.join(", ")}`);
-      return c.intentGate = m;
-    },
-    effective: resolveIntentGateMode
-  },
-  {
-    key: "intake-approval",
-    field: "intakeApproval",
-    set: (v, c) => {
-      const m = v.trim().toLowerCase();
-      if (!INTAKE_APPROVAL_MODES.includes(m))
-        throw new Error(`intake-approval must be one of: ${INTAKE_APPROVAL_MODES.join(", ")}`);
-      return c.intakeApproval = m;
-    },
-    effective: resolveIntakeApproval
-  },
-  {
-    key: "loop-worker-model",
-    field: "loopWorkerModel",
-    set: (v, c) => c.loopWorkerModel = v.trim(),
-    effective: resolveLoopWorkerModel
-  },
-  {
-    key: "cli-drift-poll-seconds",
-    field: "cliDriftPollSeconds",
-    set: (v, c) => String(c.cliDriftPollSeconds = parseIntStrict("cli-drift-poll-seconds", v)),
-    effective: resolveCliDriftPollSeconds
-  },
-  {
-    key: "app-slug",
-    field: "appSlug",
-    set: (v, c) => {
-      const s = v.trim().replace(/^@/, "");
-      if (!isValidAppSlug(s))
-        throw new Error(`app-slug must be a GitHub App slug (letters, digits, single hyphens), got: ${v}`);
-      return c.appSlug = s;
-    },
-    effective: () => resolveIntentGateAuditAuthorSlug().slug
-  }
-];
-var byKey = new Map(SETTINGS.map((s) => [s.key, s]));
-var KEYS = SETTINGS.map((s) => s.key);
-function unknownKey(key, json) {
-  const message = `Unknown key: ${key} (supported: ${KEYS.join(", ")})`;
-  if (json)
-    console.log(JSON.stringify({ error: message }));
-  else
-    console.error(message);
-  process.exit(1);
-}
-function registerConfigCommand(program2) {
-  const config = program2.command("config").description("Get/set ShipFlow CLI preferences");
-  config.command("set <key> <value>").description(`Set a preference. Keys: ${KEYS.join(", ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((key, value, opts) => {
-    const s = byKey.get(key) ?? unknownKey(key, opts.json);
-    const cfg = loadConfig();
-    let echo;
-    try {
-      echo = s.set(value, cfg);
-    } catch (e) {
-      if (opts.json) {
-        console.log(JSON.stringify({ error: e.message }));
-      } else {
-        console.error(e.message);
-      }
-      process.exit(1);
-    }
-    saveConfig(cfg);
-    emit(opts, { [s.field]: s.effective() ?? null }, () => console.log(`${key} = ${echo}`));
-  }));
-  config.command("get <key>").description("Read a preference (env vars override stored config)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((key, opts) => {
-    const s = byKey.get(key) ?? unknownKey(key, opts.json);
-    const v = s.effective();
-    emit(opts, { [s.field]: v ?? null }, () => console.log(v === undefined ? "unset" : String(v)));
-  }));
-  config.command("list").description("Show all preferences (effective values)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((opts) => {
-    const obj = {};
-    for (const s of SETTINGS)
-      obj[s.field] = s.effective() ?? null;
-    emit(opts, obj, () => {
-      const rows = SETTINGS.map((s) => {
-        const v = s.effective();
-        return [s.key, v === undefined ? "unset" : String(v)];
-      });
-      for (const l of renderTable(["Key", "Value"], rows))
-        console.log(l);
-    }, { pretty: true });
-  }));
-}
-
-// src/commands/claims.ts
-init_helpers();
-function registerClaimsCommand(program2) {
-  program2.command("claims").description("List active agent claims (who is working on what)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
-    const { creds, client, project } = await loadCtx(program2);
-    const claims = await client.listClaims(creds.org, project.projectId);
-    emit(opts, { claims }, () => {
-      if (claims.length === 0) {
-        console.log("No active claims — every open issue is up for grabs.");
-        return;
-      }
-      const rows = claims.map((c) => [
-        `#${c.issueNumber}`,
-        c.repo,
-        c.agent ? `${c.actor} (${c.agent})` : c.actor,
-        c.expiresAt
-      ]);
-      for (const l of renderTable(["Issue", "Repo", "Actor", "Expires"], rows))
-        console.log(l);
-    }, { pretty: true });
-  }));
-}
-
-// src/commands/capability.ts
-init_helpers();
-var CAPABILITY_CLASSES = ["capability", "access", "secret", "policy"];
-var CAPABILITY_STATUSES = ["open", "granted", "declined"];
-function registerCapabilityCommand(program2) {
-  const capability = program2.command("capability").description("Standing queue for capabilities/access/secrets/policy the agent can't grant itself");
-  capability.command("request").description("File a capability request into the standing queue").requiredOption("--class <class>", `One of: ${CAPABILITY_CLASSES.join(" | ")}`).requiredOption("--title <title>", "Short summary of the ask").requiredOption("--why <why>", "Why the agent needs it (the blocker it unblocks)").option("--issue <number>", "Escalating issue number this ask came from").option("--repo <fullname>", "Repo the ask is scoped to (default: the active project's)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
-    if (!CAPABILITY_CLASSES.includes(opts.class)) {
-      throw new Error(`invalid --class ${opts.class}; expected one of ${CAPABILITY_CLASSES.join(", ")}`);
-    }
-    const { creds, client, project } = await loadCtx(program2);
-    const issueNumber = opts.issue ? parseInt(opts.issue, 10) : undefined;
-    if (opts.issue && Number.isNaN(issueNumber))
-      throw new Error(`invalid --issue ${opts.issue}`);
-    const created = await client.createCapabilityRequest(creds.org, project.projectId, {
-      class: opts.class,
-      title: opts.title,
-      why: opts.why,
-      repo: opts.repo ?? project.repoFullName,
-      issueNumber
-    });
-    emit(opts, created, () => {
-      console.log(`Filed ${created.class} request ${created.id} (${created.status}): ${created.title}`);
-    }, { pretty: true });
-  }));
-  capability.command("list").description("List capability requests in the standing queue (newest first)").option("--status <status>", `Filter by status: ${CAPABILITY_STATUSES.join(" | ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
-    if (opts.status && !CAPABILITY_STATUSES.includes(opts.status)) {
-      throw new Error(`invalid --status ${opts.status}; expected one of ${CAPABILITY_STATUSES.join(", ")}`);
-    }
-    const { creds, client, project } = await loadCtx(program2);
-    const requests = await client.listCapabilityRequests(creds.org, project.projectId, opts.status);
-    emit(opts, { capabilityRequests: requests }, () => {
-      if (requests.length === 0) {
-        console.log("No capability requests — the queue is clear.");
-        return;
-      }
-      const rows = requests.map((c) => [
-        c.id,
-        c.class,
-        c.status,
-        c.issueNumber ? `#${c.issueNumber}` : "—",
-        c.title
-      ]);
-      for (const l of renderTable(["ID", "Class", "Status", "Issue", "Title"], rows))
-        console.log(l);
-    }, { pretty: true });
-  }));
-}
 
 // src/commands/pr.ts
 init_config();
 init_gh();
 import { execSync as execSync4 } from "node:child_process";
-import { closeSync, existsSync as existsSync4, lstatSync, openSync, readFileSync as readFileSync5, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync, existsSync as existsSync3, lstatSync, openSync, readFileSync as readFileSync4, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { createHash as createHash2 } from "node:crypto";
-import { join as join5 } from "node:path";
+import { join as join4 } from "node:path";
 import { hostname as hostname3 } from "node:os";
 
 // src/review-contract-data.ts
@@ -8515,10 +7799,19 @@ init_project();
 var LINT_MODES = ["warn", "strict"];
 var APPROVED_LABEL = SHIPFLOW_CONTRACT.labels.names.shipflowApproved;
 var REPORTER_REVIEW_LABEL = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
-function evalIntentGate(repo, number, prView) {
+function evalIntentGate(repo, number, prView, reads = {}) {
   const hasLabel = (prView.labels ?? []).some((l) => l.name === REPORTER_REVIEW_LABEL);
-  const signal = resolveIntentGateMode() === "trusted" ? hasExplicitInterpretationSignal(prView.body ?? "") : hasInterpretationSignal(prView.body ?? "");
-  const everCleared = signal && !hasLabel ? intentGateEverCleared(ghIntentGateClearance(repo, number, REPORTER_REVIEW_LABEL)) : false;
+  const mode = (reads.mode ?? resolveIntentGateMode)();
+  const signal = mode === "trusted" ? hasExplicitInterpretationSignal(prView.body ?? "") : hasInterpretationSignal(prView.body ?? "");
+  let everCleared = false;
+  if (signal && !hasLabel) {
+    try {
+      const evidence = (reads.clearance ?? (() => ghIntentGateClearance(repo, number, REPORTER_REVIEW_LABEL)))();
+      everCleared = intentGateEverCleared(evidence);
+    } catch {
+      everCleared = false;
+    }
+  }
   const facts = { signal, hasLabel, everCleared };
   return { ...intentGate(facts), blockedBy: intentGateBlockedBy(facts) };
 }
@@ -8986,6 +8279,18 @@ ${opts.body ?? ""}`;
   pr.command("merge <number>").description("Merge a PR; signals ShipFlow (no downstream cascade)").option("--mode <mode>", "squash | merge | rebase", "squash").option("--keep-branch", "Don't delete the head branch").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    const prView = ghPRView(repo, number);
+    const gate = evalIntentGate(repo, number, prView);
+    if (gate.applyLabel) {
+      armIntentGate(repo, number, gate, liveIntentGateWriters);
+    }
+    if (gate.blocked) {
+      const blockers = [
+        gate.blockedBy ? `${INTENT_BLOCKER} (${INTENT_BLOCKED_BY_DETAIL[gate.blockedBy]})` : INTENT_BLOCKER
+      ];
+      emit(opts, { number, merged: false, blockers }, () => console.error(`⛔ Not merging PR #${number}: ${blockers[0]}`));
+      process.exit(5);
+    }
     const result = ghPRMerge(repo, number, opts.mode, !opts.keepBranch);
     if (!opts.keepBranch)
       cleanupMergedLocalBranch(result.headBranch);
@@ -9355,7 +8660,7 @@ ${opts.body ?? ""}`;
     let rawFindings;
     let stdinWatch = null;
     if (opts.findings && opts.findings !== "-")
-      rawFindings = readFileSync5(opts.findings, "utf8");
+      rawFindings = readFileSync4(opts.findings, "utf8");
     else if (opts.findings === "-")
       rawFindings = await readStdin2();
     else {
@@ -9834,9 +9139,9 @@ function rebaseInProgress() {
   } catch {
     return null;
   }
-  if (existsSync4(join5(gitDir, "rebase-merge")))
+  if (existsSync3(join4(gitDir, "rebase-merge")))
     return "rebase-merge";
-  if (existsSync4(join5(gitDir, "rebase-apply")))
+  if (existsSync3(join4(gitDir, "rebase-apply")))
     return "rebase-apply";
   return null;
 }
@@ -9854,7 +9159,7 @@ function rebaseOnto() {
     return null;
   try {
     const gitDir = execSync4("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
-    const onto = readFileSync5(join5(gitDir, state, "onto"), "utf8").trim();
+    const onto = readFileSync4(join4(gitDir, state, "onto"), "utf8").trim();
     return onto && refExists(onto) ? onto : null;
   } catch {
     return null;
@@ -9921,6 +9226,730 @@ function dropApprovedLabelIfNeeded(i, remove) {
     return false;
   remove();
   return true;
+}
+
+// src/commands/inbox.ts
+init_pr_state();
+function safeUnresolvedThreadCount(fetchThreads) {
+  try {
+    return { count: fetchThreads().filter((t) => !t.isResolved).length, degraded: false };
+  } catch {
+    return { count: 0, degraded: true };
+  }
+}
+function gateClearanceReadFor(prNumber, intentBlocked, read) {
+  return intentBlocked ? read(prNumber) : undefined;
+}
+function inboxIntentBlocked(repo, pr) {
+  const gate = evalIntentGate(repo, pr.number, pr);
+  if (gate.applyLabel) {
+    const arm = armIntentGate(repo, pr.number, gate, liveIntentGateWriters);
+    if (!arm.armed) {
+      console.warn(`⚠️  ${GATE_ARM_BLOCKER} on PR #${pr.number}: ${arm.gateArmError ?? "unknown"}`);
+    }
+  }
+  return gate.blocked;
+}
+function foreignPrRow(entry, cl) {
+  const { pr, trusted, distrust } = entry;
+  return {
+    number: pr.number,
+    title: pr.title,
+    branch: pr.headRefName,
+    base: pr.baseRefName ?? "",
+    url: pr.url,
+    draft: pr.isDraft,
+    reviewDecision: pr.reviewDecision || "none",
+    unresolvedThreads: 0,
+    closesIssues: (pr.closingIssuesReferences ?? []).map((i) => i.number),
+    state: cl.state,
+    ciState: cl.ciState,
+    approved: cl.approved,
+    ageHours: Math.round(cl.ageHours),
+    needsAttention: trusted && cl.needsAction && cl.state === "conflict",
+    reasons: trusted ? cl.reasons : [...cl.reasons, `untrusted_head:${distrust}`],
+    foreign: true,
+    author: pr.author?.login ?? "",
+    trustedHead: trusted,
+    ...trusted ? {} : { distrust, humanOnly: true }
+  };
+}
+function minePrRow(pr, cl, ctx) {
+  const corrections = cl.state === "reporter_corrected" ? reporterCorrectionsOn(pr) : [];
+  const closesIssues = (pr.closingIssuesReferences ?? []).map((i) => i.number);
+  const parentIssues = linkedIssueNumbers(pr);
+  let escalateOnceUnknown = false;
+  const owedReason = parentIssues.length > 0 ? escalationReasonsOwed(cl).find((r) => {
+    const filed = ctx.parentWasEscalatedFor(parentIssues, pr.number, r);
+    if (filed === "unknown")
+      escalateOnceUnknown = true;
+    return filed === false;
+  }) ?? null : null;
+  const escalateOnce = owedReason !== null;
+  return {
+    number: pr.number,
+    title: pr.title,
+    branch: pr.headRefName,
+    base: pr.baseRefName ?? "",
+    url: pr.url,
+    draft: pr.isDraft,
+    reviewDecision: pr.reviewDecision || "none",
+    unresolvedThreads: ctx.unresolvedThreads,
+    closesIssues,
+    state: cl.state,
+    ciState: cl.ciState,
+    approved: cl.approved,
+    ageHours: Math.round(cl.ageHours),
+    needsAttention: cl.needsAction || escalateOnce,
+    reasons: cl.reasons,
+    ...cl.gateAgeHours !== undefined ? { gateAgeHours: Math.round(cl.gateAgeHours) } : {},
+    ...corrections.length ? {
+      correction: reporterCorrectionRow(corrections[0]),
+      corrections: corrections.map(reporterCorrectionRow),
+      parentNeedsHuman: ctx.parentIsEscalated(parentIssues)
+    } : {},
+    ...escalateOnce ? { escalateOnce: true, escalateOnceReason: owedReason, parentNeedsHuman: ctx.parentIsEscalated(parentIssues) } : {},
+    ...ctx.degraded ? { threadsDegraded: true } : {},
+    ...escalateOnceUnknown ? { escalateOnceUnknown: true } : {},
+    ...ctx.degraded || escalateOnceUnknown ? { degraded: true } : {}
+  };
+}
+function actionableConflicts(prs) {
+  return prs.filter((p) => p.state === "conflict" && !p.humanOnly).length;
+}
+function escalateOnceNote(row) {
+  if (row.reasons.includes(REWORK_CEILING_REASON))
+    return "\uD83C\uDD98 escalate once (no rework left)";
+  if (row.reasons.includes(CORRECTION_UNREADABLE_REASON))
+    return "\uD83C\uDD98 escalate once (correction unreadable)";
+  if (row.reasons.includes(REPORTER_GATE_STALE_REASON)) {
+    return `\uD83C\uDD98 escalate once (gate stale — waiting ${Math.round(row.gateAgeHours ?? 0)}h)`;
+  }
+  return "\uD83C\uDD98 escalate once";
+}
+var PARKED_STATES = ["awaiting_review", "ci_pending", "awaiting_reporter"];
+function parkedCount(prs) {
+  return prs.filter((p) => p.needsAttention !== true && (PARKED_STATES.includes(p.state) || p.foreign === true && p.state === "reporter_corrected")).length;
+}
+function actionableCorrections(prs) {
+  return prs.filter((p) => p.state === "reporter_corrected" && p.foreign !== true).length;
+}
+function actionableWip(prs) {
+  return prs.filter((p) => p.foreign !== true && p.state !== "awaiting_reporter").length;
+}
+var GC_LOOKUP_BUDGET_MS = 20000;
+function gcMergedLocalBranches(repo, deps = {}) {
+  const {
+    matches = localRepoMatches,
+    candidates = localGcCandidates,
+    lookup = ghPRMergedByHead,
+    cleanup = cleanupMergedLocalBranch,
+    isDirty = branchWorktreeDirty,
+    isAncestor = isAncestorOfMergedHead,
+    stillExists = localBranchExists,
+    nowMs = Date.now
+  } = deps;
+  const empty = { cleaned: [], unpushed: [], dirty: [], failed: [], lookupsSkipped: 0 };
+  try {
+    if (!matches(repo))
+      return empty;
+    const branches = candidates();
+    if (!branches.length)
+      return empty;
+    const deadline = nowMs() + GC_LOOKUP_BUDGET_MS;
+    let lookupsSkipped = 0;
+    const mergedByHead = new Map;
+    for (const b of branches) {
+      if (nowMs() > deadline) {
+        lookupsSkipped++;
+        continue;
+      }
+      try {
+        const pr = lookup(repo, b.name);
+        if (pr)
+          mergedByHead.set(b.name, pr);
+      } catch {}
+    }
+    const plan = planMergedBranchGc(branches, mergedByHead);
+    const cleanable = [...plan.clean];
+    const unpushed = [];
+    for (const u of plan.unpushed) {
+      const tip = branches.find((b) => b.name === u.name)?.tip ?? "";
+      const head = mergedByHead.get(u.name)?.headRefOid ?? "";
+      if (tip && head && isAncestor(tip, head))
+        cleanable.push(u);
+      else
+        unpushed.push(u);
+    }
+    const cleaned = [];
+    const dirty = [];
+    const failed = [];
+    for (const c of cleanable) {
+      if (isDirty(c.name)) {
+        dirty.push(c);
+        continue;
+      }
+      cleanup(c.name);
+      if (stillExists(c.name))
+        failed.push(c);
+      else
+        cleaned.push(c);
+    }
+    return { cleaned, unpushed, dirty, failed, lookupsSkipped };
+  } catch {
+    return empty;
+  }
+}
+var STATE_ICONS = {
+  reporter_corrected: "\uD83D\uDCE3",
+  awaiting_reporter: "\uD83D\uDE4B",
+  conflict: "\uD83D\uDD00",
+  ci_failing: "\uD83D\uDD34",
+  changes_requested: "✏️",
+  review_comments: "\uD83D\uDCAC",
+  ci_pending: "⏳",
+  approved_ready: "✅",
+  stale: "\uD83D\uDD70️",
+  awaiting_review: "·"
+};
+function registerInboxCommand(program2) {
+  program2.command("inbox").description("Reconciler view: open PRs (by state: conflict / ci_failing / changes_requested / approved_ready / stale …) and in-progress issues with new comments. With the OPT-IN repo-wide conflict sweep (`config set conflict-sweep true`, or --conflict-sweep) it also lists conflicted PRs by other authors — trusted same-repo heads only (issue #393)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Force the repo-wide foreign-PR conflict sweep on for this run (default: the `conflict-sweep` config key, which is off)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    const { project } = await loadCtx(program2);
+    const repo = opts.repo ?? project.repoFullName;
+    const me = ghCurrentLogin();
+    const staleHours = resolveStalePrHours();
+    const sweepEnabled = opts.conflictSweep === true || resolveConflictSweep();
+    const maxReworks = resolveMaxFixAttempts();
+    let escalatedIssues = null;
+    const parentIsEscalated = (issueNumbers) => {
+      escalatedIssues ??= new Set(ghIssueListByLabel(repo, NEEDS_HUMAN_LABEL).map((i) => i.number));
+      return issueNumbers.some((n) => escalatedIssues.has(n));
+    };
+    const parentMarkers = new Map;
+    const parentReadFailed = new Set;
+    const parentWasEscalatedFor = (issueNumbers, prNumber, reason) => {
+      let unknown = false;
+      const filed = issueNumbers.some((n) => {
+        let bodies = parentMarkers.get(n);
+        if (!bodies) {
+          if (parentReadFailed.has(n)) {
+            unknown = true;
+            return false;
+          }
+          try {
+            bodies = ghIssueComments(repo, n).filter((c) => c.viewerDidAuthor !== false).map((c) => c.body);
+          } catch {
+            parentReadFailed.add(n);
+            unknown = true;
+            console.warn(`⚠️  #${n}: could not read comments for the escalate-once key — PR #${prNumber} holds its escalation until the next tick.`);
+            return false;
+          }
+          parentMarkers.set(n, bodies);
+        }
+        return bodies.some((b) => hasEscalateOnceMarker(b, prNumber, reason));
+      });
+      if (filed)
+        return true;
+      return unknown ? "unknown" : false;
+    };
+    const gc = gcMergedLocalBranches(repo);
+    for (const c of gc.cleaned) {
+      console.warn(`\uD83E\uDDF9 ${c.name}: PR #${c.prNumber} merged externally — local branch/worktree cleaned.`);
+    }
+    for (const u of gc.unpushed) {
+      console.warn(`⚠️  ${u.name}: PR #${u.prNumber} merged, but the local tip has commits the PR never saw — kept (unpushed work).`);
+    }
+    for (const d of gc.dirty) {
+      console.warn(`⚠️  ${d.name}: PR #${d.prNumber} merged, but its worktree has uncommitted edits — kept (removal would destroy them).`);
+    }
+    for (const f of gc.failed) {
+      console.warn(`⚠️  ${f.name}: PR #${f.prNumber} merged but cleanup could not remove the branch (busy worktree?) — will retry next tick.`);
+    }
+    if (gc.lookupsSkipped > 0) {
+      console.warn(`⏱ merged-branch GC: ${gc.lookupsSkipped} candidate lookup(s) deferred to the next tick (time budget).`);
+    }
+    const minePrs = ghPRListMine(repo);
+    const prs = minePrs.map((pr) => {
+      const { count: unresolvedThreads, degraded: degraded2 } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
+      const intentBlocked = inboxIntentBlocked(repo, pr);
+      const gateClearedAt = gateClearanceReadFor(pr.number, intentBlocked, (n) => ghIntentGateLastClearedAt(repo, n));
+      const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks, gateClearedAt, headSha: pr.headRefOid });
+      return minePrRow(pr, cl, { unresolvedThreads, degraded: degraded2, parentIsEscalated, parentWasEscalatedFor });
+    });
+    const issues = ghIssueListByLabel(repo, IN_PROGRESS_LABEL).map((i) => {
+      const reply = issueNeedsReply(i.comments ?? [], me);
+      return {
+        number: i.number,
+        title: i.title,
+        url: i.url,
+        newComment: reply ? { author: reply.author?.login, at: reply.createdAt } : null,
+        needsAttention: !!reply
+      };
+    });
+    if (sweepEnabled) {
+      try {
+        for (const entry of foreignConflictedPRs(minePrs, ghPRListAll(repo), me, { enabled: true })) {
+          const foreignGated = inboxIntentBlocked(repo, entry.pr);
+          const gateClearedAt = gateClearanceReadFor(entry.pr.number, foreignGated, (n) => ghIntentGateLastClearedAt(repo, n));
+          const cl = classifyPR(entry.pr, me, { staleHours, intentBlocked: foreignGated, maxReworks, gateClearedAt, headSha: entry.pr.headRefOid });
+          prs.push(foreignPrRow(entry, cl));
+        }
+      } catch {}
+    }
+    const count = (s) => prs.filter((p) => p.state === s).length;
+    const degraded = prs.filter((p) => p.degraded).length;
+    const threadsDegraded = prs.filter((p) => p.threadsDegraded).length;
+    const degradedInputs = [
+      ...threadsDegraded ? ["github-graphql"] : [],
+      ...prs.some((p) => p.escalateOnceUnknown) ? ["escalate-once-markers"] : []
+    ];
+    const summary = {
+      prsNeedingAttention: prs.filter((p) => p.needsAttention).length,
+      issuesNeedingAttention: issues.filter((i) => i.needsAttention).length,
+      readyToMerge: count("approved_ready"),
+      ciFailing: count("ci_failing"),
+      changesRequested: count("changes_requested"),
+      conflicts: actionableConflicts(prs),
+      stale: count("stale"),
+      reporterCorrected: actionableCorrections(prs),
+      parked: parkedCount(prs),
+      degraded,
+      degradedInputs,
+      escalateOnceUnknown: prs.filter((p) => p.escalateOnceUnknown).length,
+      conflictSweep: sweepEnabled,
+      humanOnlyConflicts: prs.filter((p) => p.humanOnly).length,
+      wipActionable: actionableWip(prs),
+      gcCleaned: gc.cleaned.length,
+      gcUnpushedKept: gc.unpushed.length + gc.dirty.length,
+      gcFailed: gc.failed.length
+    };
+    emit(opts, withProvenance({ repo, prs, issues, summary, gc }), () => {
+      console.log(`\uD83D\uDCE5 Inbox for ${repo}`);
+      console.log(`Needs action: ${meter(summary.prsNeedingAttention, prs.length)} PRs · ${meter(summary.issuesNeedingAttention, issues.length)} issues · ✅ ${summary.readyToMerge} ready to merge`);
+      if (threadsDegraded)
+        console.log(`⚠️  ${threadsDegraded} PR(s) with partial review-thread data (fetch blipped) — marked "degraded".`);
+      if (summary.escalateOnceUnknown) {
+        console.log(`⚠️  ${summary.escalateOnceUnknown} PR(s) parked on an escalate-once key that could NOT be read — this inbox is INCOMPLETE, re-read before concluding there is no work.`);
+      }
+      if (summary.humanOnlyConflicts) {
+        console.log(`\uD83D\uDD12 ${summary.humanOnlyConflicts} conflicted PR(s) on an untrusted head (fork / non-collaborator) — reported only, never checked out by the loop.`);
+      }
+      if (prs.length) {
+        console.log("");
+        const rows = prs.map((p) => [
+          `${STATE_ICONS[p.state] ?? "·"} #${p.number}`,
+          p.state,
+          `ci:${p.ciState}`,
+          `${p.ageHours}h`,
+          p.title + (p.correction ? ` \uD83D\uDCE3 @${p.correction.author} corrected the reading` : "") + (p.corrections && p.corrections.length > 1 ? ` (+${p.corrections.length - 1} more unanswered)` : "") + (p.escalateOnce ? ` ${escalateOnceNote(p)}` : "") + (p.parentNeedsHuman ? " (parent is needs-human)" : "") + (p.degraded ? " ⚠️ degraded" : "") + (p.humanOnly ? ` \uD83D\uDD12 ${p.distrust} — human only` : "")
+        ]);
+        for (const l of renderTable(["PR", "State", "CI", "Age", "Title"], rows))
+          console.log(`  ${l}`);
+      }
+      if (issues.length) {
+        console.log("");
+        const rows = issues.map((i) => [
+          `${i.needsAttention ? "\uD83D\uDCAC" : "·"} #${i.number}`,
+          i.newComment ? `@${i.newComment.author}` : "—",
+          i.title
+        ]);
+        for (const l of renderTable(["Issue", "New comment", "Title"], rows))
+          console.log(`  ${l}`);
+      }
+    }, { pretty: true });
+  }));
+}
+
+// src/commands/features.ts
+init_helpers();
+function registerFeaturesCommand(program2) {
+  program2.command("features").description("ShipFlow's feature map for this project (features → file paths/test info) — the reviewer's whole-system view").option("--json", "Output the raw feature map").option("--yaml", "Output YAML").option("--category <name>", "Filter to one category").action(runAction(async (opts) => {
+    const { creds, client, project } = await loadCtx(program2);
+    const fm = await client.getFeatureMapping(creds.org, project.projectId);
+    const features = fm.features ?? {};
+    const keys = Object.keys(features).filter((k) => !opts.category || (features[k].category ?? "") === opts.category);
+    const jsonOut = opts.category ? { ...fm, features: Object.fromEntries(keys.map((k) => [k, features[k]])) } : fm;
+    emit(opts, jsonOut, () => {
+      if (!keys.length) {
+        console.log("No feature map for this project yet. Generate it from the ShipFlow dashboard.");
+        return;
+      }
+      const byCat = new Map;
+      for (const k of keys) {
+        const cat = features[k].category || "uncategorized";
+        if (!byCat.has(cat))
+          byCat.set(cat, []);
+        byCat.get(cat).push(k);
+      }
+      console.log(`\uD83D\uDDFA️  Feature map — ${keys.length} feature(s)${fm.lastUpdated ? ` (updated ${fm.lastUpdated})` : ""}`);
+      for (const [cat, ks] of [...byCat].sort((a, b) => a[0].localeCompare(b[0]))) {
+        console.log(`
+${cat}`);
+        const rows = ks.sort().map((k) => {
+          const f = features[k];
+          const paths = f.paths ?? [];
+          const shown = paths.length ? paths.slice(0, 3).join(", ") + (paths.length > 3 ? " …" : "") : "";
+          return [f.name || k, f.test_priority ?? "", shown];
+        });
+        for (const l of renderTable(["Feature", "Priority", "Paths"], rows))
+          console.log(`  ${l}`);
+      }
+    }, { pretty: true });
+  }));
+}
+
+// src/commands/priorities.ts
+init_helpers();
+
+// src/priorities.ts
+init_sh();
+import { existsSync as existsSync4, readFileSync as readFileSync5 } from "node:fs";
+import { join as join5 } from "node:path";
+var PRIORITIES_DOC_RELPATH = "docs/PRIORITIES.md";
+function tableCells(line) {
+  const t = line.trim();
+  if (!t.startsWith("|") || !t.endsWith("|") || t.length < 2)
+    return null;
+  return t.slice(1, -1).split("|").map((c) => c.trim());
+}
+var isDividerRow = (cells) => cells.every((c) => /^:?-{3,}:?$/.test(c));
+function parseWorkClasses(markdown) {
+  const lines = markdown.split(`
+`);
+  let inTable = false;
+  const classes = [];
+  for (const line of lines) {
+    const cells = tableCells(line);
+    if (!cells) {
+      if (inTable && classes.length)
+        break;
+      inTable = false;
+      continue;
+    }
+    if (!inTable) {
+      if (cells.some((c) => c.toLowerCase().replace(/\s+/g, " ").includes("work class")))
+        inTable = true;
+      continue;
+    }
+    if (isDividerRow(cells))
+      continue;
+    const rawRank = cells[0] ?? "";
+    if (!/^\d+$/.test(rawRank))
+      continue;
+    classes.push({
+      rank: Number.parseInt(rawRank, 10),
+      workClass: cells[1] ?? "",
+      wipShare: cells[2] ?? "",
+      notes: cells[3] ?? ""
+    });
+  }
+  return classes;
+}
+function repoRoot() {
+  try {
+    return _exec("git rev-parse --show-toplevel", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim() || process.cwd();
+  } catch {
+    return process.cwd();
+  }
+}
+function loadPrioritiesDoc(root = repoRoot()) {
+  const path = join5(root, PRIORITIES_DOC_RELPATH);
+  if (!existsSync4(path))
+    return { found: false, path, classes: [] };
+  const classes = parseWorkClasses(readFileSync5(path, "utf8"));
+  if (!classes.length) {
+    return {
+      found: true,
+      path,
+      classes,
+      warning: "doc exists but no ordered work-class table parsed — treat as off-doc (escalate as today)"
+    };
+  }
+  return { found: true, path, classes };
+}
+
+// src/commands/priorities.ts
+function registerPrioritiesCommand(program2) {
+  program2.command("priorities").description(`Standing priorities doc (${PRIORITIES_DOC_RELPATH}) consulted at loop intake — greenlit work classes + WIP share (human-edited only)`).option("--json", "Output the parsed doc as JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    const doc = loadPrioritiesDoc();
+    emit(opts, doc, () => {
+      if (!doc.found) {
+        console.log(`No standing priorities doc at ${PRIORITIES_DOC_RELPATH} — loop intake escalates product-priority sign-off as before.`);
+        return;
+      }
+      if (doc.warning) {
+        console.log(`⚠️  ${doc.warning}`);
+        console.log(`   ${doc.path}`);
+        return;
+      }
+      console.log(`\uD83D\uDCCB Standing priorities — ${doc.classes.length} greenlit work class(es) (${PRIORITIES_DOC_RELPATH}, human-edited only)`);
+      const rows = doc.classes.map((c) => [String(c.rank), c.workClass, c.wipShare, c.notes]);
+      for (const l of renderTable(["#", "Work class", "WIP share", "Notes"], rows))
+        console.log(`  ${l}`);
+      console.log(`
+Greenlit class + normal slice → intake may proceed; deploy-blast-radius work ALWAYS needs per-item sign-off; off-doc work escalates as today (#211).`);
+    }, { pretty: true });
+  }));
+}
+
+// src/commands/config.ts
+init_config();
+init_helpers();
+var MERGE_POLICIES2 = ["manual", "auto-on-green", "auto-timeout"];
+var SETTINGS = [
+  {
+    key: "auto-issue",
+    field: "autoIssue",
+    set: (v, c) => String(c.autoIssue = parseBoolStrict("auto-issue", v)),
+    effective: resolveAutoIssue
+  },
+  {
+    key: "live-reload",
+    field: "liveReload",
+    set: (v, c) => String(c.liveReload = parseBoolStrict("live-reload", v)),
+    effective: resolveLiveReload
+  },
+  {
+    key: "require-ci",
+    field: "requireCi",
+    set: (v, c) => String(c.requireCi = parseBoolStrict("require-ci", v)),
+    effective: resolveRequireCi
+  },
+  {
+    key: "merge-policy",
+    field: "mergePolicy",
+    set: (v, c) => {
+      const p = v.trim();
+      if (!MERGE_POLICIES2.includes(p))
+        throw new Error(`merge-policy must be one of: ${MERGE_POLICIES2.join(", ")}`);
+      return c.mergePolicy = p;
+    },
+    effective: resolveMergePolicy
+  },
+  {
+    key: "max-fix-attempts",
+    field: "maxFixAttempts",
+    set: (v, c) => String(c.maxFixAttempts = parseIntStrict("max-fix-attempts", v)),
+    effective: resolveMaxFixAttempts
+  },
+  {
+    key: "wip-limit",
+    field: "wipLimit",
+    set: (v, c) => String(c.wipLimit = parseIntStrict("wip-limit", v)),
+    effective: resolveWipLimit
+  },
+  {
+    key: "stale-pr-hours",
+    field: "stalePrHours",
+    set: (v, c) => String(c.stalePrHours = parseIntStrict("stale-pr-hours", v)),
+    effective: resolveStalePrHours
+  },
+  {
+    key: "bug-hunt",
+    field: "bugHunt",
+    set: (v, c) => String(c.bugHunt = parseBoolStrict("bug-hunt", v)),
+    effective: resolveBugHunt
+  },
+  {
+    key: "bug-hunt-cap",
+    field: "bugHuntCap",
+    set: (v, c) => String(c.bugHuntCap = parseIntStrict("bug-hunt-cap", v)),
+    effective: resolveBugHuntCap
+  },
+  {
+    key: "require-review",
+    field: "requireReview",
+    set: (v, c) => String(c.requireReview = parseBoolStrict("require-review", v)),
+    effective: resolveRequireReview
+  },
+  {
+    key: "signoff-owner",
+    field: "signoffOwner",
+    set: (v, c) => c.signoffOwner = v.trim().replace(/^@/, ""),
+    effective: resolveSignoffOwner
+  },
+  {
+    key: "conflict-sweep",
+    field: "conflictSweep",
+    set: (v, c) => String(c.conflictSweep = parseBoolStrict("conflict-sweep", v)),
+    effective: resolveConflictSweep
+  },
+  {
+    key: "pickup-scope",
+    field: "pickupScope",
+    set: (v, c) => {
+      const m = v.trim();
+      if (!PICKUP_SCOPES.includes(m))
+        throw new Error(`pickup-scope must be one of: ${PICKUP_SCOPES.join(", ")}`);
+      return c.pickupScope = m;
+    },
+    effective: resolvePickupScope
+  },
+  {
+    key: "intent-gate",
+    field: "intentGate",
+    set: (v, c) => {
+      const m = v.trim();
+      if (!INTENT_GATE_MODES.includes(m))
+        throw new Error(`intent-gate must be one of: ${INTENT_GATE_MODES.join(", ")}`);
+      return c.intentGate = m;
+    },
+    effective: resolveIntentGateMode
+  },
+  {
+    key: "intake-approval",
+    field: "intakeApproval",
+    set: (v, c) => {
+      const m = v.trim().toLowerCase();
+      if (!INTAKE_APPROVAL_MODES.includes(m))
+        throw new Error(`intake-approval must be one of: ${INTAKE_APPROVAL_MODES.join(", ")}`);
+      return c.intakeApproval = m;
+    },
+    effective: resolveIntakeApproval
+  },
+  {
+    key: "loop-worker-model",
+    field: "loopWorkerModel",
+    set: (v, c) => c.loopWorkerModel = v.trim(),
+    effective: resolveLoopWorkerModel
+  },
+  {
+    key: "cli-drift-poll-seconds",
+    field: "cliDriftPollSeconds",
+    set: (v, c) => String(c.cliDriftPollSeconds = parseIntStrict("cli-drift-poll-seconds", v)),
+    effective: resolveCliDriftPollSeconds
+  },
+  {
+    key: "app-slug",
+    field: "appSlug",
+    set: (v, c) => {
+      const s = v.trim().replace(/^@/, "");
+      if (!isValidAppSlug(s))
+        throw new Error(`app-slug must be a GitHub App slug (letters, digits, single hyphens), got: ${v}`);
+      return c.appSlug = s;
+    },
+    effective: () => resolveIntentGateAuditAuthorSlug().slug
+  }
+];
+var byKey = new Map(SETTINGS.map((s) => [s.key, s]));
+var KEYS = SETTINGS.map((s) => s.key);
+function unknownKey(key, json) {
+  const message = `Unknown key: ${key} (supported: ${KEYS.join(", ")})`;
+  if (json)
+    console.log(JSON.stringify({ error: message }));
+  else
+    console.error(message);
+  process.exit(1);
+}
+function registerConfigCommand(program2) {
+  const config = program2.command("config").description("Get/set ShipFlow CLI preferences");
+  config.command("set <key> <value>").description(`Set a preference. Keys: ${KEYS.join(", ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((key, value, opts) => {
+    const s = byKey.get(key) ?? unknownKey(key, opts.json);
+    const cfg = loadConfig();
+    let echo;
+    try {
+      echo = s.set(value, cfg);
+    } catch (e) {
+      if (opts.json) {
+        console.log(JSON.stringify({ error: e.message }));
+      } else {
+        console.error(e.message);
+      }
+      process.exit(1);
+    }
+    saveConfig(cfg);
+    emit(opts, { [s.field]: s.effective() ?? null }, () => console.log(`${key} = ${echo}`));
+  }));
+  config.command("get <key>").description("Read a preference (env vars override stored config)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((key, opts) => {
+    const s = byKey.get(key) ?? unknownKey(key, opts.json);
+    const v = s.effective();
+    emit(opts, { [s.field]: v ?? null }, () => console.log(v === undefined ? "unset" : String(v)));
+  }));
+  config.command("list").description("Show all preferences (effective values)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((opts) => {
+    const obj = {};
+    for (const s of SETTINGS)
+      obj[s.field] = s.effective() ?? null;
+    emit(opts, obj, () => {
+      const rows = SETTINGS.map((s) => {
+        const v = s.effective();
+        return [s.key, v === undefined ? "unset" : String(v)];
+      });
+      for (const l of renderTable(["Key", "Value"], rows))
+        console.log(l);
+    }, { pretty: true });
+  }));
+}
+
+// src/commands/claims.ts
+init_helpers();
+function registerClaimsCommand(program2) {
+  program2.command("claims").description("List active agent claims (who is working on what)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    const { creds, client, project } = await loadCtx(program2);
+    const claims = await client.listClaims(creds.org, project.projectId);
+    emit(opts, { claims }, () => {
+      if (claims.length === 0) {
+        console.log("No active claims — every open issue is up for grabs.");
+        return;
+      }
+      const rows = claims.map((c) => [
+        `#${c.issueNumber}`,
+        c.repo,
+        c.agent ? `${c.actor} (${c.agent})` : c.actor,
+        c.expiresAt
+      ]);
+      for (const l of renderTable(["Issue", "Repo", "Actor", "Expires"], rows))
+        console.log(l);
+    }, { pretty: true });
+  }));
+}
+
+// src/commands/capability.ts
+init_helpers();
+var CAPABILITY_CLASSES = ["capability", "access", "secret", "policy"];
+var CAPABILITY_STATUSES = ["open", "granted", "declined"];
+function registerCapabilityCommand(program2) {
+  const capability = program2.command("capability").description("Standing queue for capabilities/access/secrets/policy the agent can't grant itself");
+  capability.command("request").description("File a capability request into the standing queue").requiredOption("--class <class>", `One of: ${CAPABILITY_CLASSES.join(" | ")}`).requiredOption("--title <title>", "Short summary of the ask").requiredOption("--why <why>", "Why the agent needs it (the blocker it unblocks)").option("--issue <number>", "Escalating issue number this ask came from").option("--repo <fullname>", "Repo the ask is scoped to (default: the active project's)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    if (!CAPABILITY_CLASSES.includes(opts.class)) {
+      throw new Error(`invalid --class ${opts.class}; expected one of ${CAPABILITY_CLASSES.join(", ")}`);
+    }
+    const { creds, client, project } = await loadCtx(program2);
+    const issueNumber = opts.issue ? parseInt(opts.issue, 10) : undefined;
+    if (opts.issue && Number.isNaN(issueNumber))
+      throw new Error(`invalid --issue ${opts.issue}`);
+    const created = await client.createCapabilityRequest(creds.org, project.projectId, {
+      class: opts.class,
+      title: opts.title,
+      why: opts.why,
+      repo: opts.repo ?? project.repoFullName,
+      issueNumber
+    });
+    emit(opts, created, () => {
+      console.log(`Filed ${created.class} request ${created.id} (${created.status}): ${created.title}`);
+    }, { pretty: true });
+  }));
+  capability.command("list").description("List capability requests in the standing queue (newest first)").option("--status <status>", `Filter by status: ${CAPABILITY_STATUSES.join(" | ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    if (opts.status && !CAPABILITY_STATUSES.includes(opts.status)) {
+      throw new Error(`invalid --status ${opts.status}; expected one of ${CAPABILITY_STATUSES.join(", ")}`);
+    }
+    const { creds, client, project } = await loadCtx(program2);
+    const requests = await client.listCapabilityRequests(creds.org, project.projectId, opts.status);
+    emit(opts, { capabilityRequests: requests }, () => {
+      if (requests.length === 0) {
+        console.log("No capability requests — the queue is clear.");
+        return;
+      }
+      const rows = requests.map((c) => [
+        c.id,
+        c.class,
+        c.status,
+        c.issueNumber ? `#${c.issueNumber}` : "—",
+        c.title
+      ]);
+      for (const l of renderTable(["ID", "Class", "Status", "Issue", "Title"], rows))
+        console.log(l);
+    }, { pretty: true });
+  }));
 }
 
 // src/commands/test.ts
