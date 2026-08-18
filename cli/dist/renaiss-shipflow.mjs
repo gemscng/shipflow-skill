@@ -5968,26 +5968,51 @@ var CONVENTIONAL_PREFIX = /^(fix|feat|chore|ci|docs|refactor|test|perf|decide|tr
 var DUPLICATE_THRESHOLD = 0.7;
 var DUPLICATE_SCAN_LIMIT = 1000;
 var MIN_TOKENS_FOR_MATCH = 3;
-var CITATION = /(?<![\w/])#(\d+)\b/g;
+var CITATION_SPAN = /(?<![\w/])#([0-9]+)\b(-[\p{L}\p{N}-]*)?/gu;
 var STANDALONE_NUMBER = /(?<!\w)(\d+)\b/g;
+function issueNumberKey(digits) {
+  return digits.replace(/^0+(?=\d)/, "");
+}
 function citedOnlyNumbers(raw) {
   const cited = new Map;
-  for (const m of raw.matchAll(CITATION))
-    cited.set(m[1], (cited.get(m[1]) ?? 0) + 1);
+  for (const m of raw.matchAll(CITATION_SPAN)) {
+    const key = issueNumberKey(m[1]);
+    cited.set(key, (cited.get(key) ?? 0) + 1);
+  }
   if (cited.size === 0)
     return new Set;
   const seen = new Map;
-  for (const m of raw.matchAll(STANDALONE_NUMBER))
-    seen.set(m[1], (seen.get(m[1]) ?? 0) + 1);
+  for (const m of raw.matchAll(STANDALONE_NUMBER)) {
+    const key = issueNumberKey(m[1]);
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+  }
   const out = new Set;
   for (const [n, count] of cited)
     if (seen.get(n) === count)
       out.add(n);
   return out;
 }
+function citationOriginRewrites(raw, citations) {
+  const out = new Map;
+  if (citations.size === 0)
+    return out;
+  for (const m of raw.matchAll(CITATION_SPAN)) {
+    const key = issueNumberKey(m[1]);
+    if (!citations.has(key))
+      continue;
+    const suffix = (m[2] ?? "").replace(/-+$/g, "");
+    const from = (m[1] + suffix).replace(/^-+|-+$/g, "");
+    const to = (key + suffix).replace(/^-+|-+$/g, "");
+    if (from.length > 0)
+      out.set(from, to);
+  }
+  return out;
+}
 function normalizeTitle(title) {
   const raw = (title ?? "").toLowerCase().trim();
   const citations = citedOnlyNumbers(raw);
+  const rewrites = citationOriginRewrites(raw, citations);
+  const citationTokens = new Set;
   let s = expandContractions(raw);
   let type = null;
   let area = null;
@@ -5997,8 +6022,14 @@ function normalizeTitle(title) {
     area = (m[2] ?? "").trim() || null;
     s = s.slice(m[0].length);
   }
-  const tokens = (s.match(/[\p{L}\p{N}][\p{L}\p{N}-]*/gu) ?? []).map((t) => t.replace(/^-+|-+$/g, "")).filter((t) => t.length > 0 && !(t.length === 1 && /[a-z]/.test(t))).filter((t) => !STOPWORDS.has(t));
-  return { type, area, tokens, citations };
+  const tokens = (s.match(/[\p{L}\p{N}][\p{L}\p{N}-]*/gu) ?? []).map((t) => t.replace(/^-+|-+$/g, "")).map((t) => {
+    const rewritten = rewrites.get(t);
+    if (rewritten === undefined)
+      return t;
+    citationTokens.add(rewritten);
+    return rewritten;
+  }).filter((t) => t.length > 0 && !(t.length === 1 && /[a-z]/.test(t))).filter((t) => !STOPWORDS.has(t));
+  return { type, area, tokens, citations, citationTokens };
 }
 function discriminators(tokens, exclude) {
   return new Set(tokens.filter((t) => (/\p{N}/u.test(t) || NEGATIONS.has(t)) && !(exclude !== undefined && exclude.has(t))));
@@ -6010,6 +6041,30 @@ function sameSet(a, b) {
     if (!b.has(x))
       return false;
   return true;
+}
+function sameSetIgnoring(a, b, ignore) {
+  if (ignore === undefined || ignore.size === 0)
+    return sameSet(a, b);
+  const drop = (s) => {
+    const out = new Set;
+    for (const t of s)
+      if (!ignore.has(t))
+        out.add(t);
+    return out;
+  };
+  return sameSet(drop(a), drop(b));
+}
+function citationExclude(self, mine, theirs) {
+  if (!mine.citations.has(self) && !theirs.citations.has(self))
+    return;
+  const out = new Set([self]);
+  for (const side of [mine, theirs]) {
+    for (const t of side.citationTokens) {
+      if (t === self || t.startsWith(`${self}-`))
+        out.add(t);
+    }
+  }
+  return out;
 }
 function similarity(a, b) {
   const A = new Set(normalizeTitle(a).tokens);
@@ -6048,12 +6103,12 @@ function findDuplicateCandidates(title, openIssues, opts = {}) {
     if (mine.type && theirs.type && mine.type !== theirs.type)
       continue;
     const self = String(issue.number);
-    const selfExclude = mine.citations.has(self) || theirs.citations.has(self) ? new Set([self]) : undefined;
+    const selfExclude = citationExclude(self, mine, theirs);
     if (!sameSet(discriminators(mine.tokens, selfExclude), discriminators(theirs.tokens, selfExclude)))
       continue;
     const [shorter, longer] = mineSet.size <= theirSet.size ? [mineSet, theirSet] : [theirSet, mineSet];
     if (shorter.size < MIN_TOKENS_FOR_MATCH) {
-      if (!sameSet(shorter, longer))
+      if (!sameSetIgnoring(shorter, longer, selfExclude))
         continue;
     } else if (!contains(shorter, longer))
       continue;
