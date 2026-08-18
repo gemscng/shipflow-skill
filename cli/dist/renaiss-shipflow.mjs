@@ -8029,23 +8029,46 @@ var DEVIATIONS_HEADING_ALIASES = [
   "deviations"
 ];
 var HEADING_TEXT = /^ {0,3}(#{1,6})\s+(.*)$/;
+var BOLD_HEADING = /^ {0,3}\*\*(.+?)\*\*(.*)$/;
+var BOLD_TRAILING_ANNOTATION = /^[—–\-/&:(]|^and\b/;
+var BOLD_DEVIATIONS_HEADING_LEVEL = 2;
 function headingLevel(line) {
   const m = HEADING_TEXT.exec(line);
-  return m ? m[1].length : null;
+  if (m)
+    return m[1].length;
+  if (boldDeviationsHeadingText(line) !== null)
+    return BOLD_DEVIATIONS_HEADING_LEVEL;
+  return null;
 }
 function normalizeHeading(s) {
   return s.toLowerCase().replace(/\s+/g, " ").replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "").trim();
 }
 var HEADING_ANNOTATION_SPLIT = /\s+[—–\-/&]\s+|:\s+|\s+and\s+|\s+\(/;
-function isDeviationsHeading(line) {
-  const m = HEADING_TEXT.exec(line);
-  if (!m)
-    return false;
-  const norm = normalizeHeading(m[2]);
+function isDeviationAliasText(text) {
+  const norm = normalizeHeading(text);
   if (DEVIATIONS_HEADING_ALIASES.includes(norm))
     return true;
   const head = normalizeHeading(norm.split(HEADING_ANNOTATION_SPLIT)[0] ?? "");
   return DEVIATIONS_HEADING_ALIASES.includes(head);
+}
+function boldDeviationsHeadingText(line) {
+  if (HEADING_TEXT.test(line))
+    return null;
+  const m = BOLD_HEADING.exec(line);
+  if (!m)
+    return null;
+  const inner = m[1];
+  const trailing = (m[2] ?? "").trim();
+  if (trailing && !BOLD_TRAILING_ANNOTATION.test(trailing))
+    return null;
+  const text = trailing ? `${inner} ${trailing}` : inner;
+  return isDeviationAliasText(text) ? text : null;
+}
+function isDeviationsHeading(line) {
+  const m = HEADING_TEXT.exec(line);
+  if (m)
+    return isDeviationAliasText(m[2]);
+  return boldDeviationsHeadingText(line) !== null;
 }
 function extractDeviations(prBody) {
   return findDeviationsSection(prBody.split(`

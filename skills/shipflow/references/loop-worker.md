@@ -104,8 +104,8 @@ judge the stale link on its merits.
    closing keyword), parent stays open; don't hand-write `Part of #N` in
    `--body` — the header still injects its link, `--partial` switches it.
 5b. **Deviations from brief — log them, don't bury them.** Off-brief pivot:
-   take the conservative option, record it under a **Deviations from brief**
-   heading (any level — parser normalizes): `| Deviation | Why | Risk |`, one
+   take the conservative option, record it under a `## Deviations from brief`
+   heading: `| Deviation | Why | Risk |`, one
    row each, cells ≤10 words (the reviewer verifies every row); keep going. A
    deviation only in a commit message is invisible to review. No deviations →
    no section. Any deviations section = automerge blocker (#190):
