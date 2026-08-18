@@ -3706,14 +3706,14 @@ function doubleQuote(s) {
   });
   return `"${escaped}"`;
 }
-function yamlScalar(value, prefix) {
+function yamlScalar(value, prefix, { allowBlock = true } = {}) {
   if (isPlainSafe(value))
     return value;
   if (CONTROL_CHARS_NO_LF.test(value))
     return doubleQuote(value);
   if (value.includes(`
 `)) {
-    if (!isBlockSafe(value))
+    if (!allowBlock || !isBlockSafe(value))
       return doubleQuote(value);
     const clip = value.endsWith(`
 `);
@@ -3726,6 +3726,9 @@ ${indented.join(`
 `)}`;
   }
   return `'${value.replace(/'/g, "''")}'`;
+}
+function yamlKey(k) {
+  return yamlScalar(k, "", { allowBlock: false });
 }
 function toYaml(value, indent) {
   const prefix = "  ".repeat(indent);
@@ -3770,12 +3773,13 @@ ${lines.slice(1).map((l) => prefix + "  " + l).join(`
     if (entries.length === 0)
       return "{}";
     return entries.map(([k, v]) => {
+      const key = yamlKey(k);
       const inner = toYaml(v, indent + 1);
       if (typeof v === "object" && v !== null && !isEmptyCollection(v)) {
-        return `${prefix}${k}:
+        return `${prefix}${key}:
 ${inner}`;
       }
-      return `${prefix}${k}: ${inner}`;
+      return `${prefix}${key}: ${inner}`;
     }).join(`
 `);
   }
