@@ -8794,6 +8794,13 @@ function allReadySweepLine(evaluated, merged) {
   const body = `merged ${merged}/${evaluated} ready PR(s) oldest-first`;
   return merged < evaluated ? body : `✅ ${body}`;
 }
+async function releaseClaimsAfterAutomerge(ctx, repo, prNumber, prView) {
+  const closed = linkedIssueNumbers(prView);
+  for (const n of closed) {
+    await signalBestEffort(ctx, "issues", n, "release-claim", { repo, reason: `merged via PR #${prNumber}` });
+  }
+  return closed;
+}
 async function automergeOnce(ctx, repo, number, opts) {
   const policy = (opts.policy?.trim() || undefined) ?? resolveMergePolicy();
   const staleHours = resolveStalePrHours();
@@ -8885,10 +8892,7 @@ async function automergeOnce(ctx, repo, number, opts) {
   const result = ghPRMerge(repo, number, opts.mode ?? "squash", true);
   cleanupMergedLocalBranch(result.headBranch);
   await signalBestEffort(ctx, "prs", number, "merged", { repo, mergedSha: result.mergedSha }, "Merged but ShipFlow signal failed");
-  const closed = (prView.closingIssuesReferences ?? []).map((i) => i.number);
-  for (const n of closed) {
-    await signalBestEffort(ctx, "issues", n, "release-claim", { repo, reason: `merged via PR #${number}` });
-  }
+  const closed = await releaseClaimsAfterAutomerge(ctx, repo, number, prView);
   return { number, merged: true, mergedSha: result.mergedSha, policy, closedIssues: closed };
 }
 function registerPRCommand(program2) {

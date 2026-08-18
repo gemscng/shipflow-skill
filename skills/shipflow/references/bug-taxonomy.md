@@ -45,10 +45,11 @@ a release is enough. The stale self-heal (`isStaleInProgress` — no live claim
 **and** no open PR) is the backstop for releases that are never sent: crashed
 sessions, TTL-expired claims.
 
-A merge releases the claim on its own (`pr merge`, `pr.ts`) **only for issues
-linked by a closing keyword** — it iterates `closingIssuesReferences`. A `Part
-of #N` slice (`pr create --partial`) has none, so merging it releases nothing
-and the parent keeps its claim; hand that one back with `issue done`. Otherwise
+A merge via `pr automerge` (`pr.ts`) releases the claim on every linked
+issue — closing-keyword refs and a `Part of #N` slice parent
+(`linkedIssueNumbers`; #747). `pr merge` never releases claims. GitHub
+still only auto-closes closing-keyword issues; a `--partial` parent stays
+open. Hand a claim back without a merge with `issue done`. Otherwise
 loop mode holds the claim until merge (`loop-mode.md`).
 
 A reviewer may not `approve` a PR that leaves a **critical/high** finding from
