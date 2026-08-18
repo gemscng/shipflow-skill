@@ -1,8 +1,8 @@
-# Loop setup — worktree + policy knobs
+# Loop setup — worktree + policy knobs + continuous trigger
 
-Split from loop-mode.md §Setup + §Policies (#622). The orchestrator
-loads this card **once per run** (tick 0 / before the cycle), not every
-tick.
+Split from loop-mode.md §Setup + §Policies (#622) and continuous mode
+(#621). The orchestrator loads this card **once per run** (tick 0 /
+before the cycle), not every tick.
 
 ## Setup — run in a worktree (once, before the cycle)
 
@@ -89,3 +89,22 @@ can't merge what GitHub blocks. Approval = a GitHub review approval **or**
 the `shipflow-approved` label, added by the **reviewer** via
 `renaiss-shipflow pr approve <n>` — the reviewer's verdict *is* the merge
 gate.
+
+## Continuous mode (run start)
+
+Default: one full pass, **dormant ~15 min**, repeat. At run start create
+a recurring trigger with `CronCreate` (every 15 min, an off-`:00`/`:30`
+minute) whose prompt is the **fully-qualified**
+**`/shipflow:shipflow-loop`** — never bare `/shipflow-loop` (`Unknown
+command` when scheduler-fired); always the exact `<plugin>:<command>`
+form you were invoked as. Run the first pass now; re-entry is idempotent
+(`CronList` shows the job — don't re-create); each tick ends without
+asking (empty queue is fine). `/shipflow:shipflow-loop once` = single
+pass, no trigger; stop with `/shipflow:shipflow-loop stop` (`CronDelete`),
+then worktree cleanup (§ Setup). The trigger fires only while Claude Code
+runs/idles, may be session-scoped (cmux, ~7-day expiry); for always-on,
+an external scheduler (cron / launchd / GitHub Actions) drives
+`/shipflow:shipflow-loop once`. Codex CLI has no CronCreate — external
+scheduler only; subagent dispatch degrades to inline roles
+(`references/codex.md`). Invocation tokens (`once`, `stop`, `watch=`)
+live on `/shipflow:shipflow-loop`.

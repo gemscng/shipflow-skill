@@ -20,7 +20,7 @@ Roles.
 3. **Roles** — orchestrator · reviewer · worker
 4. **The cycle** — 0 CLI drift check · A reconcile · B admit · C bug sweep · D repeat/stop
 5. **Reconcile playbook** — inbox `state` → action
-6. **Guardrails**
+6. **Guardrails** — merge path · dispatch-don't-do · WTF-likelihood
 
 Sub-references: `loop-setup.md` (run start, not every tick) ·
 `loop-worker.md` · `loop-reviewer.md` (PR gate) ·
@@ -31,7 +31,7 @@ Sub-references: `loop-setup.md` (run start, not every tick) ·
 ## Setup — run in a worktree (once, before the cycle)
 
 `loop-setup.md`. Orchestrator loads it **once per run** (tick 0 / before
-the cycle), not every tick.
+the cycle), not every tick — worktree, knobs, continuous trigger.
 
 ## Policies — the three knobs (set once, then trust them)
 
@@ -59,8 +59,25 @@ the heavy work never enters yours.
   - **Worker model knob:** at run start read `renaiss-shipflow config get
     loop-worker-model` (env `SHIPFLOW_LOOP_WORKER_MODEL` overrides). If set,
     pass as Task `model` on every **worker** dispatch — fix and reconcile
-    alike; NEVER the reviewer or QA. Best-effort; unset → "Match the model
-    to the task" below.
+    alike; NEVER the reviewer or QA. Best-effort; unset → match the model
+    to the task (next).
+- **Reap finished subagents:** once you've read a return, release the
+  agent — `TaskStop` its task, or a `shutdown_request` for a named
+  teammate. Cleanup is part of finishing the tick.
+- **Match the model to the task.** Mechanical work (clear-error CI fix,
+  lockfile rebases, thread replies, doc edits) → fast/cheap tier;
+  implementation with a structured brief → standard tier; **the reviewer
+  and anything ambiguous or security-adjacent → strong tier, always** —
+  never downgrade the reviewer (measured, Superpowers 6). Unsure →
+  standard. Pin the worker tier via `renaiss-shipflow config set
+  loop-worker-model <model>` (env `SHIPFLOW_LOOP_WORKER_MODEL` wins) —
+  Task `model` on **worker** dispatches only; never the reviewer.
+- **Narrate in one line** per dispatch — `tick 3: #42 worker → PR #97
+  opened` — never a paragraph (measured ~50% output saved, zero loss).
+- **Optional persistence:** the user may pair the loop with `/goal "drain
+  the queue and merge everything mergeable"`. `/goal` is
+  **orchestrator-only** — never a stop-hook/goal inside a subagent;
+  subagents must *return* (self-verify contract) for the loop to progress.
 
 ## The cycle — each tick
 
@@ -185,7 +202,11 @@ worker scoped to that PR — workers for DIFFERENT PRs may run concurrently,
 up to `loop-concurrency`, each in its own worktree (§ Setup, #744); what
 never fans out: `pr automerge` (one call, oldest-first), post-merge syncs
 (dispatch after automerge returns), and the post-merge drift check. Loop A
-until nothing in-flight `needsAttention`:
+until nothing in-flight `needsAttention`. Own PRs and claimed issues only
+— don't touch others' unless asked. Every free-text loop comment on a
+loop-authored PR goes through `renaiss-shipflow pr note <n> --body …
+[--rework-from <id>]` (#603); bare `gh pr comment` is banned (measured,
+#477). Gated-PR / `needs-human` comment protocol → `loop-gate.md`.
 
 - `ci_failing` → worker fixes failing checks (`gh pr checks <n>`), pushes.
   Track attempts across ticks; `max-fix-attempts` still red →
@@ -360,8 +381,17 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    escalates — `loop-reviewer-intake.md` step 1b), validates, maps to
    features, returns an **acceptance brief** (what "done" means + features
    to regression-check). Reject (invalid/duplicate/needs a human) →
-   `issue escalate`, pick next. **Partial-slice brief → file each deferred
-   part as a follow-up sub-issue now** — `renaiss-shipflow issue create
+   `issue escalate`, pick next. `issue escalate` may return
+   `autoResolved: true` (precedent auto-apply): a stored answer to the
+   SAME question was reused — disclosure comment on the issue, no
+   `needs-human`, claim KEPT; treat it like a human reply and continue;
+   never re-escalate. A human `undo` reverses it (server then applies
+   `needs-reporter-review`). `--owner` when the issue names one (else
+   the CLI resolves `signoff-owner` → issue author).
+   A merged slice that settles a decision → `issue escalate <parent>
+   --update` (remaining ask only). Escalation never ends the run. **Partial-slice brief → file
+   each deferred part as a follow-up sub-issue now** —
+   `renaiss-shipflow issue create
    --title "…" --body "Part of #<n>: …" --json` — *before* dispatching the
    worker; bodies per the **issue-body ladder** (`message-style.md`), status
    header sourcing `Part of #<n>`.
@@ -415,7 +445,9 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
        --scan-digest <hex from sha256=>
      ```
      (adds `shipflow-approved`; refuses, exit 7, if any thread is open).
-     Now `approved_ready` for A.
+     Now `approved_ready` for A. A negative health delta
+     (`references/qa-report.md`) is treated like an unresolved thread —
+     no `pr approve`, no automerge, regardless of `merge-policy`.
    - **request changes** → list every fix incl. each external thread;
      re-dispatch a worker to fix + `pr resolve`, then re-review. Never
      approve with open threads. External reviewers are async — none posted
@@ -439,7 +471,32 @@ AND an empty sweep (or `bug-hunt` off). Continuous mode: next tick = FRESH
 pass, cap counter at zero — the cap never carries across ticks (#451).
 Report an empty queue as "queue empty", never "at cap". `cap` precedence: a
 user `cap=N` token (`cap=all` drains the queue), else `SHIPFLOW_LOOP_CAP`,
-else **5**.
+else **5**. Continuous trigger (`CronCreate` / `CronList` / `CronDelete`)
+→ `loop-setup.md` (run start). Blocked/escalated issues keep their claim
+and `needs-human`, so `issue next` advances past them. B null **and** A
+clean → C; the run ends only when C is also empty.
+
+**Pass ledger (mandatory, every pass end — operator requirement #608):**
+after the count line, print a compact table: one row per DISPATCH —
+`role · target (#issue/#PR) · outcome · subagent tokens` (from each Task
+return's usage metadata) — plus a totals row (dispatches, merged, tokens).
+Tokens the orchestrator itself spent go in the totals line when the harness
+reports them. No ledger = the pass is not done.
+Include `tokensReadPerTick` in the totals row — the doc/context TOKENS this
+tick loaded (spine + cards + contracts; ≈ bytes/4), so corpus creep stays
+measurable (#611).
+
+**At the cap or an empty queue:** summarize — PRs opened, merged,
+parked-awaiting-review, escalated (with reasons) — then ask whether to
+continue beyond the cap or raise the merge policy. Intent-gate-parked
+rows: the correct copy is "N PR(s) await your confirmation token on the
+PR (or remove the `needs-reporter-review` label)" — never suggest a
+hand-merge for a gated PR (#451); "merge by hand" only for rows the
+operator can legitimately merge (e.g. policy-parked on `manual`).
+Releasing escalated claims and any `pr merge`/`release` need explicit
+confirmation. The "ask" applies only to a `once` run — **by default the
+loop is continuous**: post the one-line summary and end the turn; a
+**spawned / headless session** never asks either.
 
 ## Reconcile playbook (inbox `state` → action)
 
@@ -471,30 +528,9 @@ still parks forever).
 
 ## Guardrails
 
-- **The reviewer gate is mandatory** (`require-review`): no worker starts
-  an issue without an intake brief, no PR merges without the reviewer's
-  review + `pr approve`; the reviewer always pulls `features --json` first
-  — whole system, not just the diff.
-- **Orchestrator context discipline:** dispatch, don't do — compact JSON
-  and one-line subagent returns only, never source files, diffs, or test
-  logs (that's what lets `cap=all` run without bloat).
-- **Reap finished subagents:** once you've read a return, release the
-  agent — `TaskStop` its task, or a `shutdown_request` for a named
-  teammate. Cleanup is part of finishing the tick.
-- **Match the model to the task.** Mechanical work (clear-error CI fix,
-  lockfile rebases, thread replies, doc edits) → fast/cheap tier;
-  implementation with a structured brief → standard tier; **the reviewer
-  and anything ambiguous or security-adjacent → strong tier, always** —
-  never downgrade the reviewer (measured, Superpowers 6). Unsure →
-  standard. Pin the worker tier via `renaiss-shipflow config set
-  loop-worker-model <model>` (env `SHIPFLOW_LOOP_WORKER_MODEL` wins) —
-  Task `model` on **worker** dispatches only; never the reviewer.
-- **Narrate in one line** per dispatch — `tick 3: #42 worker → PR #97
-  opened` — never a paragraph (measured ~50% output saved, zero loss).
-- **Optional persistence:** the user may pair the loop with `/goal "drain
-  the queue and merge everything mergeable"`. `/goal` is
-  **orchestrator-only** — never a stop-hook/goal inside a subagent;
-  subagents must *return* (self-verify contract) for the loop to progress.
+Cross-cutting invariants — each other rule lives in the phase that
+governs it.
+
 - **`pr automerge` is the only merge path the loop uses** — it self-gates
   on `merge-policy`; default `manual` never merges. **Never** bare
   `pr merge` or `release` without explicit human confirmation. In a
@@ -502,110 +538,14 @@ still parks forever).
   "Spawned / headless sessions") no human can confirm: `pr automerge` +
   `merge-policy` is the whole merge story; `release` is skipped (escalate
   if genuinely needed).
-- **Escalate, don't spin — but split before you escalate.** Escalation is
-  a **last resort**. A merely large/open-ended/ambiguous item → **carve a
-  bounded, value-adding slice**, defer the rest as follow-up sub-issues
-  (the **orchestrator** files them, `Part of #N`, at admit time — Phase B
-  step 2, where **exit 12 is expected, not a failure**; never let a
-  non-zero exit drop the deferred scope).
-  Reserve `issue escalate` for a genuine **hard blocker**: missing
-  secrets/credentials or external setup, a security-/trust-critical
-  surface unverifiable autonomously, an absent spec/design doc, a hard
-  dependency on an unmerged issue, or a duplicate/invalid issue.
-  `issue escalate` may return `autoResolved: true` (precedent auto-apply,
-  server flag-gated): a stored human answer to the SAME question was
-  reused — disclosure comment on the issue, no `needs-human`, claim KEPT.
-  Treat it exactly like a human reply: implement and continue; never
-  re-escalate. A human `undo` reverses it (server then applies
-  `needs-reporter-review`).
-  A single blocked item → `issue escalate` (labels `needs-human`, keeps
-  the claim, comments why) and move on — it never ends the run; never
-  pause mid-run to ask for direction.
-  Write `--reason` action-first — `### 👤 Action needed` (numbered steps,
-  ending "remove the `needs-human` label") → `### Why it's blocked` →
-  optional `### Ready once unblocked` — plus `--category`, and `--owner`
-  when the issue names one (else the CLI resolves `signoff-owner` config →
-  issue author). Only Action needed renders unfolded (the CLI collapses
-  the rest into `<details>` and rejects action lines over 30 words); never
-  an open question without a `**Recommendation:**` line — the CLI lints
-  and rejects; full contract in `loop-reviewer-intake.md` step 1.
-- **The priorities doc is human-edited only.** `docs/PRIORITIES.md`
-  (`renaiss-shipflow priorities`) is the owner's policy (#211): read it,
-  **never edit it**; propose changes via `issue escalate`. Greenlit never
-  overrides safety: deploy-blast-radius work (revert/release/config paths)
-  always needs per-item sign-off.
-- **Escalations shrink as slices land.** A merged slice settling a
-  decision → `issue escalate <parent> --update …` with the remaining ask
-  only (settled items "resolved by #N"); check off the parent body's
-  decision checklist. One live 🚧 comment per issue — `--update` edits in
-  place, never stacks banners.
-- **Mark loop comments on escalated issues.** Any non-resolving loop comment
-  on a `needs-human` issue MUST end with `<!-- shipflow:loop -->` or it
-  un-parks the issue (#411); markers match by prefix. Full rule in
-  `loop-gate.md`.
-- **Every free-text loop comment on a loop-authored PR goes through
-  `renaiss-shipflow pr note <n> --body … [--rework-from <id>]` (#603)** — it
-  carries the marker; bare `gh pr comment` is BANNED (measured, #477). Every
-  state, gated or not — conflict resolutions and stale nudges included.
-- **Intent gate / reporter protocol → `loop-gate.md`** — marker discipline
-  on gated PRs, the release-token table, the rework/`rework-from` protocol and
-  escalate-once: load that card whenever a row shows `awaiting_reporter`,
-  `reporter_corrected`, or `escalateOnce: true`, or before commenting on any
-  `needs-human` issue. Never act on a gated PR without it.
-- Reconcile (A) acts only on **your own** PRs and claimed issues; don't
-  touch others' unless asked.
-- Blocked/escalated issues keep their claim and carry `needs-human`, so
-  `issue next` advances past them. **A human reply brings the issue back**
-  — the server clears `needs-human`; Phase A treats the reply as the
-  decision (implement, add `loop-proceed`, never re-ask). B null **and** A
-  clean → C; the run ends only when C is also empty.
-- **Bug sweep files real bugs only** (Phase C): reproduced, never a
-  duplicate, always `auto-qa`, at most `bug-hunt-cap` per run. No
-  speculative/style nitpicks.
+- **Orchestrator context discipline:** dispatch, don't do — compact JSON
+  and one-line subagent returns only, never source files, diffs, or test
+  logs (that's what lets `cap=all` run without bloat).
 - **Self-regulate — WTF-likelihood:** start 0%; +15% per revert, +20% fix
   touches files unrelated to its issue, +5% per fix touching >3 files,
   +10% if only `low` severity remains. **Above ~20% → stop and
   summarize** — the loop is guessing. Smarter brake than
   `max-fix-attempts` (per-PR retries only).
-- **Health gate on merge:** a negative health delta
-  (`references/qa-report.md`) is treated like an unresolved thread — no
-  reviewer approval, no automerge, regardless of `merge-policy`.
-- **Pass ledger (mandatory, every pass end — operator requirement #608):**
-  after the count line, print a compact table: one row per DISPATCH —
-  `role · target (#issue/#PR) · outcome · subagent tokens` (from each Task
-  return's usage metadata) — plus a totals row (dispatches, merged, tokens).
-  Tokens the orchestrator itself spent go in the totals line when the harness
-  reports them. No ledger = the pass is not done.
-  Include `tokensReadPerTick` in the totals row — the doc/context TOKENS this
-  tick loaded (spine + cards + contracts; ≈ bytes/4), so corpus creep stays
-  measurable (#611).
-- **At the cap or an empty queue:** summarize — PRs opened, merged,
-  parked-awaiting-review, escalated (with reasons) — then ask whether to
-  continue beyond the cap or raise the merge policy. Intent-gate-parked
-  rows: the correct copy is "N PR(s) await your confirmation token on the
-  PR (or remove the `needs-reporter-review` label)" — never suggest a
-  hand-merge for a gated PR (#451); "merge by hand" only for rows the
-  operator can legitimately merge (e.g. policy-parked on `manual`).
-  Releasing escalated claims and any `pr merge`/`release` need explicit
-  confirmation. The "ask" applies only to a `once` run — **by default the
-  loop is continuous**: post the one-line summary and end the turn; a
-  **spawned / headless session** never asks either.
-- **Continuous mode (default).** One full pass, **dormant ~15 min**,
-  repeat. At run start create a recurring trigger with `CronCreate`
-  (every 15 min, an off-`:00`/`:30` minute) whose prompt is the
-  **fully-qualified** **`/shipflow:shipflow-loop`** — never bare
-  `/shipflow-loop` (`Unknown command` when scheduler-fired); always the
-  exact `<plugin>:<command>` form you were invoked as. Run the first pass
-  now; re-entry is idempotent (`CronList` shows the job — don't
-  re-create); each tick ends without asking (empty queue is fine).
-  `/shipflow:shipflow-loop once` = single pass, no trigger; stop with
-  `/shipflow:shipflow-loop stop` (`CronDelete`), then worktree cleanup.
-  The trigger fires only while Claude Code runs/idles, may be
-  session-scoped (cmux, ~7-day expiry); for always-on, an external
-  scheduler (cron / launchd / GitHub Actions) drives
-  `/shipflow:shipflow-loop once`. Codex CLI has no CronCreate — external
-  scheduler only; subagent dispatch degrades to inline roles
-  (`references/codex.md`).
 
 ## Message style
 

@@ -61,7 +61,7 @@ file's real section headings (§) — follow them there, never from memory.
 8. **D. Repeat** A→B→C to the cap or a truly empty queue; the cap counter
    resets every tick: § "D. Repeat / stop".
 
-## Continuous mode (default) — trigger semantics live HERE
+## Continuous mode (default) — invocation; run-start copy is `loop-setup.md`
 
 Unless `once` was passed, set the trigger up once, idempotently, at run start:
 
@@ -90,18 +90,20 @@ Unless `once` was passed, set the trigger up once, idempotently, at run start:
 
 | Topic | loop-mode.md § |
 |---|---|
-| Policy knobs, `app-slug`, what "approval" is | "Policies — the three knobs (set once, then trust them)" |
-| Orchestrator/reviewer/worker contracts, worker model knob | "Roles — three subagents the orchestrator dispatches" |
+| Policy knobs, `app-slug`, what "approval" is, continuous `CronCreate` | "Policies — the three knobs (set once, then trust them)" + `loop-setup.md` |
+| Orchestrator/reviewer/worker contracts, model tiers, `TaskStop`, `/goal` | "Roles — three subagents the orchestrator dispatches" |
 | Per-`state` actions: `ci_failing`, review feedback, merge-order, `approved_ready`/automerge, "behind base", `conflict` + sweep scope, `reporter_corrected`, `awaiting_reporter`/escalate-once, `needs-human` replies | "A. Reconcile in-flight work — dispatch a worker per item" + "Reconcile playbook (inbox `state` → action)" |
-| Intake gate, dependency waits, capability requests, reviewer intake brief, worker fix contract, reviewer PR review + security diff scan + approve flags | "B. Admit new work — under the WIP limit, every issue reviewed first" |
+| Intent gate, comment markers, `pr note` / `--rework-from` | "A. Reconcile in-flight work — dispatch a worker per item" + `loop-gate.md` |
+| Intake gate, dependency waits, capability requests, reviewer intake brief, worker fix contract, reviewer PR review + security diff scan + approve flags, escalation (`autoResolved`, `signoff-owner`), health gate | "B. Admit new work — under the WIP limit, every issue reviewed first" |
 | Sweep procedure, dedupe / exit 12, filing caps | "C. Bug sweep — when there's nothing left to fix, hunt for new bugs" |
-| Merge path, intent gate, comment markers, escalation contract, model tiers, WTF brake, health gate, cleanup | "Guardrails" |
+| Pass ledger (`tokensReadPerTick`), cap / empty-queue summary | "D. Repeat / stop" |
+| Merge path (`pr automerge` only), dispatch-don't-do, WTF brake | "Guardrails" |
 | GitHub comment/PR/issue formats, issue-body ladder, commit messages | `references/message-style.md` |
 
 **End of every pass (mandatory):** post the ONE emoji-coded summary line — `✅ N
 merged · 🔀 N opened · ⏸ N parked (reason) · 🚧 N escalated (reason)` — rules
-(incl. what a `once` run may ask, and gated-row wording) in § "Guardrails" →
-"At the cap or an empty queue".
+(incl. what a `once` run may ask, and gated-row wording) in § "D. Repeat /
+stop".
 **Tick 1's Initial Plan block (pass ledger) is mandatory** before any dispatch —
 shape and sections in § "The cycle — each tick".
 
