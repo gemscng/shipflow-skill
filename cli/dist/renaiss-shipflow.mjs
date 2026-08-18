@@ -2453,8 +2453,12 @@ function stripQuotedLines(body) {
 `);
 }
 function commentAuthorCouldBeLoop(c) {
-  if ((c.author?.login ?? "").trim().endsWith("[bot]"))
+  const login = (c.author?.login ?? "").trim();
+  if (login.endsWith("[bot]"))
     return true;
+  if (INTENT_GATE_AUDIT_AUTHOR_SLUG !== "" && normalizeBotLogin(login) === INTENT_GATE_AUDIT_AUTHOR_SLUG) {
+    return true;
+  }
   return TRUSTED_AUTHOR_ASSOCIATIONS.has((c.authorAssociation ?? "").trim().toUpperCase());
 }
 function commentIsMachinery(c) {
