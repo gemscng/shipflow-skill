@@ -2248,6 +2248,9 @@ function ciStateOf(checks) {
     return "passing";
   return "none";
 }
+function foldLogin(s) {
+  return s.trim().toLowerCase();
+}
 function prAttentionReasons(pr, me) {
   const reasons = [];
   if (pr.reviewDecision === "CHANGES_REQUESTED")
@@ -2255,7 +2258,7 @@ function prAttentionReasons(pr, me) {
   const failing = (pr.statusCheckRollup ?? []).some((c) => FAILING.has((c.conclusion ?? "").toUpperCase()) || FAILING.has((c.state ?? "").toUpperCase()));
   if (failing)
     reasons.push("ci_failing");
-  const fromOthers = (a) => !!a.author && a.author.login !== me;
+  const fromOthers = (a) => !!a.author && foldLogin(a.author.login) !== foldLogin(me);
   const reviewFeedback = (pr.reviews ?? []).filter((r) => fromOthers(r) && (r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED"));
   const otherComments = (pr.comments ?? []).filter(fromOthers);
   if (reviewFeedback.length || otherComments.length)
@@ -2266,7 +2269,7 @@ function issueNeedsReply(comments, me) {
   if (!comments?.length)
     return null;
   const last = comments[comments.length - 1];
-  return last.author && last.author.login !== me ? last : null;
+  return last.author && foldLogin(last.author.login) !== foldLogin(me) ? last : null;
 }
 function isApproved(pr) {
   if (pr.reviewDecision === "APPROVED")
@@ -2577,11 +2580,11 @@ function reviewSettle(input) {
   const remainingMs = Math.max(0, settleMs - (input.nowMs - headMs));
   if (input.nowMs - headMs >= settleMs)
     return { settled: true, remainingMs: 0 };
-  const me = input.me.trim().toLowerCase();
+  const me = foldLogin(input.me);
   if (me !== "") {
     for (const r of input.reviews) {
       const login = settleReviewLogin(r);
-      if (!login || login.toLowerCase() === me)
+      if (!login || foldLogin(login) === me)
         continue;
       const submitted = Date.parse(r.submittedAt ?? "");
       if (Number.isNaN(submitted) || submitted < headMs)
@@ -2666,7 +2669,7 @@ function foreignConflictedPRs(mine, all, me, opts = {}) {
   if (opts.enabled !== true)
     return [];
   const mineNums = new Set(mine.map((p) => p.number));
-  return all.filter((p) => !mineNums.has(p.number) && !p.isDraft && (p.mergeable ?? "").toUpperCase() === "CONFLICTING" && (p.author?.login ?? "") !== me).map((pr) => {
+  return all.filter((p) => !mineNums.has(p.number) && !p.isDraft && (p.mergeable ?? "").toUpperCase() === "CONFLICTING" && foldLogin(p.author?.login ?? "") !== foldLogin(me)).map((pr) => {
     const distrust = headTrust(pr);
     return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
   });
