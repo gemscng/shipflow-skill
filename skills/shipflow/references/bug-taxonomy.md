@@ -77,7 +77,7 @@ renaiss-shipflow issue create --title "<bug>" --body "<body — see shape below>
 ```
 
 The reviewer uses the same severity words in its verdict bullets
-(`[critical|high|med]`).
+(`critical|high|medium|low`; `loop-reviewer.md`).
 
 The body follows the **issue-body ladder** (`message-style.md` § "Issue-body
 ladder" — the one authoritative copy; `loop-mode.md` § "Message style" is now a
@@ -92,14 +92,16 @@ load-bearing (GitHub collapses single newlines).
 
 ## 4. Per-page QA checklist (the bug sweep's method)
 
-Run on every page the sweep visits — systematic, not ad-hoc:
+Run on every page the sweep visits — systematic, not ad-hoc. Browse
+snapshot/console **flags** are unverified here (`shipflow-browser` found
+no local `browse` CLI), so this list is the method, not a flag contract.
 
-1. **Visual scan** — annotated screenshot (`snapshot -i -a -o`); layout/image/alignment breaks
+1. **Visual scan** — annotated screenshot; layout/image/alignment breaks
 2. **Interactive elements** — click every button, link, control; each does what it says?
 3. **Forms** — fill + submit; empty, invalid, and edge data (long text, special chars)
 4. **Navigation** — paths in/out: breadcrumbs, back button, deep links, mobile menu
 5. **States** — empty, loading, error, full/overflow
-6. **Console** — `console --errors` after interactions; new JS errors or failed requests?
+6. **Console** — after interactions; new JS errors or failed requests?
 7. **Responsiveness** — mobile + tablet viewports where relevant (`viewport 375x812`)
 8. **Auth boundaries** — logged-out behavior; different roles
 
