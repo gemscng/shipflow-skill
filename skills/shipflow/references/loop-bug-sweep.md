@@ -72,16 +72,20 @@ refills the queue:
 
    | Title filed while #427 is open | vs #427 | vs every OTHER open issue |
    |---|---|---|
-   | #579's title + ` (#427 regression)` | **refused** at 0.778 — `427` is dropped from gate 3, but the citation tokens stay in Dice, so 0.875 deflates to 0.778 | `427` still discriminates in full |
+   | #579's title + ` (#427 regression)` | **refused** at 0.824 — gate 5 drops `427`; public `similarity()` stays 0.778 | `427` still discriminates in full |
    | #579's title + ` (#999 regression)` | files clean — `999` still discriminates | `999` still discriminates |
    | `owner/repo#427` anywhere in the title | files clean — a cross-repo ref is not a citation | unchanged |
    | `427` used bare *and* cited (`retried 427 times, see #427`) | files clean — one bare use is enough | unchanged |
+   | 1-token + `(#N)` / `(#N-suffix)` / `(#0N)` | **refused** at 1.000 — C3 equality + gate-5 drop (#588) | the other number still discriminates |
+   | 1-token + `(#N extra)` (`登录失败 (#7 regression)`) | files clean — extra words stay; C3 equality fails. Accepted residual (#588) | unchanged |
 
    **A citation of the issue you are restating no longer excuses you; a
    citation of any OTHER issue still does** (measured, #587; dropping every
-   cited number is deliberately NOT the rule — #590). **The margin is
-   thin**: 0.778 sits 0.078 above the 0.70 floor — three more content words
-   tip a refusal into a clean file (#588).
+   cited number is deliberately NOT the rule — #590). **#588:** a 1-token
+   title plus `(#N)` sat at Dice 0.667 and filed clean; gate 5 now scores
+   the same minus-set C3 already shares, so that pair refuses. Extra
+   non-citation parenthetical words (`(#7 regression)`) still miss — residual,
+   not phrase-stripped.
 
    | Outcome | Exit | What you do |
    |---|---|---|

@@ -6077,17 +6077,26 @@ function sameSet(a, b) {
       return false;
   return true;
 }
+function minus(s, drop) {
+  if (drop === undefined || drop.size === 0)
+    return s;
+  const out = new Set;
+  for (const t of s)
+    if (!drop.has(t))
+      out.add(t);
+  return out;
+}
 function sameSetIgnoring(a, b, ignore) {
-  if (ignore === undefined || ignore.size === 0)
-    return sameSet(a, b);
-  const drop = (s) => {
-    const out = new Set;
-    for (const t of s)
-      if (!ignore.has(t))
-        out.add(t);
-    return out;
-  };
-  return sameSet(drop(a), drop(b));
+  return sameSet(minus(a, ignore), minus(b, ignore));
+}
+function dice(a, b) {
+  if (a.size === 0 || b.size === 0)
+    return 0;
+  let shared = 0;
+  for (const t of a)
+    if (b.has(t))
+      shared++;
+  return 2 * shared / (a.size + b.size);
 }
 function citationExclude(self, mine, theirs) {
   if (!mine.citations.has(self) && !theirs.citations.has(self))
@@ -6100,17 +6109,6 @@ function citationExclude(self, mine, theirs) {
     }
   }
   return out;
-}
-function similarity(a, b) {
-  const A = new Set(normalizeTitle(a).tokens);
-  const B = new Set(normalizeTitle(b).tokens);
-  if (A.size === 0 || B.size === 0)
-    return 0;
-  let shared = 0;
-  for (const t of A)
-    if (B.has(t))
-      shared++;
-  return 2 * shared / (A.size + B.size);
 }
 function contains(shorter, longer) {
   for (const t of shorter)
@@ -6147,7 +6145,7 @@ function findDuplicateCandidates(title, openIssues, opts = {}) {
         continue;
     } else if (!contains(shorter, longer))
       continue;
-    const score = similarity(title, issue.title);
+    const score = dice(minus(mineSet, selfExclude), minus(theirSet, selfExclude));
     if (score >= threshold) {
       out.push({ number: issue.number, title: issue.title, score: Math.round(score * 1000) / 1000 });
     }
