@@ -7690,6 +7690,18 @@ function verdictHeader(verdict) {
       return "**\uD83D\uDCAC ShipFlow review — comments**";
   }
 }
+function findingsIssueGuardError(findings) {
+  if (!Array.isArray(findings))
+    return;
+  for (let i = 0;i < findings.length; i++) {
+    const f = findings[i];
+    const issue = f != null && typeof f === "object" ? f.issue : undefined;
+    if (typeof issue !== "string" || !issue.trim()) {
+      return `findings[${i}].issue must be a non-empty string`;
+    }
+  }
+  return;
+}
 var REVIEW_MARKER = SHIPFLOW_CONTRACT.markers.loopReview;
 function renderFindingBody(f) {
   let b = `${severityBadge(f.severity)}${effortTag(f.effort)} ${f.issue}`;
@@ -8677,6 +8689,12 @@ ${opts.body ?? ""}`;
       process.exit(1);
     }
     const findings = Array.isArray(parsed) ? parsed : parsed?.findings ?? [];
+    const issueErr = findingsIssueGuardError(findings);
+    if (issueErr) {
+      console.error(`--findings: ${issueErr}`);
+      console.error("   Nothing was posted. Each finding needs a non-empty string `issue` (not title/summary).");
+      process.exit(1);
+    }
     const census = changedFilesOrNull(repo, number);
     const approving = verdict === "approve";
     let prDiff = null;
