@@ -4152,9 +4152,9 @@ function ghIssueListByLabel(repo, label, limit = 30) {
   return JSON.parse(out);
 }
 function ghOpenPRClosingIssues(repo) {
-  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --state open --limit 100 --json closingIssuesReferences`).toString();
+  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --state open --limit 100 --json body,closingIssuesReferences`).toString();
   const prs = JSON.parse(out);
-  return new Set(prs.flatMap((p) => (p.closingIssuesReferences ?? []).map((r) => r.number)));
+  return new Set(prs.flatMap((p) => linkedIssueNumbers(p)));
 }
 function ghPRDiffText(repo, number) {
   return _exec(`gh pr diff ${number} --repo ${shellQuote(repo)}`, { maxBuffer: 32 * 1024 * 1024 }).toString();
