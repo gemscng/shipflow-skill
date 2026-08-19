@@ -16,9 +16,11 @@ un-tracked; never create duplicate issues.
    or user-facing behavior.
 1. **Summarize the work** in a sentence or two (the user's description, the
    branch name, and/or `git diff` / recent commits) — that intent is the query.
-2. **List candidates:** `renaiss-shipflow issues list --json --limit 1000`.
-   **Not the default `--limit 30`** — a newest-first slice structurally cannot
-   contain an older duplicate (#580; the windowed-scan misses that let #579 re-file #427 are the measured case).
+2. **List candidates:** `renaiss-shipflow issues list --json`.
+   Default window is 1000 (same as the create pre-flight). If the envelope
+   has `truncated: true`, the window is FULL — older issues were not
+   returned; raise `--limit` before treating the list as complete
+   (#582; the old default `--limit 30` is how #579 restated #427).
 3. **Match (you do this — it's semantic).** Compare the work against each open
    issue's title + body; be conservative — only a match when the work plainly
    implements or fixes that issue.

@@ -4721,7 +4721,6 @@ function registerRepoCommands(program2) {
       console.log(`Repository: ${data.fullName}`);
       console.log(`  Active: ${data.isActive ? "yes" : "no"}`);
       console.log(`  URL: ${data.htmlUrl}`);
-      console.log(`  Created: ${data.createdAt}`);
       console.log(`  Workflows:`);
       if (data.workflowConfigs.length === 0) {
         console.log("    (none configured)");
@@ -5600,286 +5599,6 @@ init_gh();
 import { writeFileSync as writeFileSync2 } from "node:fs";
 import { resolve as resolve3 } from "node:path";
 
-// src/xlsx.ts
-function buildXlsx(sheetName, headers, rows) {
-  const sheet = sheetXml([headers, ...rows]);
-  const entries = [
-    { name: "[Content_Types].xml", data: Buffer.from(CONTENT_TYPES_XML) },
-    { name: "_rels/.rels", data: Buffer.from(ROOT_RELS_XML) },
-    { name: "xl/workbook.xml", data: Buffer.from(workbookXml(sheetName)) },
-    { name: "xl/_rels/workbook.xml.rels", data: Buffer.from(WORKBOOK_RELS_XML) },
-    { name: "xl/worksheets/sheet1.xml", data: Buffer.from(sheet) }
-  ];
-  return zipStore(entries);
-}
-var CONTENT_TYPES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` + `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` + `<Default Extension="xml" ContentType="application/xml"/>` + `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` + `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` + `</Types>`;
-var ROOT_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` + `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>` + `</Relationships>`;
-var WORKBOOK_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` + `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>` + `</Relationships>`;
-function workbookXml(sheetName) {
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` + `<sheets><sheet name="${xmlEscape(sanitizeSheetName(sheetName))}" sheetId="1" r:id="rId1"/></sheets>` + `</workbook>`;
-}
-function sheetXml(rows) {
-  const body = rows.map((row, r) => {
-    const cells = row.map((v, c) => {
-      if (v === null || v === undefined || v === "")
-        return "";
-      const ref = `${colRef(c)}${r + 1}`;
-      if (typeof v === "number" && Number.isFinite(v)) {
-        return `<c r="${ref}"><v>${v}</v></c>`;
-      }
-      return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(String(v))}</t></is></c>`;
-    }).join("");
-    return `<row r="${r + 1}">${cells}</row>`;
-  }).join("");
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` + `<sheetData>${body}</sheetData>` + `</worksheet>`;
-}
-function colRef(index) {
-  let n = index + 1;
-  let ref = "";
-  while (n > 0) {
-    const rem = (n - 1) % 26;
-    ref = String.fromCharCode(65 + rem) + ref;
-    n = Math.floor((n - 1) / 26);
-  }
-  return ref;
-}
-var MAX_CELL_CHARS = 32767;
-function xmlEscape(s) {
-  let v = s;
-  if (v.length > MAX_CELL_CHARS)
-    v = v.slice(0, MAX_CELL_CHARS - 1) + "…";
-  return v.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-function sanitizeSheetName(name) {
-  const cleaned = name.replace(/[[\]:*?/\\]/g, " ").trim() || "Sheet1";
-  return cleaned.slice(0, 31);
-}
-var DOS_TIME = 0;
-var DOS_DATE = 33;
-function zipStore(entries) {
-  const chunks = [];
-  const central = [];
-  let offset = 0;
-  for (const e of entries) {
-    const name = Buffer.from(e.name, "utf8");
-    const crc = crc32(e.data);
-    const local = Buffer.alloc(30);
-    local.writeUInt32LE(67324752, 0);
-    local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(0, 6);
-    local.writeUInt16LE(0, 8);
-    local.writeUInt16LE(DOS_TIME, 10);
-    local.writeUInt16LE(DOS_DATE, 12);
-    local.writeUInt32LE(crc, 14);
-    local.writeUInt32LE(e.data.length, 18);
-    local.writeUInt32LE(e.data.length, 22);
-    local.writeUInt16LE(name.length, 26);
-    local.writeUInt16LE(0, 28);
-    chunks.push(local, name, e.data);
-    const dir = Buffer.alloc(46);
-    dir.writeUInt32LE(33639248, 0);
-    dir.writeUInt16LE(20, 4);
-    dir.writeUInt16LE(20, 6);
-    dir.writeUInt16LE(0, 8);
-    dir.writeUInt16LE(0, 10);
-    dir.writeUInt16LE(DOS_TIME, 12);
-    dir.writeUInt16LE(DOS_DATE, 14);
-    dir.writeUInt32LE(crc, 16);
-    dir.writeUInt32LE(e.data.length, 20);
-    dir.writeUInt32LE(e.data.length, 24);
-    dir.writeUInt16LE(name.length, 28);
-    dir.writeUInt32LE(0, 38);
-    dir.writeUInt32LE(offset, 42);
-    central.push(Buffer.concat([dir, name]));
-    offset += 30 + name.length + e.data.length;
-  }
-  const centralBuf = Buffer.concat(central);
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(101010256, 0);
-  eocd.writeUInt16LE(entries.length, 8);
-  eocd.writeUInt16LE(entries.length, 10);
-  eocd.writeUInt32LE(centralBuf.length, 12);
-  eocd.writeUInt32LE(offset, 16);
-  return Buffer.concat([...chunks, centralBuf, eocd]);
-}
-var CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let i = 0;i < 256; i++) {
-    let c = i;
-    for (let k = 0;k < 8; k++)
-      c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
-    table[i] = c >>> 0;
-  }
-  return table;
-})();
-function crc32(buf) {
-  let c = 4294967295;
-  for (let i = 0;i < buf.length; i++)
-    c = CRC_TABLE[(c ^ buf[i]) & 255] ^ c >>> 8;
-  return (c ^ 4294967295) >>> 0;
-}
-
-// src/commands/issues.ts
-init_helpers();
-var collect = (v, prev) => prev.concat([v]);
-function registerIssuesCommand(program2) {
-  const issues = program2.command("issues").description("Issue listing");
-  issues.command("list").description("List open issues for the current repo, with ShipFlow triage overlay").option("--state <state>", "Issue state", "open").option("--limit <n>", "Max results", "30").option("--assignee <login>", "Only issues assigned to this user (@me = current gh login)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
-    const { project } = await loadCtx(program2);
-    const assignee = opts.assignee === "@me" ? resolveMeLogin("issues list --assignee @me") : opts.assignee;
-    const list = ghIssueList(project.repoFullName, opts.state, parseInt(opts.limit, 10), assignee);
-    emit(opts, { project, issues: list }, () => {
-      if (!list.length) {
-        console.log("No issues.");
-        return;
-      }
-      const rows = list.map((i) => [`#${i.number}`, i.title, i.labels.map((l) => l.name).join(", ")]);
-      for (const l of renderTable(["#", "Title", "Labels"], rows))
-        console.log(l);
-    }, { pretty: true });
-  }));
-  issues.command("export").description("Export issue details to an Excel (.xlsx) file, with the filters GitHub issues support").option("--state <state>", "Issue state: open | closed | all", "open").option("--label <label>", "Filter by label (repeatable)", collect, []).option("--assignee <login>", "Filter by assignee").option("--author <login>", "Filter by author").option("--mention <login>", "Filter by mentioned user").option("--milestone <name>", "Filter by milestone name or number").option("--search <query>", 'GitHub search syntax (e.g. "error in:title sort:created-asc")').option("--limit <n>", "Max issues to export", "1000").option("--out <file>", "Output path (default: shipflow-issues-<repo>-<date>.xlsx)").action(runAction(async (opts) => {
-    if (!["open", "closed", "all"].includes(opts.state)) {
-      console.error(`Invalid --state ${JSON.stringify(opts.state)}: use open, closed, or all.`);
-      process.exit(1);
-    }
-    const ctx = await loadCtx(program2);
-    const repo = ctx.project.repoFullName;
-    const list = ghIssueListFiltered(repo, {
-      state: opts.state,
-      labels: opts.label,
-      assignee: opts.assignee,
-      author: opts.author,
-      mention: opts.mention,
-      milestone: opts.milestone,
-      search: opts.search,
-      limit: parseInt(opts.limit, 10)
-    });
-    const out = resolve3(opts.out ?? `shipflow-issues-${repo.replace("/", "-")}-${new Date().toISOString().slice(0, 10)}.xlsx`);
-    writeFileSync2(out, buildXlsx("Issues", EXPORT_HEADERS, list.map(issueRow)));
-    console.log(`Exported ${list.length} issue${list.length === 1 ? "" : "s"} from ${repo} to ${out}`);
-  }));
-}
-var EXPORT_HEADERS = [
-  "Number",
-  "Title",
-  "State",
-  "Labels",
-  "Assignees",
-  "Author",
-  "Milestone",
-  "Created At",
-  "Updated At",
-  "Closed At",
-  "URL",
-  "Body"
-];
-function issueRow(i) {
-  return [
-    i.number,
-    i.title,
-    i.state,
-    i.labels.map((l) => l.name).join(", "),
-    i.assignees.map((a) => a.login).join(", "),
-    i.author?.login ?? "",
-    i.milestone?.title ?? "",
-    i.createdAt,
-    i.updatedAt,
-    i.closedAt ?? "",
-    i.url,
-    i.body
-  ];
-}
-
-// src/commands/issue.ts
-init_client();
-init_project();
-init_gh();
-init_escalation_format();
-init_pr_state();
-import { hostname as hostname2 } from "node:os";
-import { readFileSync as readFileSync3, statSync } from "node:fs";
-import { basename as basename2 } from "node:path";
-
-// src/message-lint.ts
-var TABLE_ROW = /^\s*\|.+\|\s*$/m;
-var CHECKLIST_ITEM = /^\s*[-*+]\s+\[[ xX]\]\s/m;
-var BULLET_ITEM = /^\s*[-*+]\s+\S/m;
-var NUMBERED_ITEM = /^\s*\d+[.)]\s+\S/m;
-var PATH_FACT = /(?:\b[\w.-]+(?:\/[\w.-]+){2,}(?::\d+)?)|(?:\b[\w.-]+\/[\w./-]*\.\w{1,6}\b(?::\d+)?)|(?:\b[\w.-]*\w\.\w{1,6}:\d+)/;
-var COUNT_FACT = /(?:^|[\s(])[+-]?\d+(?:\.\d+)?%?(?=[\s).,;:!?]|$)/;
-var LABEL_FACT = /\b[A-Z][\w-]{1,24}:\s/;
-function stripNonProse(body) {
-  return body.replace(/```[\s\S]*?(?:```|$)/g, " ").replace(/`[^`\n]*`/g, " ").replace(/https?:\/\/[^\s)>\]]+/g, " ");
-}
-function splitSentences(prose) {
-  return prose.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter((s) => s.length >= 3);
-}
-function lintMessageBody(body) {
-  const b = body.trim();
-  if (!b)
-    return [];
-  if (TABLE_ROW.test(b) || CHECKLIST_ITEM.test(b) || BULLET_ITEM.test(b) || NUMBERED_ITEM.test(b)) {
-    return [];
-  }
-  const sentences = splitSentences(stripNonProse(b));
-  if (sentences.length < 3)
-    return [];
-  const factSentences = sentences.filter((s) => PATH_FACT.test(s) || COUNT_FACT.test(s) || LABEL_FACT.test(s));
-  if (factSentences.length < 3)
-    return [];
-  return [
-    `body is pure prose but carries ${factSentences.length} sentences of parallel facts (paths/counts/labels) — ` + "restructure as a table (>3 facts), checklist, or bullet list so humans can skim it"
-  ];
-}
-function visibleLineCount(body) {
-  let depth = 0;
-  let fenced = false;
-  let count = 0;
-  for (const line of body.split(`
-`)) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      if (depth === 0 && line.trim() !== "")
-        count++;
-      fenced = !fenced;
-      continue;
-    }
-    if (fenced) {
-      if (depth === 0 && line.trim() !== "")
-        count++;
-      continue;
-    }
-    const stripped = line.replace(/`[^`\n]*`/g, " ");
-    const opens = (stripped.match(/<details\b/gi) ?? []).length;
-    const closes = (stripped.match(/<\/details>/gi) ?? []).length;
-    if (depth === 0 && line.trim() !== "")
-      count++;
-    depth = Math.max(0, depth + opens - closes);
-  }
-  return count;
-}
-var EXAMPLE_SIGNAL = /\bexample\b|\brepro/i;
-var OUTCOME_SIGNAL = /\bexpected\b|\boutcome\b/i;
-function lintIssueOutcome(body) {
-  const b = body.trim();
-  if (!b)
-    return [];
-  if (EXAMPLE_SIGNAL.test(b) || OUTCOME_SIGNAL.test(b))
-    return [];
-  return [
-    "body has no Example/Repro and no Expected result/Outcome — add one concrete scenario " + "and the observable behavior once it lands (issue-body ladder, message-style.md)"
-  ];
-}
-var MAX_VISIBLE_BODY_LINES = 50;
-function lintBodyLength(body) {
-  const visible = visibleLineCount(body);
-  if (visible <= MAX_VISIBLE_BODY_LINES)
-    return [];
-  return [
-    `body has ${visible} visible lines outside <details> (max ${MAX_VISIBLE_BODY_LINES}) — ` + "lead with a short TLDR + key changes, and fold long sections (diagrams, file tables, " + "checklists, review logs) into <details> blocks; keep any 'Deviations from brief' section visible"
-  ];
-}
-
 // src/issue-similarity.ts
 var STOPWORDS = new Set([
   "a",
@@ -6152,6 +5871,294 @@ function findDuplicateCandidates(title, openIssues, opts = {}) {
   }
   out.sort((a, b) => b.score - a.score || a.number - b.number);
   return out.slice(0, limit);
+}
+
+// src/xlsx.ts
+function buildXlsx(sheetName, headers, rows) {
+  const sheet = sheetXml([headers, ...rows]);
+  const entries = [
+    { name: "[Content_Types].xml", data: Buffer.from(CONTENT_TYPES_XML) },
+    { name: "_rels/.rels", data: Buffer.from(ROOT_RELS_XML) },
+    { name: "xl/workbook.xml", data: Buffer.from(workbookXml(sheetName)) },
+    { name: "xl/_rels/workbook.xml.rels", data: Buffer.from(WORKBOOK_RELS_XML) },
+    { name: "xl/worksheets/sheet1.xml", data: Buffer.from(sheet) }
+  ];
+  return zipStore(entries);
+}
+var CONTENT_TYPES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` + `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` + `<Default Extension="xml" ContentType="application/xml"/>` + `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` + `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` + `</Types>`;
+var ROOT_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` + `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>` + `</Relationships>`;
+var WORKBOOK_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` + `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>` + `</Relationships>`;
+function workbookXml(sheetName) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` + `<sheets><sheet name="${xmlEscape(sanitizeSheetName(sheetName))}" sheetId="1" r:id="rId1"/></sheets>` + `</workbook>`;
+}
+function sheetXml(rows) {
+  const body = rows.map((row, r) => {
+    const cells = row.map((v, c) => {
+      if (v === null || v === undefined || v === "")
+        return "";
+      const ref = `${colRef(c)}${r + 1}`;
+      if (typeof v === "number" && Number.isFinite(v)) {
+        return `<c r="${ref}"><v>${v}</v></c>`;
+      }
+      return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(String(v))}</t></is></c>`;
+    }).join("");
+    return `<row r="${r + 1}">${cells}</row>`;
+  }).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` + `<sheetData>${body}</sheetData>` + `</worksheet>`;
+}
+function colRef(index) {
+  let n = index + 1;
+  let ref = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    ref = String.fromCharCode(65 + rem) + ref;
+    n = Math.floor((n - 1) / 26);
+  }
+  return ref;
+}
+var MAX_CELL_CHARS = 32767;
+function xmlEscape(s) {
+  let v = s;
+  if (v.length > MAX_CELL_CHARS)
+    v = v.slice(0, MAX_CELL_CHARS - 1) + "…";
+  return v.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function sanitizeSheetName(name) {
+  const cleaned = name.replace(/[[\]:*?/\\]/g, " ").trim() || "Sheet1";
+  return cleaned.slice(0, 31);
+}
+var DOS_TIME = 0;
+var DOS_DATE = 33;
+function zipStore(entries) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const e of entries) {
+    const name = Buffer.from(e.name, "utf8");
+    const crc = crc32(e.data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(67324752, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt16LE(DOS_TIME, 10);
+    local.writeUInt16LE(DOS_DATE, 12);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(e.data.length, 18);
+    local.writeUInt32LE(e.data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    local.writeUInt16LE(0, 28);
+    chunks.push(local, name, e.data);
+    const dir = Buffer.alloc(46);
+    dir.writeUInt32LE(33639248, 0);
+    dir.writeUInt16LE(20, 4);
+    dir.writeUInt16LE(20, 6);
+    dir.writeUInt16LE(0, 8);
+    dir.writeUInt16LE(0, 10);
+    dir.writeUInt16LE(DOS_TIME, 12);
+    dir.writeUInt16LE(DOS_DATE, 14);
+    dir.writeUInt32LE(crc, 16);
+    dir.writeUInt32LE(e.data.length, 20);
+    dir.writeUInt32LE(e.data.length, 24);
+    dir.writeUInt16LE(name.length, 28);
+    dir.writeUInt32LE(0, 38);
+    dir.writeUInt32LE(offset, 42);
+    central.push(Buffer.concat([dir, name]));
+    offset += 30 + name.length + e.data.length;
+  }
+  const centralBuf = Buffer.concat(central);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(101010256, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralBuf.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...chunks, centralBuf, eocd]);
+}
+var CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0;i < 256; i++) {
+    let c = i;
+    for (let k = 0;k < 8; k++)
+      c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+    table[i] = c >>> 0;
+  }
+  return table;
+})();
+function crc32(buf) {
+  let c = 4294967295;
+  for (let i = 0;i < buf.length; i++)
+    c = CRC_TABLE[(c ^ buf[i]) & 255] ^ c >>> 8;
+  return (c ^ 4294967295) >>> 0;
+}
+
+// src/commands/issues.ts
+init_helpers();
+var collect = (v, prev) => prev.concat([v]);
+function issuesListEnvelope(project, issues, limit) {
+  const returned = issues.length;
+  return { project, issues, returned, truncated: returned >= limit, total: null };
+}
+function registerIssuesCommand(program2) {
+  const issues = program2.command("issues").description("Issue listing");
+  issues.command("list").description("List open issues for the current repo, with ShipFlow triage overlay").option("--state <state>", "Issue state", "open").option("--limit <n>", "Max results", String(DUPLICATE_SCAN_LIMIT)).option("--assignee <login>", "Only issues assigned to this user (@me = current gh login)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    const { project } = await loadCtx(program2);
+    const assignee = opts.assignee === "@me" ? resolveMeLogin("issues list --assignee @me") : opts.assignee;
+    const limit = parseInt(opts.limit, 10);
+    const list = ghIssueList(project.repoFullName, opts.state, limit, assignee);
+    emit(opts, issuesListEnvelope(project, list, limit), () => {
+      if (!list.length) {
+        console.log("No issues.");
+        return;
+      }
+      if (list.length >= limit) {
+        console.warn(`⚠️  issues list window is FULL (${list.length} issues) — anything older than the newest ${limit} was NOT fetched; raise --limit.`);
+      }
+      const rows = list.map((i) => [`#${i.number}`, i.title, i.labels.map((l) => l.name).join(", ")]);
+      for (const l of renderTable(["#", "Title", "Labels"], rows))
+        console.log(l);
+    }, { pretty: true });
+  }));
+  issues.command("export").description("Export issue details to an Excel (.xlsx) file, with the filters GitHub issues support").option("--state <state>", "Issue state: open | closed | all", "open").option("--label <label>", "Filter by label (repeatable)", collect, []).option("--assignee <login>", "Filter by assignee").option("--author <login>", "Filter by author").option("--mention <login>", "Filter by mentioned user").option("--milestone <name>", "Filter by milestone name or number").option("--search <query>", 'GitHub search syntax (e.g. "error in:title sort:created-asc")').option("--limit <n>", "Max issues to export", String(DUPLICATE_SCAN_LIMIT)).option("--out <file>", "Output path (default: shipflow-issues-<repo>-<date>.xlsx)").action(runAction(async (opts) => {
+    if (!["open", "closed", "all"].includes(opts.state)) {
+      console.error(`Invalid --state ${JSON.stringify(opts.state)}: use open, closed, or all.`);
+      process.exit(1);
+    }
+    const ctx = await loadCtx(program2);
+    const repo = ctx.project.repoFullName;
+    const list = ghIssueListFiltered(repo, {
+      state: opts.state,
+      labels: opts.label,
+      assignee: opts.assignee,
+      author: opts.author,
+      mention: opts.mention,
+      milestone: opts.milestone,
+      search: opts.search,
+      limit: parseInt(opts.limit, 10)
+    });
+    const out = resolve3(opts.out ?? `shipflow-issues-${repo.replace("/", "-")}-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    writeFileSync2(out, buildXlsx("Issues", EXPORT_HEADERS, list.map(issueRow)));
+    console.log(`Exported ${list.length} issue${list.length === 1 ? "" : "s"} from ${repo} to ${out}`);
+  }));
+}
+var EXPORT_HEADERS = [
+  "Number",
+  "Title",
+  "State",
+  "Labels",
+  "Assignees",
+  "Author",
+  "Milestone",
+  "Created At",
+  "Updated At",
+  "Closed At",
+  "URL",
+  "Body"
+];
+function issueRow(i) {
+  return [
+    i.number,
+    i.title,
+    i.state,
+    i.labels.map((l) => l.name).join(", "),
+    i.assignees.map((a) => a.login).join(", "),
+    i.author?.login ?? "",
+    i.milestone?.title ?? "",
+    i.createdAt,
+    i.updatedAt,
+    i.closedAt ?? "",
+    i.url,
+    i.body
+  ];
+}
+
+// src/commands/issue.ts
+init_client();
+init_project();
+init_gh();
+init_escalation_format();
+init_pr_state();
+import { hostname as hostname2 } from "node:os";
+import { readFileSync as readFileSync3, statSync } from "node:fs";
+import { basename as basename2 } from "node:path";
+
+// src/message-lint.ts
+var TABLE_ROW = /^\s*\|.+\|\s*$/m;
+var CHECKLIST_ITEM = /^\s*[-*+]\s+\[[ xX]\]\s/m;
+var BULLET_ITEM = /^\s*[-*+]\s+\S/m;
+var NUMBERED_ITEM = /^\s*\d+[.)]\s+\S/m;
+var PATH_FACT = /(?:\b[\w.-]+(?:\/[\w.-]+){2,}(?::\d+)?)|(?:\b[\w.-]+\/[\w./-]*\.\w{1,6}\b(?::\d+)?)|(?:\b[\w.-]*\w\.\w{1,6}:\d+)/;
+var COUNT_FACT = /(?:^|[\s(])[+-]?\d+(?:\.\d+)?%?(?=[\s).,;:!?]|$)/;
+var LABEL_FACT = /\b[A-Z][\w-]{1,24}:\s/;
+function stripNonProse(body) {
+  return body.replace(/```[\s\S]*?(?:```|$)/g, " ").replace(/`[^`\n]*`/g, " ").replace(/https?:\/\/[^\s)>\]]+/g, " ");
+}
+function splitSentences(prose) {
+  return prose.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter((s) => s.length >= 3);
+}
+function lintMessageBody(body) {
+  const b = body.trim();
+  if (!b)
+    return [];
+  if (TABLE_ROW.test(b) || CHECKLIST_ITEM.test(b) || BULLET_ITEM.test(b) || NUMBERED_ITEM.test(b)) {
+    return [];
+  }
+  const sentences = splitSentences(stripNonProse(b));
+  if (sentences.length < 3)
+    return [];
+  const factSentences = sentences.filter((s) => PATH_FACT.test(s) || COUNT_FACT.test(s) || LABEL_FACT.test(s));
+  if (factSentences.length < 3)
+    return [];
+  return [
+    `body is pure prose but carries ${factSentences.length} sentences of parallel facts (paths/counts/labels) — ` + "restructure as a table (>3 facts), checklist, or bullet list so humans can skim it"
+  ];
+}
+function visibleLineCount(body) {
+  let depth = 0;
+  let fenced = false;
+  let count = 0;
+  for (const line of body.split(`
+`)) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      if (depth === 0 && line.trim() !== "")
+        count++;
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) {
+      if (depth === 0 && line.trim() !== "")
+        count++;
+      continue;
+    }
+    const stripped = line.replace(/`[^`\n]*`/g, " ");
+    const opens = (stripped.match(/<details\b/gi) ?? []).length;
+    const closes = (stripped.match(/<\/details>/gi) ?? []).length;
+    if (depth === 0 && line.trim() !== "")
+      count++;
+    depth = Math.max(0, depth + opens - closes);
+  }
+  return count;
+}
+var EXAMPLE_SIGNAL = /\bexample\b|\brepro/i;
+var OUTCOME_SIGNAL = /\bexpected\b|\boutcome\b/i;
+function lintIssueOutcome(body) {
+  const b = body.trim();
+  if (!b)
+    return [];
+  if (EXAMPLE_SIGNAL.test(b) || OUTCOME_SIGNAL.test(b))
+    return [];
+  return [
+    "body has no Example/Repro and no Expected result/Outcome — add one concrete scenario " + "and the observable behavior once it lands (issue-body ladder, message-style.md)"
+  ];
+}
+var MAX_VISIBLE_BODY_LINES = 50;
+function lintBodyLength(body) {
+  const visible = visibleLineCount(body);
+  if (visible <= MAX_VISIBLE_BODY_LINES)
+    return [];
+  return [
+    `body has ${visible} visible lines outside <details> (max ${MAX_VISIBLE_BODY_LINES}) — ` + "lead with a short TLDR + key changes, and fold long sections (diagrams, file tables, " + "checklists, review logs) into <details> blocks; keep any 'Deviations from brief' section visible"
+  ];
 }
 
 // src/commands/issue.ts

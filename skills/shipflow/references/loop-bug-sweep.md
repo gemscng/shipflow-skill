@@ -49,10 +49,11 @@ refills the queue:
    refuses only a near-verbatim restatement. Closed issues and merged PRs
    are never scored, so a restatement of a closed issue always files
    clean (defensible; a refile is often deliberate). A **paraphrase slips
-   through** (#404 vs #569, ~0.38) — still keyword-search before filing,
-   and never rely on `renaiss-shipflow issues list --json` alone: its
-   default `--limit 30` newest-first slice cannot contain an older
-   duplicate (how #579 restated #427). Pass `--limit 1000` for this.
+   through** (#404 vs #569, ~0.38) — still keyword-search before filing.
+   `renaiss-shipflow issues list --json` defaults to the same 1000-issue
+   window as the pre-flight and sets `truncated: true` when that window
+   is FULL — do not treat a full page as the whole corpus (#582; the
+   old default `--limit 30` is how #579 restated #427).
 
    **The rule cuts both ways.** A strict-superset title is refused 100% of
    the time — a narrower issue quoting an open title and extending it

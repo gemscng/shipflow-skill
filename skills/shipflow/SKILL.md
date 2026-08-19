@@ -35,10 +35,13 @@ Prints `UPGRADE_AVAILABLE` (and `SHIPFLOW_AUTO_UPDATE` is not `false`) →
 
 ## Platform adaptation — non-Claude harnesses
 
-Under OpenAI Codex CLI (or any harness without Claude Code's plugin cache /
-Task tool / CronCreate / AskUserQuestion), read `references/codex.md` FIRST —
-it replaces the preamble above and maps every harness-specific affordance.
-Commands, guardrails, and message contracts are identical across harnesses.
+Under OpenAI Codex CLI read `references/codex.md` FIRST; under Cursor,
+`references/cursor.md` (the plugin cache resolves there — Task tool /
+CronCreate still degrade). Any other harness without Claude Code's plugin
+cache / Task tool / CronCreate / AskUserQuestion: start from
+`references/codex.md` — it replaces the preamble above and maps every
+harness-specific affordance. Commands, guardrails, and message contracts
+are identical across harnesses.
 
 ## Intent → command
 

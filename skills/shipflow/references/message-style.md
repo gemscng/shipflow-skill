@@ -109,11 +109,12 @@ duplicate them there. Issue #712 is the live demo of the non-bug shape.
 — the Skill tool with the PLUGIN-QUALIFIED name
 **`shipflow:smart-commit`** (#544: a bare name can resolve to another
 plugin's same-named skill — same ambiguity class as the fully-qualified
-`/shipflow:shipflow-loop` rule). No Skill tool / plugin namespace (Codex)
-→ read and follow the skill file from the **plugin clone**:
-`~/.shipflow-skill/skills/smart-commit/SKILL.md` (`references/codex.md`)
-— plugin-relative `skills/smart-commit/SKILL.md`, never the loop
-worktree, never a bare name. Not a hand-written `git commit`: the skill
+`/shipflow:shipflow-loop` rule). No Skill tool / plugin namespace (Codex,
+Cursor) → read and follow the skill file from your **resolved skill
+root**: `~/.shipflow-skill/skills/smart-commit/SKILL.md` on Codex
+(`references/codex.md`); the plugin-cache copy on Cursor
+(`references/cursor.md`) — plugin-relative `skills/smart-commit/SKILL.md`,
+never the loop worktree, never a bare name. Not a hand-written `git commit`: the skill
 splits the staged diff into atomic units and writes Angular conventional
 messages — let it do categorize / split / format. One authoritative copy;
 `loop-worker.md` and `pr-feedback.md` point here.
