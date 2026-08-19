@@ -3436,6 +3436,9 @@ class ShipFlowClient {
   async getRepoByFullName(org, owner, repo) {
     return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/repos/by-fullname/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
   }
+  async transferRepo(org, owner, repo, newFullName) {
+    return this.request("PATCH", `/api/v1/orgs/${encodeURIComponent(org)}/repos/by-fullname/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { newFullName });
+  }
   async getTriage(org, projectId, repo, issueNumber) {
     const qs = new URLSearchParams({ repo, issue: String(issueNumber) });
     return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/triage?${qs}`);
@@ -4690,6 +4693,11 @@ function renderTable(headers, rows) {
 }
 
 // src/commands/repos.ts
+function transferTarget(currentFullName, newOwner) {
+  if (newOwner.includes("/"))
+    return newOwner;
+  return `${newOwner}/${currentFullName.split("/")[1]}`;
+}
 function registerRepoCommands(program2) {
   const repos = program2.command("repos").description("Manage tracked repositories");
   repos.command("list").description("List tracked repositories").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (_opts, cmd) => {
@@ -4713,6 +4721,46 @@ function registerRepoCommands(program2) {
     const { client, org } = getApiCtx(cmd);
     await client.updateWorkflow(org, repo, "issue_triage", { enabled: false });
     console.log(`Repository "${repo}" is now tracked by RenaissShipFlow.`);
+  }));
+  repos.command("transfer").description("Point ShipFlow at a repo's new GitHub owner after a transfer/rename (htmlUrl is derived, so it updates too)").argument("<new-owner>", "New GitHub owner; may be a full owner/name with --repo to rename at the same time").option("--repo <owner/name>", "Transfer one tracked repo (its CURRENT full name)").option("--project <name>", "Transfer every tracked repo in this ShipFlow project").option("--json", "Output as JSON").action(runAction(async (newOwner, opts, cmd) => {
+    const { client, org, format } = getApiCtx(cmd);
+    if (!opts.repo === !opts.project) {
+      throw new Error("Pass exactly one of --repo <owner/name> or --project <name>.");
+    }
+    let targets;
+    if (opts.repo) {
+      const [owner, name, extra] = opts.repo.split("/");
+      if (!owner || !name || extra !== undefined) {
+        throw new Error(`--repo must be the current "owner/name", got "${opts.repo}".`);
+      }
+      targets = [{ owner, name }];
+    } else {
+      if (newOwner.includes("/")) {
+        throw new Error("With --project, <new-owner> must be a bare owner (repos keep their names).");
+      }
+      const all = await client.listRepos(org);
+      targets = all.filter((r) => r.projectName === opts.project).map((r) => {
+        const [owner, name] = r.fullName.split("/");
+        return { owner, name };
+      });
+      if (targets.length === 0) {
+        const known = [...new Set(all.map((r) => r.projectName).filter(Boolean))];
+        throw new Error(`No tracked repos in project "${opts.project}". Projects with repos: ${known.join(", ") || "(none)"}.`);
+      }
+    }
+    const results = [];
+    for (const t of targets) {
+      results.push(await client.transferRepo(org, t.owner, t.name, transferTarget(`${t.owner}/${t.name}`, newOwner)));
+    }
+    formatOutput(format, results, () => {
+      for (const r of results)
+        console.log(`${r.previousFullName} → ${r.fullName}`);
+      console.log(`${results.length} repo${results.length === 1 ? "" : "s"} transferred.`);
+      console.log("");
+      console.log("Next steps (ShipFlow cannot do these for you):");
+      console.log(`  - Install the ShipFlow GitHub App on ${newOwner.split("/")[0]} so webhooks and reviews reconnect`);
+      console.log("  - Update any external bindings (npm trusted publishing, deploys) that name the old owner");
+    });
   }));
   repos.command("show").description("Show details for a specific repository").argument("<repo>", "Repository name").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (repo, _opts, cmd) => {
     const { client, org, format } = getApiCtx(cmd);
