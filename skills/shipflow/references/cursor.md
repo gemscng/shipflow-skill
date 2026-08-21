@@ -27,7 +27,7 @@ needed. Two caveats:
 | Claude Code | Cursor equivalent |
 |---|---|
 | `AskUserQuestion` tool | Cursor's native AskQuestion tool — direct mapping, same option/label shape. Headless (`cursor-agent -p` / scheduled ticks): NEVER wait — proceed per policy or `renaiss-shipflow issue escalate`; set `SHIPFLOW_HEADLESS=1` |
-| Task-tool subagents (loop worker/reviewer roles) | Run the roles INLINE, sequentially — same degradation as Codex: intake-review the issue, work it, self-review before `pr approve`; keep the role's contract file open while in it (`loop-worker.md`, `loop-reviewer.md`). Context hygiene: ONE issue per invocation, `cap=1`, `concurrency=1` (the loop-concurrency solo exception — the orchestrator checkout is the only worktree you need) |
+| Task-tool subagents (loop worker/reviewer roles) | Honor default `loop-concurrency` **3** when this harness can dispatch parallel background agents (Cursor Task, cloud agents, or equivalent): one worker/reviewer per dispatch, each in its own `.worktrees/shipflow-loop-<issue>` (fix) or `.worktrees/shipflow-loop-pr-<n>` (reconcile). Inline `concurrency=1` / `cap=1` is the fallback **only** when you truly cannot fan out (no Task tool, no cloud agents). Keep each role's contract file open in that agent (`loop-worker.md`, `loop-reviewer.md`). |
 | Skill tool → `shipflow:smart-commit` (every loop commit) | No plugin namespace: read and follow `skills/smart-commit/SKILL.md` from the SAME resolved skill root you're running (plugin cache dir, else the clone) and execute its plan (same loop adaptations: no AI-attribution trailer, skip the human-confirm gate). Never a bare `smart-commit`, never the loop worktree's copy |
 | `CronCreate` continuous loop | No in-session scheduler: run a single `once` pass now, and for continuity an EXTERNAL scheduler (cron/launchd/CI) re-invokes one `once` pass per tick — interactively `/shipflow-loop once`, headless `cursor-agent -p "$(cat <skill root>/commands/shipflow-loop.md) once"`. Never leave a session "running continuously"; one loop per gh identity still applies |
 | `EnterWorktree` | `git worktree add .worktrees/shipflow-loop -b shipflow-loop/base origin/<default>` (the loop-mode fallback path — harness-neutral) |
@@ -47,10 +47,9 @@ needed. Two caveats:
 
 ## Known degradations (accept, don't fight)
 
-- No parallel subagents → slower passes; prefer `cap=1` and more frequent
-  external ticks over big in-context passes. If Cursor's background agents
-  later prove able to run a role to completion unattended, revisit
-  `concurrency` — until then the solo exception stands.
+- No parallel agents at all → then (and only then) `cap=1` / `concurrency=1`
+  and more frequent external ticks. If Task or cloud agents can finish a
+  role unattended, keep the default 3 — do not collapse the pass.
 - No session-scoped cron → dormancy between ticks lives in the external
   scheduler; the in-session answer to "how do I schedule this?" is always
   "you don't — run `once`".
