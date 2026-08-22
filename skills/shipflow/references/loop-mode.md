@@ -423,9 +423,9 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    test**, open the PR via `renaiss-shipflow pr create --json` (full fix →
    `Closes #N`; partial slice → `Part of #N`, never a closing keyword —
    `loop-worker.md` §5), attach evidence with the health delta
-   (`issue evidence <n> --pr <pr> --file …`). Returns `{pr, verified,
-   regressionTest, healthDelta, blocked}`. Unverified/blocked →
-   `issue escalate`, no PR.
+   (`issue evidence <n> --pr <pr> --before … --after … --label … --caption …`).
+   Returns `{pr, verified, regressionTest, healthDelta, blocked}`.
+   Unverified/blocked → `issue escalate`, no PR.
 4. **Reviewer — PR review** (mandatory). Dispatch on the new PR with the
    brief. First the MANDATORY **security diff scan** — **the reviewer is
    the scanner** (loop-reviewer.md §0b), not the `security-review` skill

@@ -31,8 +31,8 @@ refills the queue:
    --label bug --label auto-qa --label "severity:<…>" --label "area:<…>" --json`
    (`bug-taxonomy.md` §3; body = the **issue-body ladder**,
    `message-style.md` — status header sourcing `auto-qa sweep`). Attach evidence
-   (`issue evidence <n> --file <shot>`), update the baseline. **Only file
-   what you reproduced.**
+   (`issue evidence <n> --actual <shot>` — defect capture; no fix yet, so no
+   pair), update the baseline. **Only file what you reproduced.**
 
    **Sweep filings land assigned, on purpose (#673).** Under
    `pickup-scope=assigned` (the default) `issue create` auto-assigns the
