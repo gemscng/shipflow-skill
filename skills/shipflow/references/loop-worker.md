@@ -156,9 +156,17 @@ report `blocked` with the reason (the orchestrator will `issue escalate`).
 origin/<pr-branch>`. Work only there. **Never** `git checkout` / `gh pr
 checkout` into the shared loop worktree — Phase A fans independent PRs
 and a shared checkout clobbers siblings. Skip `pr-feedback.md`'s `gh pr
-checkout` (you are already on the branch). Last act: `git worktree remove
+checkout` (you are already on the branch). **Immediately after the
+worktree exists, before any commit:** `base=$(git rev-parse HEAD)` —
+this is the leftover range later (§ "Merged mid-fix"). Recording it at
+push time is too late: unset `$base` makes `git log ..HEAD` list the
+whole branch (the squash false-positive that section exists to prevent).
+Recapture after a rebase of a still-open PR, still before further
+commits — a pre-rebase SHA is not an ancestor of HEAD. Never recapture
+after commits. Last act: `git worktree remove
 .worktrees/shipflow-loop-pr-<n>` after push, or on `blocked`. Solo
-(`loop-concurrency 1` only): checkout the PR branch in the loop worktree.
+(`loop-concurrency 1` only): checkout the PR branch in the loop worktree,
+then the same `base=$(git rev-parse HEAD)` before any commit.
 
 Then: one PR + the reason(s) from `inbox`: fix failing CI; or address
 review comments (`references/pr-feedback.md`) and reply; or rebase a
@@ -166,9 +174,61 @@ moved base — `renaiss-shipflow pr sync <n>`, resolving conflicts
 agentically via `--keep-conflicts` + `references/conflict-resolution.md`
 (resolve by intent, test, force-with-lease, comment) instead of
 escalating. Pull `features --json` when a fix risks touching more than
-the PR's own feature. Push when done. An immediate post-push `pr reviews`
-zero is **not** a settled measurement — external bots post 1–2 minutes
-later. automerge owns the 120s settle wait; do not merge on that zero.
+the PR's own feature. Push when done — **unless the PR already merged or
+closed** (`gh pr view <n> --json state,mergedAt`). A `MERGED` / `CLOSED`
+head is not a push target: park leftover commits on
+`fix/pr-<n>-leftover` and file a follow-up issue (below), then remove this
+worktree. Never keep pushing the closed head — that is how a fix sits on a
+dead branch until someone re-files it. An immediate post-push `pr reviews`
+zero is **not** a settled
+measurement — external bots post 1–2 minutes later. automerge owns the 120s
+settle wait; do not merge on that zero.
+
+### Merged mid-fix → follow-up issue, but only if there is something to file
+
+**1. Guard — leftover commits must actually exist.** Use the `$base`
+recorded immediately after worktree add (above), before any commit — do
+not recapture now. The leftover set is
+`git log --oneline $base..HEAD` — exactly the commits you made after the
+merged head, so exactly the ones the merge could not have carried.
+**Empty → file NOTHING, just remove the worktree.** A reconcile legitimately
+produces zero commits — `address_comments` whose comments were already
+handled, `pr-feedback.md` step 2's "Already addressed / stale → skip" — and
+one of those overlapping a merge would file an issue describing nothing:
+noise worse than the gap it closes. Range against **your recorded base**,
+never against `origin/<default>`: `pr automerge` squashes by default, so the
+parent's own commits are not ancestors of the base and
+`origin/<default>..HEAD` re-lists the whole branch — non-empty even when
+nothing is left over.
+
+**2. Park the leftovers.** Push them off the closed head so the SHAs
+survive worktree removal:
+`git push origin HEAD:refs/heads/fix/pr-<n>-leftover`
+Never `git push` to the closed PR branch. Filing without this push
+leaves unpushed leftover SHAs that 404 in the evidence table once the
+worktree is gone.
+
+**3. File it.** `renaiss-shipflow issue create --json`, body per the
+**issue-body ladder** (`message-style.md`): status header sourcing
+`Part of #<parent>`, an evidence table citing `#<pr>`,
+`fix/pr-<n>-leftover`, and each leftover SHA,
+and **one acceptance-checklist line per leftover commit** — that list is the
+next reviewer's 1:1 coverage gate. Prose-only bodies fail the ladder the
+intake reviewer grades against.
+
+**4. Handle exit 12** — the same contract Phase B applies to every filing
+(`loop-mode.md` § B). `issue create` files **NOTHING** on a near-duplicate
+title and exits **12**: read `{blocked: true, candidates: […]}` off the
+`--json` payload, then either comment the leftover commits onto the matching
+candidate (linking `#<pr>`) or re-file with **`--allow-duplicate`** when it
+is genuinely different. Never read 12 as "filed", never as a plain command
+failure — a bare non-zero read as "the command broke" strands the leftover
+commits on a dead branch, the exact silent drop this section exists to
+prevent.
+
+**5. Ownership — you are the only filer here.** `automerge` files nothing
+post-merge (`loop-mode.md` § "Reconcile playbook", `approved_ready`), so one
+late review yields one issue, not two.
 
 ## Before you return — self-verify
 Your completion contract — don't return until each holds (or you genuinely
@@ -185,7 +245,11 @@ hit a wall):
 - [ ] Parallel mode: your worktree removed (`git worktree remove
       .worktrees/shipflow-loop-<n>` or, reconcile,
       `.worktrees/shipflow-loop-pr-<n>`) — after push, or on `blocked`;
-      the pushed branch is the artifact.
+      the pushed branch is the artifact. If the PR merged mid-fix, the
+      artifacts are the leftover branch (`fix/pr-<n>-leftover`, pushed)
+      and the follow-up issue — never a push to the closed head — and
+      only when `$base..HEAD` is non-empty (§ "Merged mid-fix"); a
+      zero-commit reconcile files nothing.
 
 A `verified: true` you can't defend is worse than an honest `blocked`.
 

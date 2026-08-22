@@ -31,10 +31,30 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments \
 
 ## 3. Fix
 
-`gh pr checkout <n>`, fix **all** actionable comments together, run tests +
-browser check (loop step 5), commit via the **`shipflow:smart-commit`** skill
-(message-style.md § "Commit messages": no AI-attribution trailer, skip the
-human-confirm gate), push.
+Skip `gh pr checkout <n>` on the reconcile path (already on the branch).
+Otherwise check it out. **Then, before any commit:**
+`base=$(git rev-parse HEAD)`. Reconcile workers already captured this at
+worktree add (`loop-worker.md`) — reuse that `$base`; never recapture
+after commits (that empties `$base..HEAD`, and an unset `$base` makes
+`git log ..HEAD` list the whole branch). Fix **all** actionable comments
+together, run tests + browser check (loop step 5), commit via the
+**`shipflow:smart-commit`** skill (message-style.md § "Commit messages":
+no AI-attribution trailer, skip the human-confirm gate). **Before push:**
+`gh pr view <n> --json state,mergedAt`. If `MERGED` or `CLOSED`, do not
+push the closed head. Then, and only then, park leftovers and file a
+follow-up — **gated on leftover commits actually existing**:
+`git log --oneline $base..HEAD` (the head recorded before any commit)
+must be non-empty. Step 2's "Already addressed / stale → skip" leaves it
+empty, and an empty follow-up describes nothing — file nothing, remove
+the worktree, return. Non-empty →
+`git push origin HEAD:refs/heads/fix/pr-<n>-leftover`, then
+`renaiss-shipflow issue create --json`, body per the issue-body ladder
+(`message-style.md`), evidence table citing the leftover branch and each
+leftover SHA, one acceptance-checklist line per leftover commit, and
+**exit 12 is a duplicate, not a failure** — read `{blocked: true,
+candidates}` and either comment on the candidate or re-file with
+`--allow-duplicate`. Full contract: loop-worker.md § "Merged mid-fix".
+Otherwise (open PR) push.
 
 ## 4. Reply on the PR — necessary comments only
 
