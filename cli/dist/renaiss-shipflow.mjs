@@ -4541,6 +4541,17 @@ function ghReviewThreads(repo, number) {
     };
   });
 }
+function reviewThreadCensus(threads, me) {
+  const unresolved = threads.filter((t) => !t.isResolved);
+  const login = me.trim();
+  const external = unresolved.filter((t) => !login || t.author !== login);
+  return {
+    unresolved,
+    unresolvedThreads: unresolved.length,
+    externalUnresolved: external.length,
+    blocking: external.length > 0
+  };
+}
 function ghResolveReviewThread(threadId) {
   const m = "mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}";
   try {
@@ -8405,7 +8416,7 @@ function unresolvedThreadsOrBlock(repo, number) {
   try {
     const all = ghReviewThreads(repo, number);
     return {
-      count: all.filter((t) => !t.isResolved).length,
+      count: reviewThreadCensus(all, "").unresolvedThreads,
       unavailable: false,
       settleReviews: all.map((t) => ({ author: t.author, submittedAt: t.submittedAt }))
     };
@@ -9042,13 +9053,13 @@ ${opts.body ?? ""}`;
   pr.command("approve <number>").description("Record the loop reviewer's approval: adds the shipflow-approved label (the automerge approval source) + an optional comment").option("--comment <text>", "Reviewer summary to post on the PR").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to approve a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the approval comment").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--force", "Approve even with unresolved review threads (not recommended)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
-    const unresolved = ghReviewThreads(repo, number).filter((t) => !t.isResolved);
-    if (unresolved.length && !opts.force) {
-      const rows = unresolved.map((t) => [t.author ?? "?", `${t.path}:${t.line ?? "?"}`, t.body.split(`
+    const threadCensus = reviewThreadCensus(ghReviewThreads(repo, number), ghCurrentLogin());
+    if (threadCensus.unresolvedThreads && !opts.force) {
+      const rows = threadCensus.unresolved.map((t) => [t.author ?? "?", `${t.path}:${t.line ?? "?"}`, t.body.split(`
 `)[0].slice(0, 80)]);
       const list = renderTable(["Reviewer", "Location", "Comment"], rows).map((l) => `  ${l}`).join(`
 `);
-      emit(opts, { number, approved: false, unresolvedThreads: unresolved.length, ...degradedField(ctx) }, () => console.error(`⛔ Not approving PR #${number}: ${unresolved.length} unresolved review thread(s):
+      emit(opts, { number, approved: false, unresolvedThreads: threadCensus.unresolvedThreads, ...degradedField(ctx) }, () => console.error(`⛔ Not approving PR #${number}: ${threadCensus.unresolvedThreads} unresolved review thread(s):
 ${list}
 Address + resolve them (pr resolve), then approve (or --force).`));
       process.exit(7);
@@ -9104,26 +9115,24 @@ Address + resolve them (pr resolve), then approve (or --force).`));
   pr.command("reviews <number>").description("Read-only query of unresolved review threads (incl. bots) — parse JSON blocking/unresolvedThreads; rc is not the signal (always 0, like pr ready)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
-    const me = ghCurrentLogin();
     const threads = ghReviewThreads(repo, number);
-    const unresolved = threads.filter((t) => !t.isResolved);
-    const externalUnresolved = unresolved.filter((t) => t.author && t.author !== me);
+    const census = reviewThreadCensus(threads, ghCurrentLogin());
     const out = {
       number,
-      blocking: externalUnresolved.length > 0,
-      unresolvedThreads: unresolved.length,
-      externalUnresolved: externalUnresolved.length,
+      blocking: census.blocking,
+      unresolvedThreads: census.unresolvedThreads,
+      externalUnresolved: census.externalUnresolved,
       reviewers: [...new Set(threads.map((t) => t.author).filter(Boolean))],
-      threads: unresolved.map((t) => ({ id: t.id, author: t.author, path: t.path, line: t.line, body: t.body })),
+      threads: census.unresolved.map((t) => ({ id: t.id, author: t.author, path: t.path, line: t.line, body: t.body })),
       ...degradedField(ctx)
     };
     emit(opts, withProvenance(out), () => {
-      if (!unresolved.length) {
+      if (!census.unresolvedThreads) {
         console.log(`✅ PR #${number}: no unresolved review threads.`);
         return;
       }
-      console.log(`PR #${number}: ${unresolved.length} unresolved thread(s)${out.blocking ? " — BLOCKS approval/merge" : ""}`);
-      const rows = unresolved.map((t) => [t.author ?? "?", `${t.path}:${t.line ?? "?"}`, t.body.split(`
+      console.log(`PR #${number}: ${census.unresolvedThreads} unresolved thread(s)${out.blocking ? " — BLOCKS approval/merge" : ""}`);
+      const rows = census.unresolved.map((t) => [t.author ?? "?", `${t.path}:${t.line ?? "?"}`, t.body.split(`
 `)[0].slice(0, 90)]);
       for (const l of renderTable(["Reviewer", "Location", "Comment"], rows))
         console.log(`  ${l}`);
