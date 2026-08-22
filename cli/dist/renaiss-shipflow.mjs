@@ -8396,13 +8396,15 @@ function armIntentGate(repo, number, gate, w) {
     guard("ensure label", () => w.ensureLabel(repo, number));
     labelOnIssue = guard("add label", () => w.addLabel(repo, number));
   }
+  let noticeOk = !applyNotice;
   if (applyNotice) {
     if (labelOnIssue)
-      guard("post notice", () => w.postNotice(repo, number));
+      noticeOk = guard("post notice", () => w.postNotice(repo, number));
     else
       failures.push("post notice: deferred — label not applied, so a confirmation reply would be ignored");
   }
-  if (failures.length === 0)
+  const armed = labelOnIssue && noticeOk;
+  if (armed)
     return { attempted: true, armed: true, blockers: [] };
   return {
     attempted: true,
