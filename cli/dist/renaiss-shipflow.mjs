@@ -8413,11 +8413,14 @@ function armIntentGate(repo, number, gate, w) {
     gateArmError: failures.join("; ")
   };
 }
+function hasIntentGateNotice(comments) {
+  return comments.some((c) => c.viewerDidAuthor && c.body.includes(INTENT_GATE_NOTICE_HEADLINE));
+}
 var liveIntentGateWriters = {
   ensureLabel: (repo) => ghEnsureLabel(repo, REPORTER_REVIEW_LABEL, labelColorFor(REPORTER_REVIEW_LABEL), "An unconfirmed worker interpretation/deviation awaiting the issue reporter's confirmation"),
   addLabel: (repo, number) => ghIssueAddLabels(repo, number, [REPORTER_REVIEW_LABEL]),
   postNotice: (repo, number) => ghIssueComment(repo, number, renderIntentGateNotice()),
-  noticePosted: (repo, number) => ghIssueComments(repo, number).some((c) => c.body.includes(INTENT_GATE_NOTICE_HEADLINE))
+  noticePosted: (repo, number) => hasIntentGateNotice(ghIssueComments(repo, number))
 };
 var SCAN_EXIT = 9;
 function isExecutableInstructionPath(lower) {
