@@ -7,9 +7,10 @@ description: Drive ShipFlow from Claude Code via the `renaiss-shipflow` CLI, whi
 
 ShipFlow is a human-in-the-loop communication layer: each command's value is
 the side-effect signaled to ShipFlow (Discord, dashboard, teammates), not the
-local action. Run everything via the bundled `renaiss-shipflow` CLI. Each
-action also has a slash command, `/shipflow-<action>` — prefer it when typed;
-this skill routes natural language to the same CLI calls.
+local action. Run everything via the bundled `renaiss-shipflow` CLI. The 19
+shipped slash commands wrap matching CLI verbs — prefer `/shipflow-<action>`
+when typed. CLI-only verbs (`init`, `priorities`, `profiles`) have no slash
+wrapper; this skill still routes natural language to the same CLI calls.
 
 ## Preamble (run first)
 
@@ -81,6 +82,8 @@ are identical across harnesses.
 | "run regression" | `renaiss-shipflow regression --json` |
 | "cut a release" | `renaiss-shipflow release --tag vX.Y.Z --json` |
 | "sign in" | `renaiss-shipflow login` |
+| "link this repo" | `renaiss-shipflow init` |
+| "list config profiles" | `renaiss-shipflow profiles` — switch with `--profile <name>` or `SHIPFLOW_PROFILE` |
 
 ## Output handling
 
