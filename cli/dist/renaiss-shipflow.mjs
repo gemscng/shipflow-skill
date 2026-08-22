@@ -3311,6 +3311,16 @@ var init_config = __esm(() => {
 });
 
 // src/client.ts
+function envelopeMessage(body) {
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed && typeof parsed.error === "object" && parsed.error && typeof parsed.error.message === "string") {
+      const msg = parsed.error.message.trim();
+      return msg || null;
+    }
+  } catch {}
+  return null;
+}
 function backoffMs(attempt) {
   return 300 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
 }
@@ -3565,7 +3575,7 @@ var init_client = __esm(() => {
     status;
     body;
     constructor(status, body) {
-      super(`API error ${status}: ${body}`);
+      super(`API error ${status}: ${envelopeMessage(body) ?? body}`);
       this.status = status;
       this.body = body;
       this.name = "ApiError";
