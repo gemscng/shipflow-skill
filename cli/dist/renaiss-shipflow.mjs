@@ -5492,6 +5492,7 @@ import { join as join3 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 
 // src/cli-drift.ts
+import { execSync as execSync4 } from "node:child_process";
 import { createRequire as createRequire2 } from "node:module";
 import { existsSync as existsSync2, readdirSync as readdirSync2, realpathSync as realpathSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
@@ -5501,6 +5502,8 @@ var CLI_PACKAGE = "@renaiss-shipflow/cli";
 var DEFAULT_REGISTRY = "https://registry.npmjs.org";
 var REGISTRY_TIMEOUT_MS = 8000;
 var DRIFT_STALE_EXIT_CODE = 9;
+var MAIN_CLI_PACKAGE_SPEC = "origin/main:apps/renaissshipflow-cli/package.json";
+var MAIN_CLI_SHOW_TIMEOUT_MS = 8000;
 function parseSemver(v) {
   if (typeof v !== "string")
     return null;
@@ -5550,6 +5553,16 @@ function classifyDrift(installed, registryLatest) {
     return "unknown";
   const cmp = compareSemver(installed, registryLatest);
   return cmp === 0 ? "current" : cmp < 0 ? "stale" : "ahead";
+}
+function classifyPublishLag(main, npm) {
+  if (!parseSemver(main) || !parseSemver(npm))
+    return "unknown";
+  const cmp = compareSemver(main, npm);
+  return cmp === 0 ? "in-sync" : cmp > 0 ? "main-ahead" : "npm-ahead";
+}
+function buildPublishLag(main, npm, error) {
+  const status = classifyPublishLag(main, npm);
+  return { main, npm, status, error: status === "unknown" ? error ?? "unparseable version" : null };
 }
 var LAUNCHER_CACHE_SEGMENT = "/.shipflow/cli/";
 function detectChannel(realBinPath, opts = {}) {
@@ -5664,8 +5677,34 @@ async function fetchRegistryLatest(opts = {}) {
     return { package: pkg, latest: null, error: e instanceof Error ? e.message : String(e) };
   }
 }
+var mainCliExec = execSync4;
+function readMainCliVersion(opts = {}) {
+  const exec = opts.exec ?? mainCliExec;
+  try {
+    const raw = exec(`git show ${MAIN_CLI_PACKAGE_SPEC}`, {
+      encoding: "utf8",
+      timeout: MAIN_CLI_SHOW_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const text = (typeof raw === "string" ? raw : raw.toString()).trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { version: null, error: "origin/main CLI package.json is not valid JSON" };
+    }
+    const version = parsed && typeof parsed === "object" && typeof parsed.version === "string" ? parsed.version : null;
+    if (!version)
+      return { version: null, error: "origin/main CLI package.json has no string `version`" };
+    return { version, error: null };
+  } catch (e) {
+    const err = e;
+    const stderr = err.stderr ? String(err.stderr).trim() : "";
+    return { version: null, error: stderr || (e instanceof Error ? e.message : String(e)) };
+  }
+}
 function driftWarnings(input) {
-  const { cli, plugin, registryLatest, registryError, drift, channel, updaterPath = null } = input;
+  const { cli, plugin, registryLatest, registryError, drift, channel, updaterPath = null, publishLag = null } = input;
   const out = [];
   if (plugin && plugin !== cli) {
     out.push(`plugin ${plugin} ≠ cli ${cli} — they are lockstep-versioned, so one lags; run /shipflow-update.`);
@@ -5682,6 +5721,9 @@ function driftWarnings(input) {
   }
   if (drift === "unknown") {
     out.push(`drift UNKNOWN — registry probe failed (${registryError ?? "unparseable version"}); treat merge verdicts as unverified.`);
+  }
+  if (publishLag?.status === "main-ahead" && publishLag.main && publishLag.npm) {
+    out.push(`origin/main CLI ${displayVersion(publishLag.main)} is AHEAD of npm latest ${displayVersion(publishLag.npm)} — unpublished on the registry (alarm only; not a drift gate).`);
   }
   return out;
 }
@@ -5722,15 +5764,20 @@ function registerVersionCommand(program2, cliVersion2) {
     const channel = resolveCliChannel();
     const updaterPath = channel === "launcher-cache" ? resolveLauncherUpdater() : null;
     const remediation = buildRemediation(drift, channel, registry.latest, resolveCliDriftPollSeconds(), updaterPath);
-    const warnings = driftWarnings({ cli, plugin, registryLatest: registry.latest, registryError: registry.error, drift, channel, updaterPath });
-    emit(opts, { cli, plugin, server: { url: apiUrl, ...server }, registry, drift, channel, remediation, warnings }, () => {
+    const mainCli = readMainCliVersion();
+    const publishLag = buildPublishLag(mainCli.version, registry.latest, mainCli.error ?? registry.error);
+    const warnings = driftWarnings({ cli, plugin, registryLatest: registry.latest, registryError: registry.error, drift, channel, updaterPath, publishLag });
+    emit(opts, { cli, plugin, server: { url: apiUrl, ...server }, registry, drift, channel, remediation, warnings, publishLag }, () => {
       const serverCell = server.error ? `unreachable (${server.error})` : `${server.version ? `${server.version} · ` : ""}${(server.revision || "unknown").slice(0, 12)}${server.dirty ? "+dirty" : ""}${server.buildTime ? ` · built ${server.buildTime}` : ""}`;
       const driftIcon = { current: "✅", stale: "⛔", ahead: "\uD83E\uDDEA", unknown: "❔" };
+      const lagIcon = { "in-sync": "✅", "main-ahead": "⚠️", "npm-ahead": "ℹ️", unknown: "❔" };
+      const lagCell = publishLag.main ? `${publishLag.main} — publishLag ${lagIcon[publishLag.status]} ${publishLag.status}` : `unreachable (${publishLag.error}) — publishLag ❔ unknown`;
       for (const line of renderTable(["Component", "Version"], [
         ["cli", `${cli} (${channel})`],
         ["plugin/skill", plugin ?? "not installed"],
         [`server (${apiUrl})`, serverCell],
-        ["npm latest", registry.latest ? `${registry.latest} — drift ${driftIcon[drift]} ${drift}` : `unreachable (${registry.error}) — drift ❔ unknown`]
+        ["npm latest", registry.latest ? `${registry.latest} — drift ${driftIcon[drift]} ${drift}` : `unreachable (${registry.error}) — drift ❔ unknown`],
+        ["origin/main CLI", lagCell]
       ]))
         console.log(line);
       for (const w of warnings)
@@ -7176,7 +7223,7 @@ init_helpers();
 // src/commands/pr.ts
 init_config();
 init_gh();
-import { execSync as execSync4 } from "node:child_process";
+import { execSync as execSync5 } from "node:child_process";
 import { closeSync, existsSync as existsSync3, lstatSync, openSync, readFileSync as readFileSync4, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { createHash as createHash2 } from "node:crypto";
 import { join as join4 } from "node:path";
@@ -8533,7 +8580,7 @@ ${opts.body ?? ""}`;
     await signalBestEffort(ctx, "prs", created.number, "opened", {
       repo: ctx.project.repoFullName,
       branch,
-      headSha: execSync4("git rev-parse HEAD").toString().trim(),
+      headSha: execSync5("git rev-parse HEAD").toString().trim(),
       issueRefs: issueNumber ? [issueNumber] : [],
       previewUrl: opts.previewUrl ?? ""
     }, "PR opened but ShipFlow signal failed");
@@ -8677,7 +8724,7 @@ ${opts.body ?? ""}`;
     }
     const guard = syncEntryGuard({
       rebase: rebaseInProgress(),
-      currentBranch: execSync4("git rev-parse --abbrev-ref HEAD").toString().trim(),
+      currentBranch: execSync5("git rev-parse --abbrev-ref HEAD").toString().trim(),
       head,
       number,
       base: rebaseOnto() ?? `origin/${base}`,
@@ -8689,18 +8736,18 @@ ${opts.body ?? ""}`;
     }
     const beforeSha = localHeadSha();
     try {
-      execSync4(`git fetch origin ${shellQuote(base)}`, { stdio: "ignore" });
+      execSync5(`git fetch origin ${shellQuote(base)}`, { stdio: "ignore" });
     } catch (e) {
       throw new Error(`git fetch origin ${base} failed (network or remote issue): ${e.message}`);
     }
     let conflicted = false;
     try {
-      execSync4(`git rebase ${shellQuote(`origin/${base}`)}`, { stdio: "pipe" });
+      execSync5(`git rebase ${shellQuote(`origin/${base}`)}`, { stdio: "pipe" });
     } catch {
       conflicted = true;
       if (!opts.keepConflicts) {
         try {
-          execSync4("git rebase --abort", { stdio: "ignore" });
+          execSync5("git rebase --abort", { stdio: "ignore" });
         } catch {}
       }
     }
@@ -8741,7 +8788,7 @@ ${opts.body ?? ""}`;
     let pushed = false;
     if (opts.push !== false) {
       try {
-        execSync4("git push --force-with-lease", { stdio: "ignore" });
+        execSync5("git push --force-with-lease", { stdio: "ignore" });
       } catch (e) {
         throw new Error(`git push --force-with-lease failed (network, or the remote moved — rebase again): ${e.message}`);
       }
@@ -9039,7 +9086,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
 
 `);
     try {
-      execSync4(`gh pr comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(stampLoopReview(opts.comment))}`, { stdio: ["ignore", "ignore", "inherit"] });
+      execSync5(`gh pr comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(stampLoopReview(opts.comment))}`, { stdio: ["ignore", "ignore", "inherit"] });
     } catch (e) {
       emit(opts, { number, approved: false, scan: scanField, ...degradedField({ degraded: [...ctx.degraded, GITHUB_REST_DEP] }) }, () => {
         console.error(`⛔ Not approving PR #${number}: the scan attestation comment could not be posted (${flattenCause(e)}).`);
@@ -9144,7 +9191,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
 function branchAuthorEmails() {
   for (const range of ["origin/main..HEAD", "origin/master..HEAD"]) {
     try {
-      const out = execSync4(`git log --format=%ae ${range}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+      const out = execSync5(`git log --format=%ae ${range}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
       if (out)
         return out.split(`
 `);
@@ -9152,7 +9199,7 @@ function branchAuthorEmails() {
     } catch {}
   }
   try {
-    return execSync4("git log --format=%ae -30", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(`
+    return execSync5("git log --format=%ae -30", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(`
 `).filter(Boolean);
   } catch {
     return [];
@@ -9248,7 +9295,7 @@ function watchStdinBytes() {
   };
 }
 function currentBranch() {
-  return execSync4("git rev-parse --abbrev-ref HEAD").toString().trim();
+  return execSync5("git rev-parse --abbrev-ref HEAD").toString().trim();
 }
 function detectIssueFromBranch(branch) {
   const m = branch.match(/^(?:issue|fix|feat)\/(?:issue-)?(\d+)/);
@@ -9330,7 +9377,7 @@ function parseConflictMarkerRecords(out) {
 }
 function gitPaths(cmd) {
   try {
-    const out = execSync4(`${cmd} -z`, { cwd: repoToplevel(), stdio: ["ignore", "pipe", "ignore"] }).toString();
+    const out = execSync5(`${cmd} -z`, { cwd: repoToplevel(), stdio: ["ignore", "pipe", "ignore"] }).toString();
     return { paths: out.split("\x00").filter(Boolean), ok: true, cmd };
   } catch {
     return { paths: [], ok: false, cmd };
@@ -9342,7 +9389,7 @@ function changedPaths(baseRef) {
 function repoToplevel() {
   let root;
   try {
-    root = execSync4("git rev-parse --show-toplevel", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    root = execSync5("git rev-parse --show-toplevel", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
   } catch (e) {
     throw new Error(`conflict-marker scan failed (git rev-parse --show-toplevel): ${e.message}`);
   }
@@ -9374,7 +9421,7 @@ function grepConflictMarkers(root, mode, chunk) {
   const pathspec = chunk.map(shellQuote).join(" ");
   const cmd = `git --literal-pathspecs grep --text -z ${mode} -E ${shellQuote(CONFLICT_MARKER_PATTERN)} -- ${pathspec}`;
   try {
-    return execSync4(cmd, { cwd: root, stdio: ["ignore", "pipe", "ignore"] }).toString();
+    return execSync5(cmd, { cwd: root, stdio: ["ignore", "pipe", "ignore"] }).toString();
   } catch (e) {
     if (e.status === 1)
       return "";
@@ -9404,7 +9451,7 @@ function unrecoveredMatches(matched, recovered) {
 function rebaseInProgress() {
   let gitDir;
   try {
-    gitDir = execSync4("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    gitDir = execSync5("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
   } catch {
     return null;
   }
@@ -9416,7 +9463,7 @@ function rebaseInProgress() {
 }
 function refExists(ref) {
   try {
-    execSync4(`git rev-parse --verify --quiet ${shellQuote(`${ref}^{commit}`)}`, { stdio: ["ignore", "ignore", "ignore"] });
+    execSync5(`git rev-parse --verify --quiet ${shellQuote(`${ref}^{commit}`)}`, { stdio: ["ignore", "ignore", "ignore"] });
     return true;
   } catch {
     return false;
@@ -9427,7 +9474,7 @@ function rebaseOnto() {
   if (!state)
     return null;
   try {
-    const gitDir = execSync4("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    const gitDir = execSync5("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
     const onto = readFileSync4(join4(gitDir, state, "onto"), "utf8").trim();
     return onto && refExists(onto) ? onto : null;
   } catch {
@@ -9436,7 +9483,7 @@ function rebaseOnto() {
 }
 function originHeadRef() {
   try {
-    const ref = execSync4("git symbolic-ref --short refs/remotes/origin/HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    const ref = execSync5("git symbolic-ref --short refs/remotes/origin/HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
     return ref && refExists(ref) ? ref : null;
   } catch {
     return null;
@@ -9482,7 +9529,7 @@ function shouldDropApprovedLabel(i) {
 }
 function localHeadSha() {
   try {
-    return commitSha(execSync4("git rev-parse HEAD").toString());
+    return commitSha(execSync5("git rev-parse HEAD").toString());
   } catch {
     return null;
   }
@@ -10600,9 +10647,9 @@ function detectRunner(root) {
 init_output();
 init_project();
 init_helpers();
-import { execSync as execSync5 } from "node:child_process";
+import { execSync as execSync6 } from "node:child_process";
 var REF_RESOLUTION_ERROR = "Failed to resolve git HEAD ref. Ensure you are in a git repository with at least one commit, or pass --ref explicitly.";
-function resolveRef(explicit, runGit = () => execSync5("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim()) {
+function resolveRef(explicit, runGit = () => execSync6("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim()) {
   if (explicit)
     return explicit;
   let ref = "";
@@ -10756,7 +10803,7 @@ function registerRegressionCommand(program2) {
 // src/commands/release.ts
 init_prompts();
 init_helpers();
-import { execSync as execSync6 } from "node:child_process";
+import { execSync as execSync7 } from "node:child_process";
 function registerReleaseCommand(program2) {
   program2.command("release").description("Trigger a ShipFlow release (patch_notes + regression + downstream workflows)").option("--tag <tag>", "Release tag (e.g. v0.7.3)").option("--base-tag <tag>", "Previous tag (auto-detect if omitted)").option("--env <env>", "Target environment (staging|prod)").option("--wait", "Block and stream status until terminal").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { creds, client, project } = await loadCtx(program2);
@@ -10779,7 +10826,7 @@ function registerReleaseCommand(program2) {
 }
 function safeLatestTag() {
   try {
-    return execSync6("git describe --tags --abbrev=0", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    return execSync7("git describe --tags --abbrev=0", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
   } catch {
     return;
   }
