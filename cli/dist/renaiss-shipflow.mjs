@@ -6485,7 +6485,10 @@ function formatWaitingOnMarker(dep) {
 }
 function extractWaitingOnDep(comments) {
   for (let i = comments.length - 1;i >= 0; i--) {
-    const m = comments[i].body.match(/<!--\s*shipflow:waiting-on\s+([\w.-]+\/[\w.-]+)#(\d+)\s*-->/);
+    const c = comments[i];
+    if (!c.viewerDidAuthor)
+      continue;
+    const m = c.body.match(/<!--\s*shipflow:waiting-on\s+([\w.-]+\/[\w.-]+)#(\d+)\s*-->/);
     if (m)
       return { repo: m[1], number: parseInt(m[2], 10) };
   }
