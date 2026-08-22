@@ -33,6 +33,7 @@ card ONLY when one of those states is in play.
   | **Prose that reads as consent** | also leaves it ON — even `Confirmed — ship it`, because it is not the token |
   | **A token with ANYTHING under it** | also leaves it ON — one newline or one blank line, a correction or a thank-you |
   | **Human override** | remove the label in the GitHub UI |
+  | **Token on the parent issue** | does **not** release a linked PR's gate (#557). One marked `<!-- shipflow:intent-gate-parent-confirm` nudge on that PR; post the token **there**. The nudge never removes the label |
 
   An **exact token that is the whole reply**, not a grammar: markdown
   decoration and trailing punctuation are stripped (`**Confirmed**`,
@@ -107,11 +108,15 @@ card ONLY when one of those states is in play.
   terminal until the PR's own `needs-reporter-review` clears via a
   confirmation token on the **PR thread**; a parent reply does not clear
   them. Without `--for-pr`/`--once-reason` you re-open the storm by hand.
+  A trusted confirm on the parent of a still-gated `Part of` / `Closes`
+  PR earns one server-posted marked nudge on that PR (`intentGateParentConfirm`)
+  — never a clearance, never a second copy of the same (PR, confirm).
 
   🟡 **"The loop already answered this" =** the worker's **`rework-from`**
   marker, only — and only up to the comment it NAMES; anything newer
-  survives. The gate notice, the server's `intent-gate-hint` nudge and
-  the reviewer's `loop-review` verdict never suppress. Markers count only
+  survives. The gate notice, the server's `intent-gate-hint` nudge, the
+  parent-confirm nudge (`intent-gate-parent-confirm`), and the reviewer's
+  `loop-review` verdict never suppress. Markers count only
   from a `[bot]`/trusted author, in text they actually typed — a
   **quoted** marker is a claim, not evidence (#411).
 
