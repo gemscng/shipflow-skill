@@ -8,7 +8,7 @@ Escalate only per the criteria at the bottom. (Proven live: ApeironDuels#93,
 
 1. **Enter with state kept**: on the PR's checked-out branch run
    `renaiss-shipflow pr sync <n> --keep-conflicts --json`. Exit 6 leaves the
-   rebase MID-FLIGHT and lists `conflictedFiles[]`. Plain `pr sync` still
+   rebase MID-FLIGHT and lists `conflictedFiles[]`. Plain `pr sync <n>` still
    aborts — never leave a half-rebase behind unless about to resolve it.
 2. **Resolve by intent, never by side**: read BOTH sides of each conflicted
    file before touching a hunk — `git log --oneline <base>..HEAD -- <file>`
@@ -23,7 +23,7 @@ Escalate only per the criteria at the bottom. (Proven live: ApeironDuels#93,
    `git add -- <file>…` — **never `git add -A` here**: it clears the UNMERGED
    index state that makes git refuse to commit a file still containing
    `<<<<<<<`. Printed paths are **repo-root-relative** — from a subdirectory
-   use `git -C <repo-root> add -- <file>…` (what `pr sync --keep-conflicts`
+   use `git -C <repo-root> add -- <file>…` (what `pr sync <n> --keep-conflicts`
    and the `conflict-check` gate print). Then, before every
    `git rebase --continue`:
 
@@ -32,7 +32,7 @@ Escalate only per the criteria at the bottom. (Proven live: ApeironDuels#93,
    git rebase --continue                                     # only on exit 0; repeat per commit
    ```
 
-   Pass `--base` (same form as step 5 — `pr sync --keep-conflicts` prints it):
+   Pass `--base` (same form as step 5 — `pr sync <n> --keep-conflicts` prints it):
    a base-less check scans zero files once a `--continue` has **committed**
    markers. The gate self-resolves a base (the rebase's `onto`, else
    `origin/HEAD`) and reports `indeterminate` — exit 8, never a clean 0 —
@@ -47,7 +47,7 @@ Escalate only per the criteria at the bottom. (Proven live: ApeironDuels#93,
    suite doing its job — fix the mirror, not the test.
 5. **Gate, then push**: `renaiss-shipflow pr conflict-check --base origin/<base>`
    clean **and** full test suite green → `git push --force-with-lease` (never
-   plain force). `pr sync` runs the same marker scan and refuses to push
+   plain force). `pr sync <n>` runs the same marker scan and refuses to push
    (exit 8) if anything survives — no PR-triggered CI covers
    `apps/renaissshipflow-cli/**` or `skills/**` (#404); this gate is the
    backstop. Comment the resolution on the PR (what conflicted, what was
@@ -56,7 +56,7 @@ Escalate only per the criteria at the bottom. (Proven live: ApeironDuels#93,
 6. **Abort cleanly when giving up**: `git rebase --abort` so the branch is
    exactly as found, then escalate. **Never end a turn mid-rebase** — the loop
    reuses ONE worktree; an abandoned rebase strands it on a detached HEAD.
-   `pr sync` detects that at entry and refuses with the recovery command, but
+   `pr sync <n>` detects that at entry and refuses with the recovery command, but
    recovery costs a tick — abort before you hand back.
 
 ## PRs you don't own (the repo-wide sweep) — OPT-IN, trusted heads only
@@ -90,7 +90,7 @@ For trusted heads, same protocol as your own, plus:
 - The reviewer gate re-runs on ShipFlow-flow PRs; a human-only PR just gets
   the resolution + comment.
 
-## Escalate instead (issue escalate, category by cause) when
+## Escalate instead (`issue escalate <n> --category <cat> --reason "..."`) when
 
 - **Incompatible intent**: both sides changed the same behavior in ways that
   cannot both hold and the issue/PR bodies don't settle which wins — a

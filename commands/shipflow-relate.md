@@ -26,6 +26,6 @@ issue, and otherwise open one:
 4. Reference the issue in the PR: `Fixes #N` (or `Closes #N`) when the PR fully
    resolves it; `Part of #N` — no closing keyword — for a partial slice, so
    merging leaves the parent open for the rest (same rule as /shipflow-pr;
-   `renaiss-shipflow pr create --partial` emits the Part-of form).
+   `--partial` on create emits the Part-of form).
 
 Enable auto mode with `renaiss-shipflow config set auto-issue true`.

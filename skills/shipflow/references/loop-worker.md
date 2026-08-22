@@ -52,7 +52,7 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    (`loop-concurrency 1` only): `git checkout -b fix/issue-<n>-<slug>
    origin/<default>` in the loop worktree. Then
    `renaiss-shipflow git-identity --fix` **before the first commit** —
-   unmatched author emails block deployments, and `pr create` refuses such
+   unmatched author emails block deployments, and create refuses such
    branches.
 2. **Map, then fix** — `renaiss-shipflow features --json` (or `--category
    <area>`): each feature's **file paths**, **test priority**, and
@@ -119,7 +119,7 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
 5d. **Access-control ambiguity is a `security` escalation — don't guess, never
    ship a silent reinterpretation.** Unclear WHO SEES WHAT (permissions,
    roles, tenant/visibility scope, auth gating)? Never proceed-with-a-note —
-   `renaiss-shipflow issue escalate --category security` with a
+   `renaiss-shipflow issue escalate <n> --category security --reason "..."` with a
    `**Recommendation:**` naming your default audience and why (a recommended
    answer is required, never an open question). Shipping a deliberate
    reinterpretation after a human proceed → the PR body MUST carry
@@ -146,7 +146,7 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    content.
 
 Too risky / ambiguous / unreproducible / unverifiable → do **not** open a PR;
-report `blocked` with the reason (the orchestrator will `issue escalate`).
+report `blocked` with the reason (the orchestrator will escalate).
 
 ## What a reconcile worker does (one PR)
 **Worktree first.** Default (parallel, #744): from the repo root,

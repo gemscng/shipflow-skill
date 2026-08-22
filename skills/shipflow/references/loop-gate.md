@@ -9,7 +9,7 @@ card ONLY when one of those states is in play.
   banner and **any** `<!-- shipflow:` marker, not by author (the loop
   comments under the operator's account). Any non-resolving loop comment
   on a `needs-human` issue MUST end with `<!-- shipflow:loop -->`, or it
-  un-parks the issue. `issue escalate` output needs no marker (🚧 banner
+  un-parks the issue. Escalate output needs no marker (🚧 banner
   exempts it). Markers match by **prefix**, not a list (#411):
   `<!-- shipflow:loop-review -->`, `<!-- shipflow:precedent-applied …` and
   any future marker are machinery too.
@@ -100,7 +100,7 @@ card ONLY when one of those states is in play.
   | **Brief** | Bake the correction in as **SETTLED**, like an answered escalation decision: never re-ask it, never re-derive the reading it replaced. |
   | **Worker MUST comment** | The rework ends with the marked comment below. Not optional — see the box after this table. |
   | **Gate** | Untouched. Never remove the label; never post a confirmation on the reporter's behalf. `pr automerge` still refuses with `unconfirmed interpretation`, and the reworked PR re-arms. |
-  | **Ceiling** | `max-fix-attempts` reworks per PR (default 3). At the ceiling the row falls back to `awaiting_reporter` carrying `rework_ceiling` in `reasons` → `issue escalate` ONCE, don't re-poll. |
+  | **Ceiling** | `max-fix-attempts` reworks per PR (default 3). At the ceiling the row falls back to `awaiting_reporter` carrying `rework_ceiling` in `reasons` → escalate ONCE, don't re-poll. |
   | **`correction_unreadable`** | The PR has human-shaped comments but NO loop-machinery comment at all, so the detector refuses to read the thread (below). Escalate to a human — never hand-judge it into a rework. |
   | **`reporter_gate_stale`** | Nobody replied AT ALL and the gate has stood past `stale-pr-hours` (#439). `gateAgeHours` is the wait, anchored on the gate notice — **not** `updatedAt`, which the loop's own machinery keeps resetting. Escalate once; never nudge the PR. |
 

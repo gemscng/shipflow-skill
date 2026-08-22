@@ -23,7 +23,7 @@ identical on every harness.
 
 | Claude Code | Codex CLI equivalent |
 |---|---|
-| `AskUserQuestion` tool | Interactive: ask in plain text and wait. Headless (`codex exec`): NEVER wait — proceed per policy or `renaiss-shipflow issue escalate` (SKILL.md's spawned-session contract applies as-is; set `SHIPFLOW_HEADLESS=1`) |
+| `AskUserQuestion` tool | Interactive: ask in plain text and wait. Headless (`codex exec`): NEVER wait — proceed per policy or `renaiss-shipflow issue escalate <n> --reason "..."` (SKILL.md's spawned-session contract applies as-is; set `SHIPFLOW_HEADLESS=1`) |
 | Task-tool subagents (loop worker/reviewer roles) | Run the roles INLINE, sequentially: intake-review the issue, work it, self-review before `pr approve`; keep the role's contract file open while in it (`loop-worker.md`, `loop-reviewer.md`). Context hygiene: ONE issue per invocation, `cap=1` |
 | Skill tool → `shipflow:smart-commit` (every loop commit) | No plugin namespace: read and follow `~/.shipflow-skill/skills/smart-commit/SKILL.md` from the clone and execute its plan (same loop adaptations: no AI-attribution trailer, skip the human-confirm gate). Never a bare `smart-commit`, never a repo-relative path |
 | `CronCreate` continuous loop | No in-session scheduler: continuous mode = an EXTERNAL scheduler (cron/launchd/CI) running `codex exec "$(cat ~/.codex/prompts/shipflow-loop.md) once"` — always `once` per invocation; one loop per gh identity still applies |

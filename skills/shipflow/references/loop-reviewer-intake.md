@@ -30,7 +30,7 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    spec/design doc; a hard dependency on an unmerged issue; a genuine
    duplicate/invalid issue. Otherwise proceed.
 
-   **The `issue escalate --reason` IS the comment a human reads — act-on-able,
+   **The escalate `--reason` IS the comment a human reads — act-on-able,
    not a wall of text.** Shape is `lintEscalationReason`
    (`apps/renaissshipflow-cli/src/escalation-format.ts`) — fix a rejected
    reason; `--force` is for humans, not the loop. Process: `--category`

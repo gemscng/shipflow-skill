@@ -210,7 +210,7 @@ loop-authored PR goes through `renaiss-shipflow pr note <n> --body …
 
 - `ci_failing` → worker fixes failing checks (`gh pr checks <n>`), pushes.
   Track attempts across ticks; `max-fix-attempts` still red →
-  `renaiss-shipflow issue escalate <issue> --reason "CI red after N attempts: …"`.
+  `renaiss-shipflow issue escalate <issue> --category <cat> --reason "CI red after N attempts: …"`.
 - `changes_requested` / `review_comments` → worker addresses every comment,
   **including async external bot reviewers** (gemini-code-assist,
   coderabbit): `renaiss-shipflow pr reviews <n> --json` to list, fix, push,
@@ -397,7 +397,7 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    escalates — `loop-reviewer-intake.md` step 1b), validates, maps to
    features, returns an **acceptance brief** (what "done" means + features
    to regression-check). Reject (invalid/duplicate/needs a human) →
-   `issue escalate`, pick next. `issue escalate` may return
+   `issue escalate <n> --category <cat> --reason "..."`, pick next. Escalate may return
    `autoResolved: true` (precedent auto-apply): a stored answer to the
    SAME question was reused — disclosure comment on the issue, no
    `needs-human`, claim KEPT; treat it like a human reply and continue;
@@ -430,12 +430,12 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    under default concurrency), fix, run project tests
    **and** a diff-scoped E2E browser pass with before/after screenshots +
    **health score** (`references/browser-testing.md`), **add a regression
-   test**, open the PR via `renaiss-shipflow pr create --json` (full fix →
+   test**, open the PR via `renaiss-shipflow pr create --json --lint=strict` (full fix →
    `Closes #N`; partial slice → `Part of #N`, never a closing keyword —
    `loop-worker.md` §5), attach evidence with the health delta
    (`issue evidence <n> --pr <pr> --before … --after … --label … --caption …`).
    Returns `{pr, verified, regressionTest, healthDelta, blocked}`.
-   Unverified/blocked → `issue escalate`, no PR.
+   Unverified/blocked → `issue escalate <n> --category <cat> --reason "..."`, no PR.
 4. **Reviewer — PR review** (mandatory). Dispatch on the new PR with the
    brief. First the MANDATORY **security diff scan** — **the reviewer is
    the scanner** (loop-reviewer.md §0b), not the `security-review` skill
@@ -548,7 +548,7 @@ still parks forever).
 | `changes_requested` | reviewer wants changes | `address_review` — pr-feedback → fix → push → reply |
 | `review_comments` | unaddressed comments — **any unresolved thread counts, including the loop reviewer's own** | `address_comments` — pr-feedback (may already be handled) → fix → `pr resolve` → reply. This is the fix half of review → fix → re-review; never route open findings back to a reviewer. If the PR merged mid-fix, **do not push the closed head**: park leftovers on `fix/pr-<n>-leftover`, then file a follow-up issue **only when `$base..HEAD` is non-empty** (`$base` captured at worktree add, before any commit) — already-handled comments produce none, and an empty follow-up is pure noise. Body per the issue-body ladder, `issue create` exit 12 handled as a duplicate (link or `--allow-duplicate`), never as a failure — loop-worker.md § "Merged mid-fix" owns the full contract |
 | `ci_pending` | checks running | `park` — re-check next tick |
-| (automerge blocker "behind base", **and it is the only blocker**) | green+approved but the head predates the current base — CI proved code against a base that no longer exists | `sync_no_push` — worker: in `.worktrees/shipflow-loop-pr-<n>`, `pr sync <n> --no-push` (rebase), run the tests, THEN `git push --force-with-lease` — `pr sync` pushes by default, and a clean textual rebase can still fail the build, so never let it push an unverified head. Merge lands next tick on the rebased head (#530). Any other blocker present (`manual` policy, red CI, open threads, unconfirmed intent) → handle/park that first; rebasing a PR the policy can't merge is churn every base advance repeats. Rebase conflicts → the `conflict` protocol. `unsatisfiable: true` → `escalate_once` |
+| (automerge blocker "behind base", **and it is the only blocker**) | green+approved but the head predates the current base — CI proved code against a base that no longer exists | `sync_no_push` — worker: in `.worktrees/shipflow-loop-pr-<n>`, `pr sync <n> --no-push` (rebase), run the tests, THEN `git push --force-with-lease` — `pr sync <n>` pushes by default, and a clean textual rebase can still fail the build, so never let it push an unverified head. Merge lands next tick on the rebased head (#530). Any other blocker present (`manual` policy, red CI, open threads, unconfirmed intent) → handle/park that first; rebasing a PR the policy can't merge is churn every base advance repeats. Rebase conflicts → the `conflict` protocol. `unsatisfiable: true` → `escalate_once` |
 | `approved_ready` | approved + CI green | `automerge` — `pr automerge` (parks on `manual`; automerge owns the 120s review-settle + pre-merge thread re-read — an immediate 0 is not settled). Nothing auto-files for a review that lands after that window — automerge has no post-merge filer. That case is the worker's: the next tick's `review_comments` row, and it files only when the reconcile left uncarried commits. One late review → one issue, never two |
 | `needs_review` | green, unapproved, and the loop reviewer has NOT seen this head | `review` — dispatch loop-reviewer (`pr packet` → security scan → `pr approve`). At any age: a review that never ran is exactly the failure that takes hours. **Scope:** non-draft PRs linking a ShipFlow issue (`Closes #N` / `Part of #N`) only — the loop shares one login with the operator, so drafts and hand-written PRs are never auto-reviewed or auto-approved |
 | `stale` | green, unapproved, aged, and the loop is out of review moves (reviewer already saw this head, or the PR is out of scope above) | `nudge` the PR; escalate if blocked on a human |

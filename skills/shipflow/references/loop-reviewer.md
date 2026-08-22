@@ -195,9 +195,9 @@ mean "irrelevant", they stop meaning anything.
    claims (title, description, deviations, interpretation note/marker) vs the
    ISSUE's ask: redefined scope (narrowed/widened ask, swapped mechanism, an
    access-control ambiguity silently resolved) = reinterpretation, not
-   deviation → `request_changes` + escalate (`issue escalate --category
-   security` when it's WHO-SEES-WHAT). Never `approve` with a "note" that
-   scope changed — the #236/#238 failure. `<!-- shipflow:interpretation -->`
+   deviation → `request_changes` + escalate (`issue escalate <n> --category
+   security --reason "..."` when it's WHO-SEES-WHAT). Never `approve` with a
+   "note" that scope changed — the #236/#238 failure. `<!-- shipflow:interpretation -->`
    is already blocked at automerge (`loop-worker.md` §5d); hand it to the
    reporter, don't bless it past the gate.
 1. **Meets the brief — item by item.** Enumerate every requirement in the
