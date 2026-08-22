@@ -343,6 +343,10 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    gesture; unassigned issues are invisible. `config set pickup-scope all`
    = repo-wide pickup. Ordering: priority → severity → newest; optional
    `--label bug`; skips `needs-human`/claimed).
+   - **Merged-slice parents (#532):** skip a parent named by a merged
+     `Part of #N` PR when every open child citing it is itself
+     non-actionable (vacuous if none). No `slice-merged` label; children
+     stay independently pickable.
    - **Intake gate (#448):** author association not
      `OWNER`/`MEMBER`/`COLLABORATOR` (or unreadable — fails closed) →
      labelled `needs-reporter-approval`, **not claimable** until someone

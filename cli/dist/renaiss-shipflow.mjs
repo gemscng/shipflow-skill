@@ -4334,6 +4334,20 @@ function ghOpenPRClosingIssues(repo) {
   const prs = JSON.parse(out);
   return new Set(prs.flatMap((p) => linkedIssueNumbers(p)));
 }
+function ghMergedPartOfParents(repo) {
+  try {
+    const out = _exec(`gh pr list --repo ${shellQuote(repo)} --state merged --limit 200 --json body`).toString();
+    const prs = JSON.parse(out);
+    const parents = new Set;
+    for (const pr of prs) {
+      for (const n of partOfIssueNumbers(pr.body))
+        parents.add(n);
+    }
+    return parents;
+  } catch {
+    return new Set;
+  }
+}
 function ghPRDiffText(repo, number) {
   return _exec(`gh pr diff ${number} --repo ${shellQuote(repo)}`, { maxBuffer: 32 * 1024 * 1024 }).toString();
 }
@@ -6411,6 +6425,7 @@ function lintBodyLength(body) {
 init_config();
 
 // src/issue-order.ts
+init_pr_state();
 init_shipflow_contract_data();
 var NEEDS_HUMAN_LABEL = SHIPFLOW_CONTRACT.labels.names.needsHuman;
 var IN_PROGRESS_LABEL = SHIPFLOW_CONTRACT.labels.names.inProgress;
@@ -6441,6 +6456,9 @@ function isActionableForPickup(issue, filter) {
     const wanted = filter.assignee.trim().toLowerCase();
     if (!issue.assignees.some((a) => String(a.login ?? "").trim().toLowerCase() === wanted))
       return false;
+  }
+  if (filter.sliceMergedParents && isSliceMergedParked(issue, filter.sliceMergedParents, filter.openIssues ?? [], filter)) {
+    return false;
   }
   return true;
 }
@@ -6521,6 +6539,20 @@ function isStaleInProgress(issue, claimed, openPRIssues) {
   if (!issue.labels.some((l) => l.name === IN_PROGRESS_LABEL))
     return false;
   return !claimed.has(issue.number) && !openPRIssues.has(issue.number);
+}
+function isSliceMergedParked(issue, mergedPartOfParents, openIssues, filter) {
+  if (!mergedPartOfParents.has(issue.number))
+    return false;
+  const children = openIssues.filter((c) => c.number !== issue.number && citesPartOf(c, issue.number));
+  return children.every((child) => !isActionableForPickup(child, {
+    claimed: filter.claimedNumbers?.has(child.number) ?? false,
+    label: filter.label,
+    assignee: filter.assignee,
+    intakeMode: filter.intakeMode
+  }));
+}
+function citesPartOf(issue, parent) {
+  return partOfIssueNumbers(issue.title).includes(parent) || partOfIssueNumbers(issue.body).includes(parent);
 }
 var PRIORITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
 var SEVERITY_RANK = {
@@ -6991,7 +7023,16 @@ ${section}` : section;
         console.warn(`waiting-on heal failed for #${i.number} (still waiting): ${e.message}`);
       }
     }
-    const matching = open.filter((i) => isActionableForPickup(i, { claimed: claimed.has(i.number), label: opts.label, assignee, intakeMode }));
+    const sliceMergedParents = ghMergedPartOfParents(repo);
+    const matching = open.filter((i) => isActionableForPickup(i, {
+      claimed: claimed.has(i.number),
+      label: opts.label,
+      assignee,
+      intakeMode,
+      sliceMergedParents,
+      openIssues: open,
+      claimedNumbers: claimed
+    }));
     const candidates = sortIssuesForPickup(matching);
     let raced = 0;
     for (const cand of candidates) {
@@ -10061,6 +10102,9 @@ function deferReason(issue, filter) {
       return "unassigned";
     }
   }
+  if (filter.sliceMergedParents && isSliceMergedParked(issue, filter.sliceMergedParents, filter.openIssues ?? [], filter)) {
+    return "slice-merged";
+  }
   return "filtered";
 }
 function planReconcile(prs) {
@@ -10088,7 +10132,10 @@ function planAdmission(opts) {
       claimed: opts.claimed.has(issue.number),
       assignee: opts.assignee,
       intakeMode: opts.intakeMode,
-      label: opts.label
+      label: opts.label,
+      sliceMergedParents: opts.sliceMergedParents,
+      openIssues: opts.issues,
+      claimedNumbers: opts.claimed
     };
     const reason = deferReason(issue, filter);
     if (reason) {
@@ -10120,7 +10167,8 @@ function buildLoopPlan(input) {
     wipLimit: input.policies.wipLimit,
     assignee: input.assignee,
     intakeMode: input.intakeMode,
-    label: input.label
+    label: input.label,
+    sliceMergedParents: input.sliceMergedParents
   });
   return {
     policies: input.policies,
@@ -10189,6 +10237,7 @@ function registerLoopCommand(program2) {
     } catch {
       console.warn("⚠️ claims API unreachable — treating issues as unclaimed for the plan (read-only; nothing claimed).");
     }
+    const sliceMergedParents = ghMergedPartOfParents(repo);
     const { reconcile, admit, deferred } = buildLoopPlan({
       policies,
       prs,
@@ -10196,7 +10245,8 @@ function registerLoopCommand(program2) {
       claimed,
       wipActionable: actionableWip(scanned.map((s) => s.row)),
       intakeMode: resolveIntakeApproval(),
-      assignee
+      assignee,
+      sliceMergedParents
     });
     emit(opts, withProvenance({ policies, reconcile, admit, deferred }), () => {
       console.log(`\uD83D\uDCCB Loop plan for ${repo}`);
