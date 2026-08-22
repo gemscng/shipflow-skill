@@ -6625,7 +6625,7 @@ function evidenceThreadVerdict(status, threadNotified, threadError) {
     default:
       return {
         exitCode: 0,
-        note: "ℹ️  no chat reporter thread for this issue — nothing to notify (normal for a GitHub-filed issue, not a failure).",
+        note: "ℹ️  no chat reporter thread for this issue — nothing to notify (normal for a GitHub-filed issue, or a chat-origin issue with no uploader configured; not a failure).",
         isError: false,
         partial: false
       };
