@@ -32,8 +32,30 @@ card ONLY when one of those states is in play.
   | **A QUALIFIED yes** | also leaves it ON — `yes but change the copy first` is a correction, not consent |
   | **Prose that reads as consent** | also leaves it ON — even `Confirmed — ship it`, because it is not the token |
   | **A token with ANYTHING under it** | also leaves it ON — one newline or one blank line, a correction or a thank-you |
-  | **Human override** | remove the label in the GitHub UI |
+  | **Human override** | token-less, shape-specific — **Two blocking shapes** below. Removing an absent label is a no-op; a missing label is not clearance |
   | **Token on the parent issue** | does **not** release a linked PR's gate (#557). One marked `<!-- shipflow:intent-gate-parent-confirm` nudge on that PR; post the token **there**. The nudge never removes the label |
+
+  **Two blocking shapes** (#444, #519). `intentGateBlockedBy` names which
+  input is live (`label`, `signal`, or `both`). The CLI appends that name
+  to the blocker; on the signal-only shape it reads "no label to remove".
+  Removing a label that is not there is a no-op (`gh` exits 0, no
+  `unlabeled` event, gate untouched).
+
+  | Shape | When | Token-less override |
+  | --- | --- | --- |
+  | **Label-present** | `needs-reporter-review` is on the PR | remove the label in the GitHub UI as a **named human** (unknown actor does not count) |
+  | **Body-signal-only** | `signal && !hasLabel && !everCleared` — interpretation/deviation still in the PR body, label never applied | **apply-then-clear**: add `needs-reporter-review`, then remove it as a named human |
+
+  `both` follows the label-present row: removing the label as a named
+  human also sets `everCleared`, so the body signal does not re-block.
+
+  Clearance rules that actually work (both shapes):
+
+  | # | Rule | Notes |
+  | --- | --- | --- |
+  | **1 · primary** | exact confirmation token as the whole PR reply | same tokens as **Releasing the gate**. Server posts the `intent-gate-cleared` audit even when the label is already absent (#539) |
+  | **2 · token-less** | apply-then-clear as a named human | the row above. A vanished label with no named actor and no audit is not a clearance |
+  | **3 · fail-closed** | missing label ≠ clearance | author-check + exact token still required; absence of the label is not evidence the reporter confirmed |
 
   An **exact token that is the whole reply**, not a grammar: markdown
   decoration and trailing punctuation are stripped (`**Confirmed**`,
@@ -56,9 +78,10 @@ card ONLY when one of those states is in play.
   adding it to either surface is a regression.
 
   The loop **never** clears this gate on the reporter's behalf. Every
-  server removal posts an attributable audit comment naming the actor and
-  quoting their line — a vanished label with no such comment is a bug,
-  not a confirmation.
+  genuine clearance posts an attributable audit comment naming the actor
+  and quoting their line — including a trusted token on an unlabeled PR
+  (#539). A vanished label with no such comment is a bug, not a
+  confirmation.
 - 🟢 **A reporter correction IS the human answering — rework it** (#442).
   `inbox` classifies such a PR **`reporter_corrected`** — ranked above
   `awaiting_reporter`, `needsAttention: true`, `reasons:

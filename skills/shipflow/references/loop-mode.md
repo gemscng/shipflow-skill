@@ -510,7 +510,8 @@ measurable (#611).
 parked-awaiting-review, escalated (with reasons) — then ask whether to
 continue beyond the cap or raise the merge policy. Intent-gate-parked
 rows: the correct copy is "N PR(s) await your confirmation token on the
-PR (or remove the `needs-reporter-review` label)" — never suggest a
+PR (removing an absent `needs-reporter-review` is a no-op; token-less
+override is shape-specific — `loop-gate.md`)" — never suggest a
 hand-merge for a gated PR (#451); "merge by hand" only for rows the
 operator can legitimately merge (e.g. policy-parked on `manual`).
 Releasing escalated claims and any `pr merge`/`release` need explicit
