@@ -264,8 +264,14 @@ loop-authored PR goes through `renaiss-shipflow pr note <n> --body …
   label #411; the conflict route requires commenting). `reasons` still
   carries both `needs-reporter-review` and `merge_conflict`; only the
   dispatch is withheld (reverses #393 here).
-- `stale` / `ci_pending` / `awaiting_review` → per the playbook table
-  (don't busy-wait).
+- `ci_pending` → `park` (don't busy-wait). `needs_review` → `review` —
+  dispatch the loop-reviewer (`pr packet` → security scan → `pr approve`); a
+  green PR the reviewer has not seen is unfinished work, not a park, at ANY
+  age. `stale` / `awaiting_review` → the loop is out of review moves (it
+  already reviewed this head, or the PR is a draft / links no issue): `nudge`
+  once aged, park until then. **The reviewer is never dispatched twice at one
+  head** — its own unresolved findings are `review_comments` → a WORKER, and
+  that is what makes review → fix → re-review terminate.
 
 🔴 **`escalateOnceUnknown: true` = inbox INCOMPLETE — never stop on it.**
 The CLI couldn't read the parent's `escalate-once` markers; the row parks
@@ -510,7 +516,7 @@ second ladder. This table is the human-readable projection of that map.
 
 Ladder, highest first: `reporter_corrected` › `awaiting_reporter` ›
 `conflict` › `ci_failing` › `changes_requested` › `review_comments` ›
-`ci_pending` › `approved_ready` › `stale` › `awaiting_review`.
+`ci_pending` › `approved_ready` › `needs_review` › `stale` › `awaiting_review`.
 
 `awaiting_reporter` outranks everything below it — `conflict` included —
 because every route below has a worker *act on the PR*, and an unconfirmed
@@ -527,12 +533,13 @@ still parks forever).
 | `awaiting_reporter` (→ `loop-gate.md`) | approved + green, interpretation unconfirmed (`needs-reporter-review`) | `park` — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable` / `reporter_gate_stale`) → `escalate_once`: `issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` ONCE, nothing else — **never a PR comment** |
 | `ci_failing` | a check is red | `fix_ci` — fix on branch, push; escalate after `max-fix-attempts` |
 | `changes_requested` | reviewer wants changes | `address_review` — pr-feedback → fix → push → reply |
-| `review_comments` | unaddressed comments | `address_comments` — pr-feedback (may already be handled) → reply |
+| `review_comments` | unaddressed comments — **any unresolved thread counts, including the loop reviewer's own** | `address_comments` — pr-feedback (may already be handled) → fix → `pr resolve` → reply. This is the fix half of review → fix → re-review; never route open findings back to a reviewer |
 | `ci_pending` | checks running | `park` — re-check next tick |
 | (automerge blocker "behind base", **and it is the only blocker**) | green+approved but the head predates the current base — CI proved code against a base that no longer exists | `sync_no_push` — worker: in `.worktrees/shipflow-loop-pr-<n>`, `pr sync <n> --no-push` (rebase), run the tests, THEN `git push --force-with-lease` — `pr sync` pushes by default, and a clean textual rebase can still fail the build, so never let it push an unverified head. Merge lands next tick on the rebased head (#530). Any other blocker present (`manual` policy, red CI, open threads, unconfirmed intent) → handle/park that first; rebasing a PR the policy can't merge is churn every base advance repeats. Rebase conflicts → the `conflict` protocol. `unsatisfiable: true` → `escalate_once` |
 | `approved_ready` | approved + CI green | `automerge` — `pr automerge` (parks on `manual`; automerge owns the 120s review-settle + pre-merge thread re-read — an immediate 0 is not settled). Residual reviews that land after that window auto-file follow-up issues. |
-| `stale` | green, unreviewed, old | `nudge` the PR; escalate if blocked on a human |
-| `awaiting_review` | green, no feedback yet | `park` |
+| `needs_review` | green, unapproved, and the loop reviewer has NOT seen this head | `review` — dispatch loop-reviewer (`pr packet` → security scan → `pr approve`). At any age: a review that never ran is exactly the failure that takes hours. **Scope:** non-draft PRs linking a ShipFlow issue (`Closes #N` / `Part of #N`) only — the loop shares one login with the operator, so drafts and hand-written PRs are never auto-reviewed or auto-approved |
+| `stale` | green, unapproved, aged, and the loop is out of review moves (reviewer already saw this head, or the PR is out of scope above) | `nudge` the PR; escalate if blocked on a human |
+| `awaiting_review` | same as `stale`, not yet aged | `park` — ages into `stale` at `stale-pr-hours` (#439). Not "unreviewed": an unreviewed PR is `needs_review` |
 
 ## Guardrails
 

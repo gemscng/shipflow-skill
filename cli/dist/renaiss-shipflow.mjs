@@ -2398,10 +2398,29 @@ function gateOpenedAt(pr, restClearedAt) {
   }
   return armedIso ?? clearedIso ?? pr.createdAt;
 }
+function loopReviewable(pr) {
+  if (pr.isDraft)
+    return false;
+  return linkedIssueNumbers(pr).length > 0;
+}
+function loopReviewedHead(pr, me, lastHeadAt) {
+  const mine = (pr.reviews ?? []).filter((r) => !!r.author && foldLogin(r.author.login) === foldLogin(me));
+  if (mine.length === 0)
+    return false;
+  const headMs = Date.parse(lastHeadAt ?? "");
+  if (lastHeadAt == null || Number.isNaN(headMs))
+    return true;
+  return mine.some((r) => {
+    const submitted = Date.parse(r.submittedAt ?? "");
+    return !Number.isNaN(submitted) && submitted >= headMs;
+  });
+}
 function classifyPR(pr, me, opts = {}) {
   let reasons = prAttentionReasons(pr, me);
   if (opts.unresolvedThreads === 0) {
     reasons = reasons.filter((r) => r !== "review_comments");
+  } else if (opts.unresolvedThreads !== undefined && !reasons.includes("review_comments")) {
+    reasons = [...reasons, "review_comments"];
   }
   const ciState = ciStateOf(pr.statusCheckRollup);
   const approved = isApproved(pr, opts.headSha);
@@ -2444,11 +2463,13 @@ function classifyPR(pr, me, opts = {}) {
     state = "ci_pending";
   else if (approved)
     state = "approved_ready";
+  else if (loopReviewable(pr) && !loopReviewedHead(pr, me, opts.lastHeadAt))
+    state = "needs_review";
   else if (ageHours >= staleHours)
     state = "stale";
   else
     state = "awaiting_review";
-  const needsAction = state !== "ci_pending" && state !== "awaiting_review" && state !== "awaiting_reporter";
+  const needsAction = state !== "ci_pending" && state !== "awaiting_reporter" && state !== "awaiting_review";
   if (needsAction && reasons.length === 0)
     reasons = [state];
   return {
@@ -9408,6 +9429,15 @@ function safeUnresolvedThreadCount(fetchThreads) {
 function gateClearanceReadFor(prNumber, intentBlocked, read) {
   return intentBlocked ? read(prNumber) : undefined;
 }
+function headClockReadFor(pr, me, read) {
+  if (!loopReviewable(pr) || !loopReviewedHead(pr, me))
+    return;
+  try {
+    return read(pr.number);
+  } catch {
+    return null;
+  }
+}
 function inboxIntentBlocked(repo, pr) {
   const gate = evalIntentGate(repo, pr.number, pr);
   if (gate.applyLabel) {
@@ -9577,6 +9607,7 @@ var STATE_ICONS = {
   review_comments: "\uD83D\uDCAC",
   ci_pending: "⏳",
   approved_ready: "✅",
+  needs_review: "\uD83D\uDD0E",
   stale: "\uD83D\uDD70️",
   awaiting_review: "·"
 };
@@ -9619,7 +9650,8 @@ function collectInboxPrRows(repo, me, opts) {
     const { count: unresolvedThreads, degraded } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
     const intentBlocked = inboxIntentBlocked(repo, pr);
     const gateClearedAt = gateClearanceReadFor(pr.number, intentBlocked, (n) => ghIntentGateLastClearedAt(repo, n));
-    const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks, gateClearedAt, headSha: pr.headRefOid });
+    const lastHeadAt = headClockReadFor(pr, me, (n) => ghPRLastHeadAt(repo, n));
+    const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks, gateClearedAt, headSha: pr.headRefOid, lastHeadAt });
     return { pr, row: minePrRow(pr, cl, { unresolvedThreads, degraded, parentIsEscalated, parentWasEscalatedFor }) };
   });
   if (sweepEnabled) {
@@ -9748,6 +9780,7 @@ var PLAN_ACTION_BY_STATE = {
   review_comments: "address_comments",
   ci_pending: "park",
   approved_ready: "automerge",
+  needs_review: "review",
   stale: "nudge",
   awaiting_review: "park"
 };
