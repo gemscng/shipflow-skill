@@ -7328,7 +7328,7 @@ import { hostname as hostname3 } from "node:os";
 
 // src/review-contract-data.ts
 var REVIEW_CONTRACT = {
-  $comment: "Canonical review contract (epic #96, Option B): the single source of truth for constants BOTH reviewers share — the Go server's pr_review runner and the TS CLI's loop review packet. Mirrors: apps/renaissshipflow-server/internal/reviewcontract/review-contract.json (go:embed, byte-identical) and apps/renaissshipflow-cli/src/review-contract-data.ts (generated). Regenerate mirrors with `node scripts/sync-review-contract.mjs`; parity tests on both sides fail on drift. Noise lists are the UNION of the two pre-contract lists (never narrow), split into scopes: the lists under `noise` are shared review-filter noise; `noise.featuremapOnly` is feature-map-only (tracked, reviewable source the loop packet must keep showing). Verdict vocabularies are carried per side AS-IS — reconciliation is a later slice. `ownsTestVectors` pins the directory-boundary `owns` matcher, which stays implemented per language.",
+  $comment: "Canonical review contract (epic #96, Option B): the single source of truth for constants BOTH reviewers share — the Go server's pr_review runner and the TS CLI's loop review packet. Mirrors: apps/renaissshipflow-server/internal/reviewcontract/review-contract.json (go:embed, byte-identical) and apps/renaissshipflow-cli/src/review-contract-data.ts (generated). Regenerate mirrors with `node scripts/sync-review-contract.mjs`; parity tests on both sides fail on drift. Noise lists are the UNION of the two pre-contract lists (never narrow), split into scopes: the lists under `noise` are shared review-filter noise; `noise.featuremapOnly` is feature-map-only (tracked, reviewable source the loop packet must keep showing). Verdict vocabularies are carried per side AS-IS — reconciliation is a later slice. `ownsTestVectors` pins the directory-boundary `owns` matcher, which stays implemented per language. `merge` is the (path, line, fingerprint) identity + Jaccard threshold the fingerprint helpers share (issue #508); the algorithm is implemented per language like `owns`.",
   version: 1,
   budgets: {
     $comment: "perFileDiffCap/packetTotalCap bound each reviewer's diff; briefCap bounds the linked-issue spec + PR body (acceptance criteria sit at the BOTTOM of issue bodies — a tight cap silently drops the checklist).",
@@ -7431,6 +7431,26 @@ var REVIEW_CONTRACT = {
     $comment: 'Effort → rendered fix-size tag on the finding badge line, byte-identical across BOTH reviewers (server runner_pr_review.go effortTag ↔ CLI review-contract.ts effortTag). A blank or unknown effort renders "" (no tag) — NOT a default tag, unlike severityBadges which falls back to defaultSeverity (parity-tested both sides). Kept in the same CodeRabbit-style visual language as the severity badges.',
     quick: " · ⚡ quick fix",
     involved: " · \uD83D\uDD28 involved"
+  },
+  merge: {
+    $comment: "Finding/coverage-row identity for multi-pass merge (issue #378, promoted #508). Key is (path, line, fingerprint): fingerprint is the issue/item text after lowercase + every non-letter/digit rune → space + whitespace collapsed (Go unicode.IsLetter/IsDigit ↔ TS \\p{L}/\\p{N}). Two rows at the same (path, line) collapse when fingerprints are exact or their token-set Jaccard is >= fingerprintSimilarityThreshold. First-seen text wins and severity escalates to the max seen — those policy rules live in the server's mergeReviewPasses, not here. Threshold 0.6 is the #378 value; #509 owns any eval-driven retune. normalizeTestVectors / similarTestVectors pin the helpers across both languages (similar vectors are already-normalized fingerprints). The CLI carries the helpers for parity this slice; it does not auto-collapse post-review findings.",
+    key: ["path", "line", "fingerprint"],
+    fingerprintSimilarityThreshold: 0.6,
+    normalizeTestVectors: [
+      { $comment: "lowercase, punctuation/backticks → space, whitespace collapsed", in: "Nil-pointer  deref, when `list` is EMPTY!", want: "nil pointer deref when list is empty" },
+      { in: "  plain text  ", want: "plain text" },
+      { in: "...", want: "" },
+      { in: "", want: "" },
+      { $comment: "non-ASCII letter: Go unicode.IsLetter ↔ TS \\p{L}", in: "Café: naïve 123!", want: "café naïve 123" }
+    ],
+    similarTestVectors: [
+      { $comment: "already-normalized fingerprints; Jaccard is |A∩B|/|A∪B| over token SETS", a: "a b c", b: "a b c", jaccard: 1, similar: true },
+      { a: "a b", b: "c d", jaccard: 0, similar: false },
+      { a: "", b: "", jaccard: 1, similar: true },
+      { a: "a", b: "", jaccard: 0, similar: false },
+      { $comment: "{a b c} vs {a b d}: 2/4 = 0.5 — below the 0.6 collapse threshold", a: "a b c", b: "a b d", jaccard: 0.5, similar: false },
+      { $comment: "{a b c d e} vs {a b c d}: 4/5 = 0.8 — above the threshold", a: "a b c d e", b: "a b c d", jaccard: 0.8, similar: true }
+    ]
   },
   ownsTestVectors: [
     { $comment: "Directory-boundary match: a prefix owns itself and everything under it, never a sibling that merely shares the string.", prefix: "src/app/admin", path: "src/app/admin", owns: true },
@@ -8073,6 +8093,7 @@ function effortTag(effort) {
     return "";
   return tags[key] ?? "";
 }
+var FINGERPRINT_SIMILARITY_THRESHOLD = REVIEW_CONTRACT.merge.fingerprintSimilarityThreshold;
 function verdictHeader(verdict) {
   switch (verdict) {
     case "approve":
