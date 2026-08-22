@@ -7108,17 +7108,18 @@ ${section}` : section;
     let precedent;
     let disclosure;
     let surfaced = false;
-    if (opts.category && !opts.update && !once) {
+    if (opts.category && !opts.update) {
       try {
         precedent = await ctx.client.matchPrecedent(ctx.creds.org, ctx.project.projectId, {
           category: opts.category,
           reason,
           repo,
-          issue: number
+          issue: number,
+          ...once ? { surfaceOnly: true } : {}
         });
-        if (precedent?.outcome === "apply" && precedent.precedent) {
+        if (!once && precedent?.outcome === "apply" && precedent.precedent) {
           disclosure = formatPrecedentDisclosure(precedent);
-        } else if (precedent && (precedent.outcome === "suggest" || precedent.outcome === "reconfirm") && precedent.precedent) {
+        } else if (precedent && precedent.precedent && (precedent.outcome === "suggest" || precedent.outcome === "reconfirm" || Boolean(once) && precedent.outcome === "apply")) {
           body = `${body}
 
 ${formatPrecedentSuggestion(precedent)}`;
@@ -7130,7 +7131,7 @@ ${formatPrecedentSuggestion(precedent)}`;
         surfaced = false;
       }
     }
-    if (precedent?.outcome === "apply" && precedent.precedent && disclosure !== undefined) {
+    if (!once && precedent?.outcome === "apply" && precedent.precedent && disclosure !== undefined) {
       ghIssueComment(repo, number, disclosure);
       emit(opts, {
         number,
