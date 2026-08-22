@@ -2835,7 +2835,7 @@ function foreignConflictedPRs(mine, all, me, opts = {}) {
     return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
   });
 }
-var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", MERGED_UNREVIEWED_REASON = "merged_unreviewed", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
+var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", MERGED_UNREVIEWED_REASON = "merged_unreviewed", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_OVERRIDE_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
 var init_pr_state = __esm(() => {
   init_shipflow_contract_data();
   FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
@@ -2853,8 +2853,13 @@ var init_pr_state = __esm(() => {
   APPROVED_HEAD_LINE = new RegExp(`^${APPROVED_HEAD_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+sha=(\\S+?)\\s*-->$`);
   INTENT_BLOCKED_BY_DETAIL = {
     label: "blocking input: the `needs-reporter-review` label",
-    signal: "blocking input: the PR body's interpretation/deviation signal (no label to remove)",
+    signal: "blocking input: the PR body's interpretation/deviation signal (no label to remove — removal would be a no-op; reply with a confirmation token; token-less path: apply-then-clear)",
     both: "blocking input: both the `needs-reporter-review` label and the PR body's interpretation/deviation signal"
+  };
+  INTENT_GATE_OVERRIDE_DETAIL = {
+    label: `(no reply) remove the \`${REPORTER_REVIEW_REASON}\` label`,
+    both: `(no reply) remove the \`${REPORTER_REVIEW_REASON}\` label`,
+    signal: `label removal would be a no-op (no \`${REPORTER_REVIEW_REASON}\` on this PR). Reply with a confirmation token; token-less path is apply-then-clear`
   };
   INTENT_GATE_AUDIT_MARKER = SHIPFLOW_CONTRACT.markers.intentGateCleared;
   INTENT_GATE_AUDIT_LINE = new RegExp(`^${INTENT_GATE_AUDIT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} by=\\S+ -->$`);
@@ -8288,7 +8293,8 @@ function stampLoopReview(body) {
 
 ${marker}`;
 }
-function renderIntentGateNotice() {
+function renderIntentGateNotice(opts) {
+  const blockedBy = opts?.blockedBy ?? (opts?.hasLabel === false ? "signal" : "label");
   const tokens = SHIPFLOW_CONTRACT.intentGate.confirmationTokens.map((t) => `\`${t}\``).join(", ");
   return [
     `${INTENT_GATE_NOTICE_HEADLINE} (\`${REPORTER_REVIEW_LABEL}\`)`,
@@ -8301,7 +8307,7 @@ function renderIntentGateNotice() {
     "| **Correct the reading** | anything else — the gate STAYS on and the loop reworks the PR |",
     "| **Approve with a caveat** | also leaves the gate ON: `yes but …` is a correction, not consent |",
     "| **Say thanks / add a note** | send it as a SEPARATE comment — a token with anything under it does not release |",
-    `| **Override by hand** | (no reply) remove the \`${REPORTER_REVIEW_LABEL}\` label |`,
+    `| **Override by hand** | ${INTENT_GATE_OVERRIDE_DETAIL[blockedBy]} |`,
     "",
     `${SHIPFLOW_CONTRACT.intentGate.releaseHint}`,
     "",
