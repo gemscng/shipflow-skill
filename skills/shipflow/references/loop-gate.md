@@ -22,7 +22,7 @@ card ONLY when one of those states is in play.
 
   | On a `needs-reporter-review` PR | Rule |
   | --- | --- |
-  | **Any comment the loop posts** | MUST carry a `<!-- shipflow:` marker — `pr approve --comment` and `pr post-review` stamp `<!-- shipflow:loop-review -->` for you; a hand-written `gh pr comment` does not |
+  | **Any comment the loop posts** | MUST carry a `<!-- shipflow:` marker — `approve --comment` and `pr post-review` stamp `<!-- shipflow:loop-review -->` for you; a hand-written `gh pr comment` does not |
   A reporter who wants the PR merged replies `confirmed` (or another token) as
   the whole reply; anything more is a correction.
 

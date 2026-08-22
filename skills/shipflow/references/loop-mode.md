@@ -51,7 +51,7 @@ the heavy work never enters yours.
 - **reviewer** — the mandatory gate (`require-review`, default on). Pulls
   `renaiss-shipflow features --json`, reviews an **issue at intake**
   (validate, map to features, acceptance brief) and a **PR before merge**
-  (cross-feature impact, regressions, brief met; approves with `pr approve`).
+  (cross-feature impact, regressions, brief met; approves with the approve command).
   Contracts: intake → `references/loop-reviewer-intake.md`; PR gate → `references/loop-reviewer.md`.
 - **worker** — fixes ONE issue end-to-end (branch → fix → test → PR →
   evidence), returns `{pr, verified, blocked}`; also runs reconcile fixes.
@@ -265,7 +265,7 @@ loop-authored PR goes through `renaiss-shipflow pr note <n> --body …
   carries both `needs-reporter-review` and `merge_conflict`; only the
   dispatch is withheld (reverses #393 here).
 - `ci_pending` → `park` (don't busy-wait). `needs_review` → `review` —
-  dispatch the loop-reviewer (`pr packet` → security scan → `pr approve`); a
+  dispatch the loop-reviewer (`pr packet` → security scan → approve); a
   green PR the reviewer has not seen is unfinished work, not a park, at ANY
   age. `stale` / `awaiting_review` → the loop is out of review moves (it
   already reviewed this head, or the PR is a draft / links no issue): `nudge`
@@ -459,15 +459,13 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
      CI green. All three scan flags required on a code diff — **exit 9**
      without them — sourced from the same `pr diff` capture actually read:
      ```bash
-     renaiss-shipflow pr approve <pr> --comment "<summary>" \
-       --scan-files <N from files=> \
-       --scan-report /tmp/pr-<pr>.scan.md \
-       --scan-digest <hex from sha256=>
+     renaiss-shipflow pr approve <pr> --scan-files <N> --scan-report <path> --scan-digest <hex> \
+       --comment "<summary>"
      ```
      (adds `shipflow-approved`; refuses, exit 7, if any thread is open).
      Now `approved_ready` for A. A negative health delta
      (`references/qa-report.md`) is treated like an unresolved thread —
-     no `pr approve`, no automerge, regardless of `merge-policy`.
+     no approval, no automerge, regardless of `merge-policy`.
    - **request changes** → list every fix incl. each external thread;
      re-dispatch a worker to fix + `pr resolve`, then re-review. Never
      approve with open threads. External reviewers are async — none posted
@@ -550,7 +548,7 @@ still parks forever).
 | `ci_pending` | checks running | `park` — re-check next tick |
 | (automerge blocker "behind base", **and it is the only blocker**) | green+approved but the head predates the current base — CI proved code against a base that no longer exists | `sync_no_push` — worker: in `.worktrees/shipflow-loop-pr-<n>`, `pr sync <n> --no-push` (rebase), run the tests, THEN `git push --force-with-lease` — `pr sync <n>` pushes by default, and a clean textual rebase can still fail the build, so never let it push an unverified head. Merge lands next tick on the rebased head (#530). Any other blocker present (`manual` policy, red CI, open threads, unconfirmed intent) → handle/park that first; rebasing a PR the policy can't merge is churn every base advance repeats. Rebase conflicts → the `conflict` protocol. `unsatisfiable: true` → `escalate_once` |
 | `approved_ready` | approved + CI green | `automerge` — `pr automerge` (parks on `manual`; automerge owns the 120s review-settle + pre-merge thread re-read — an immediate 0 is not settled). Nothing auto-files for a review that lands after that window — automerge has no post-merge filer. That case is the worker's: the next tick's `review_comments` row, and it files only when the reconcile left uncarried commits. One late review → one issue, never two |
-| `needs_review` | green, unapproved, and the loop reviewer has NOT seen this head | `review` — dispatch loop-reviewer (`pr packet` → security scan → `pr approve`). At any age: a review that never ran is exactly the failure that takes hours. **Scope:** non-draft PRs linking a ShipFlow issue (`Closes #N` / `Part of #N`) only — the loop shares one login with the operator, so drafts and hand-written PRs are never auto-reviewed or auto-approved |
+| `needs_review` | green, unapproved, and the loop reviewer has NOT seen this head | `review` — dispatch loop-reviewer (`pr packet` → security scan → approve). At any age: a review that never ran is exactly the failure that takes hours. **Scope:** non-draft PRs linking a ShipFlow issue (`Closes #N` / `Part of #N`) only — the loop shares one login with the operator, so drafts and hand-written PRs are never auto-reviewed or auto-approved |
 | `stale` | green, unapproved, aged, and the loop is out of review moves (reviewer already saw this head, or the PR is out of scope above) | `nudge` the PR; escalate if blocked on a human |
 | `awaiting_review` | same as `stale`, not yet aged | `park` — ages into `stale` at `stale-pr-hours` (#439). Not "unreviewed": an unreviewed PR is `needs_review` |
 | `merged_unreviewed` | merged `@me` PR that bypassed the review gate in the last `stale-pr-hours`. Post-merge label/review does not hide it | `park` — never automerge / review / rebase. `escalateOnce` → escalate the parent once, then park; older than the window drop |

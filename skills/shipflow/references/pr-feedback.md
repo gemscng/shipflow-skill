@@ -9,7 +9,7 @@ then reply via `renaiss-shipflow pr note <n> --body …` (#603 — the marked pa
 `pr reviews --json` is a read-only query like `pr ready` — the worklist
 (unresolved threads block approval/merge). Parse JSON `blocking` +
 `unresolvedThreads`; rc is not the signal (always 0). Gates stay
-`pr approve` (exit 7) and `pr automerge` (exit 5). `gh pr view --comments`
+the approve gate (exit 7) and `pr automerge` (exit 5). `gh pr view --comments`
 misses line-level inline comments — fetch separately:
 
 ```bash

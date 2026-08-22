@@ -87,7 +87,7 @@ mean "irrelevant", they stop meaning anything.
 0. **External reviews first — clear them before you approve.** The packet's
    *External review threads* section lists unresolved threads, incl. async
    bots (gemini-code-assist, coderabbit). Any unresolved → cannot approve:
-   `pr approve` refuses (exit 7), the merge gate blocks; `request_changes`,
+   approval refuses (exit 7), the merge gate blocks; `request_changes`,
    handing the orchestrator each thread. External reviewers post a minute or
    two after the PR opens — none yet ≠ approve; let the next reconcile tick
    catch them. An immediate post-push `pr reviews` zero is **not** a settled
@@ -293,8 +293,8 @@ mean "irrelevant", they stop meaning anything.
    ```
    and:
    - **approve** (no unresolved threads, brief met, CI green) → after the
-     empty-findings `post-review`, `renaiss-shipflow pr approve <pr> --comment
-     "<status stamp>" --scan-files <N> --scan-report <path> --scan-digest <hex>`
+     empty-findings `post-review`, `renaiss-shipflow pr approve <pr> --scan-files <N> --scan-report <path> --scan-digest <hex> --comment
+     "<status stamp>"`
      adds `shipflow-approved`. One approval channel — don't double-post. All
      three scan flags required (§0b), same `pr diff` capture; both commands
      refuse (exit 9) on a missing one, 0, a file-list mismatch, or a foreign
@@ -305,7 +305,7 @@ mean "irrelevant", they stop meaning anything.
      approve while a thread is open.
 
 (Reviewer and worker share one GitHub identity — native review approval is
-unavailable on own PRs; `pr approve` / the `shipflow-approved` label is the
+unavailable on own PRs; the approve command / the `shipflow-approved` label is the
 approval channel, consumed in-loop by the orchestrator.)
 
 ### 🔴 Reviewing a PR labelled `needs-reporter-review` (issue #411)
@@ -315,7 +315,7 @@ The #190 **intent gate** — a merge blocker under every policy until the
 
 | Rule | Detail |
 | --- | --- |
-| **Every comment you post carries a marker** | `pr post-review` / `pr approve --comment` stamp `<!-- shipflow:loop-review -->`; a bare `gh pr comment` posts as a *human* |
+| **Every comment you post carries a marker** | `pr post-review` / `approve --comment` stamp `<!-- shipflow:loop-review -->`; a bare `gh pr comment` posts as a *human* |
 | **You never release the gate** | only the reporter does, with a reply that is ONLY `/confirm` / `confirm` / `confirmed` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / 👍 / `+1` and nothing else. Exact token, whole reply — prose that reads as consent (`Confirmed — ship it`), or a token with a correction or a thank-you after it, does not clear it |
 | **A second, narrower door exists** | a numbered `N: answer` decision reply can also release it, under four preconditions — read them in `loop-gate.md` (→ `contracts/shipflow-contract.json` → `intentGate.$comment`), not from a copy here. You use neither door |
 | **Approving does not clear it** | `shipflow-approved` + a cleared intent gate are separate conditions; approve normally, let the PR park |

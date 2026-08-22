@@ -87,7 +87,7 @@ fails STUCK, never open — no "any bot" value.
 The real merge guard is **GitHub branch protection** — even `auto-on-green`
 can't merge what GitHub blocks. Approval = a GitHub review approval **or**
 the `shipflow-approved` label, added by the **reviewer** via
-`renaiss-shipflow pr approve <n>` — the reviewer's verdict *is* the merge
+`renaiss-shipflow pr approve <n> --scan-files <N> --scan-report <path> --scan-digest <sha256>` — the reviewer's verdict *is* the merge
 gate.
 
 ## Continuous mode (run start)
