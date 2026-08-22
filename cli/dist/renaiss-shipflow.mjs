@@ -8134,7 +8134,13 @@ function evalIntentGate(repo, number, prView, reads = {}) {
     }
   }
   const facts = { signal, hasLabel, everCleared };
-  return { ...intentGate(facts), blockedBy: intentGateBlockedBy(facts) };
+  return evaluatedIntentGate(facts);
+}
+function evaluatedIntentGate(facts) {
+  return {
+    ...intentGate(facts),
+    blockedBy: facts.hasLabel ? "label" : intentGateBlockedBy(facts)
+  };
 }
 var FRESH_PROBE_BACKOFF_MS = 3000;
 async function freshProbeIntentGate(first, reads) {
@@ -8154,7 +8160,7 @@ async function freshProbeIntentGate(first, reads) {
     everCleared = false;
   }
   const facts = { signal: true, hasLabel, everCleared };
-  return { ...intentGate(facts), blockedBy: intentGateBlockedBy(facts) };
+  return evaluatedIntentGate(facts);
 }
 var liveIntentGateFreshReads = (repo, number) => ({
   hasLabel: () => (ghPRView(repo, number).labels ?? []).some((l) => l.name === REPORTER_REVIEW_LABEL),
