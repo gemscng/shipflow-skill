@@ -4101,10 +4101,12 @@ function assertResolvedFilter(value, flag, command) {
     throw new Error(`${command}: ${flag} resolved to an empty value — refusing to drop the filter and list the whole repo (check \`gh auth status\`)`);
   }
 }
-function ghIssueList(repo, state = "open", limit = 30, assignee) {
+function ghIssueList(repo, state = "open", limit = 30, assignee, label) {
   assertResolvedFilter(assignee, "--assignee", "gh issue list");
+  assertResolvedFilter(label, "--label", "gh issue list");
   const assigneeArg = assignee ? ` --assignee ${shellQuote(assignee)}` : "";
-  const out = _exec(`gh issue list --repo ${shellQuote(repo)} --state ${state} --limit ${limit}${assigneeArg} --json ${FIELDS}`).toString();
+  const labelArg = label ? ` --label ${shellQuote(label)}` : "";
+  const out = _exec(`gh issue list --repo ${shellQuote(repo)} --state ${state} --limit ${limit}${assigneeArg}${labelArg} --json ${FIELDS}`).toString();
   return JSON.parse(out);
 }
 function ghIssueListFiltered(repo, f = {}) {
@@ -4197,14 +4199,23 @@ function ghPRListMineMerged(repo, limit = 100) {
   const out = _exec(`gh pr list --repo ${shellQuote(repo)} --author @me --state merged --limit ${limit} --json ${PR_FIELDS}`).toString();
   return JSON.parse(out);
 }
-function ghAuthorAssociations(repo, connection, limit) {
+function issueConnectionFilterBy(assignee, label) {
+  const parts = [];
+  if (assignee)
+    parts.push(`assignee:${JSON.stringify(assignee)}`);
+  if (label)
+    parts.push(`labels:[${JSON.stringify(label)}]`);
+  return parts.length ? `,filterBy:{${parts.join(",")}}` : "";
+}
+function ghAuthorAssociations(repo, connection, limit, filters) {
   const [owner, name] = repo.split("/");
   const assoc = new Map;
   let remaining = Math.max(0, Math.trunc(limit));
   let after;
+  const filterBy = connection === "issues" ? issueConnectionFilterBy(filters?.assignee, filters?.label) : "";
   while (remaining > 0) {
     const page = Math.min(remaining, GH_GRAPHQL_PAGE_MAX);
-    const q = "query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){" + `${connection}(states:OPEN,first:$n,after:$c,orderBy:{field:CREATED_AT,direction:DESC})` + "{pageInfo{hasNextPage endCursor}nodes{number authorAssociation}}}}";
+    const q = "query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){" + `${connection}(states:OPEN,first:$n,after:$c,orderBy:{field:CREATED_AT,direction:DESC}${filterBy})` + "{pageInfo{hasNextPage endCursor}nodes{number authorAssociation}}}}";
     const cmd = `gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${page}` + (after ? ` -f c=${shellQuote(after)}` : "");
     const payload = JSON.parse(_exec(cmd).toString());
     if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
@@ -4228,14 +4239,29 @@ function ghAuthorAssociations(repo, connection, limit) {
 function ghPRAuthorAssociations(repo, limit = 50) {
   return ghAuthorAssociations(repo, "pullRequests", limit);
 }
-function ghIssueAuthorAssociations(repo, limit = 200) {
-  return ghAuthorAssociations(repo, "issues", limit);
+function ghIssueAuthorAssociations(repo, limit = 200, assignee, label) {
+  assertResolvedFilter(assignee, "--assignee", "gh issue list");
+  assertResolvedFilter(label, "--label", "gh issue list");
+  return ghAuthorAssociations(repo, "issues", limit, { assignee, label });
 }
-function ghIssueListWithAssociations(repo, limit = 200, assignee) {
-  const issues = ghIssueList(repo, "open", limit, assignee);
+function ghIssueAuthorAssociation(repo, number) {
+  const [owner, name] = repo.split("/");
+  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){authorAssociation}}}";
+  const payload = JSON.parse(_exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString());
+  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
+  }
+  const issue = payload?.data?.repository?.issue;
+  if (!issue)
+    throw new Error(`GraphQL returned no issue ${repo}#${number} (repository null or unreadable)`);
+  return String(issue.authorAssociation ?? "");
+}
+function ghIssueListWithAssociations(repo, limit = 200, assignee, label) {
+  const issues = ghIssueList(repo, "open", limit, assignee, label);
+  const listFilterSet = Boolean(assignee || label);
   let assoc;
   try {
-    assoc = ghIssueAuthorAssociations(repo, limit);
+    assoc = ghIssueAuthorAssociations(repo, limit, assignee, label);
   } catch (e) {
     console.error(`⚠️  issue authorAssociation lookup failed (${String(e.message ?? e).split(`
 `)[0]}) — ` + `all ${issues.length} open issue(s) report as association-unknown and stay gated for THIS pass only; ` + `no ${SHIPFLOW_CONTRACT.labels.names.needsReporterApproval} label will be written.`);
@@ -4244,14 +4270,27 @@ function ghIssueListWithAssociations(repo, limit = 200, assignee) {
     return issues;
   }
   let uncovered = 0;
+  const toFill = [];
   for (const i of issues) {
     const a = assoc.get(i.number);
     if (a === undefined) {
+      if (listFilterSet) {
+        toFill.push(i);
+        continue;
+      }
       i.associationLookupFailed = true;
       uncovered++;
       continue;
     }
     i.authorAssociation = a;
+  }
+  for (const i of toFill) {
+    try {
+      i.authorAssociation = ghIssueAuthorAssociation(repo, i.number);
+    } catch {
+      i.associationLookupFailed = true;
+      uncovered++;
+    }
   }
   if (uncovered > 0) {
     console.error(`⚠️  ${uncovered} of ${issues.length} open issue(s) fell outside the authorAssociation window — ` + "they report as association-unknown and stay gated for THIS pass only; no label will be written.");
@@ -6859,7 +6898,7 @@ ${section}` : section;
     if (assignee === "@me" || assignee === undefined && resolvePickupScope() === "assigned") {
       assignee = resolveMeLogin(assignee === "@me" ? "issue next --assignee @me" : "issue next under pickup-scope=assigned (set pickup-scope all to widen)");
     }
-    const open = ghIssueListWithAssociations(repo, 200, assignee);
+    const open = ghIssueListWithAssociations(repo, 200, assignee, opts.label);
     let claimsUnavailable = false;
     const claims = await ctx.client.listClaims(ctx.creds.org, ctx.project.projectId).catch(() => {
       claimsUnavailable = true;
