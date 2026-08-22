@@ -2484,6 +2484,70 @@ function classifyPR(pr, me, opts = {}) {
     ...gateAgeHours === undefined ? {} : { gateAgeHours }
   };
 }
+function reviewedBeforeMerge(pr, mergedAt) {
+  const mergeMs = Date.parse(mergedAt);
+  if (Number.isNaN(mergeMs))
+    return false;
+  const mergedHead = commitSha(pr.headRefOid);
+  if (mergedHead) {
+    for (const c of pr.comments ?? []) {
+      const t = Date.parse(c.createdAt);
+      if (Number.isNaN(t) || t > mergeMs)
+        continue;
+      if (approvedHeadSha([c]) === mergedHead)
+        return true;
+    }
+  }
+  for (const r of pr.reviews ?? []) {
+    if ((r.state ?? "").toUpperCase() !== "APPROVED")
+      continue;
+    const t = Date.parse(r.submittedAt ?? "");
+    if (!Number.isNaN(t) && t <= mergeMs)
+      return true;
+  }
+  const marker = SHIPFLOW_CONTRACT.markers.loopReview;
+  for (const c of pr.comments ?? []) {
+    if (!TRUSTED_AUTHOR_ASSOCIATIONS.has((c.authorAssociation ?? "").trim().toUpperCase()))
+      continue;
+    const t = Date.parse(c.createdAt);
+    if (Number.isNaN(t) || t > mergeMs)
+      continue;
+    if (stripQuotedLines(c.body).includes(marker))
+      return true;
+  }
+  for (const r of pr.reviews ?? []) {
+    const t = Date.parse(r.submittedAt ?? "");
+    if (Number.isNaN(t) || t > mergeMs)
+      continue;
+    if (stripQuotedLines(r.body).includes(marker))
+      return true;
+  }
+  return false;
+}
+function selectMergedUnreviewed(merged, opts) {
+  const nowMs = opts.nowMs ?? Date.now();
+  return merged.filter((pr) => {
+    const at = pr.mergedAt;
+    if (!at)
+      return false;
+    if (Number.isNaN(Date.parse(at)))
+      return false;
+    if (hoursSince(at, nowMs) >= opts.staleHours)
+      return false;
+    return !reviewedBeforeMerge(pr, at);
+  });
+}
+function classifyMergedUnreviewed(pr, opts = {}) {
+  return {
+    number: pr.number,
+    state: "merged_unreviewed",
+    ciState: ciStateOf(pr.statusCheckRollup),
+    approved: false,
+    ageHours: hoursSince(pr.mergedAt ?? undefined, opts.nowMs),
+    reasons: [MERGED_UNREVIEWED_REASON],
+    needsAction: false
+  };
+}
 function intentGate(i) {
   const blocked = i.hasLabel || i.signal && !i.everCleared;
   const applyLabel = i.signal && !i.hasLabel && !i.everCleared;
@@ -2771,7 +2835,7 @@ function foreignConflictedPRs(mine, all, me, opts = {}) {
     return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
   });
 }
-var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
+var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", MERGED_UNREVIEWED_REASON = "merged_unreviewed", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
 var init_pr_state = __esm(() => {
   init_shipflow_contract_data();
   FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
@@ -2782,7 +2846,8 @@ var init_pr_state = __esm(() => {
   ESCALATE_ONCE_REASONS = [
     REWORK_CEILING_REASON,
     CORRECTION_UNREADABLE_REASON,
-    REPORTER_GATE_STALE_REASON
+    REPORTER_GATE_STALE_REASON,
+    MERGED_UNREVIEWED_REASON
   ];
   APPROVED_HEAD_MARKER = SHIPFLOW_CONTRACT.markers.approvedHead;
   APPROVED_HEAD_LINE = new RegExp(`^${APPROVED_HEAD_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+sha=(\\S+?)\\s*-->$`);
@@ -4128,6 +4193,10 @@ function ghPRListMine(repo, limit = 30) {
   const out = _exec(`gh pr list --repo ${shellQuote(repo)} --author @me --state open --limit ${limit} --json ${PR_FIELDS}`).toString();
   return JSON.parse(out);
 }
+function ghPRListMineMerged(repo, limit = 100) {
+  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --author @me --state merged --limit ${limit} --json ${PR_FIELDS}`).toString();
+  return JSON.parse(out);
+}
 function ghAuthorAssociations(repo, connection, limit) {
   const [owner, name] = repo.split("/");
   const assoc = new Map;
@@ -4478,7 +4547,7 @@ function ghResolveReviewThread(threadId) {
     _exec(`gh api graphql -f query=${shellQuote(m)} -f t=${shellQuote(threadId)}`, { stdio: "ignore" });
   } catch {}
 }
-var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner,headRefOid", GH_GRAPHQL_PAGE_MAX = 100, LABEL_COLORS, LABEL_PREFIX_COLORS;
+var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner,headRefOid,mergedAt", GH_GRAPHQL_PAGE_MAX = 100, LABEL_COLORS, LABEL_PREFIX_COLORS;
 var init_gh = __esm(() => {
   init_sh();
   init_shipflow_contract_data();
@@ -9534,9 +9603,11 @@ function escalateOnceNote(row) {
   if (row.reasons.includes(REPORTER_GATE_STALE_REASON)) {
     return `\uD83C\uDD98 escalate once (gate stale — waiting ${Math.round(row.gateAgeHours ?? 0)}h)`;
   }
+  if (row.reasons.includes(MERGED_UNREVIEWED_REASON))
+    return "\uD83C\uDD98 escalate once (merged unreviewed)";
   return "\uD83C\uDD98 escalate once";
 }
-var PARKED_STATES = ["awaiting_review", "ci_pending", "awaiting_reporter"];
+var PARKED_STATES = ["awaiting_review", "ci_pending", "awaiting_reporter", "merged_unreviewed"];
 function parkedCount(prs) {
   return prs.filter((p) => p.needsAttention !== true && (PARKED_STATES.includes(p.state) || p.foreign === true && p.state === "reporter_corrected")).length;
 }
@@ -9544,7 +9615,7 @@ function actionableCorrections(prs) {
   return prs.filter((p) => p.state === "reporter_corrected" && p.foreign !== true).length;
 }
 function actionableWip(prs) {
-  return prs.filter((p) => p.foreign !== true && p.state !== "awaiting_reporter").length;
+  return prs.filter((p) => p.foreign !== true && p.state !== "awaiting_reporter" && p.state !== "merged_unreviewed").length;
 }
 var GC_LOOKUP_BUDGET_MS = 20000;
 function gcMergedLocalBranches(repo, deps = {}) {
@@ -9620,7 +9691,8 @@ var STATE_ICONS = {
   approved_ready: "✅",
   needs_review: "\uD83D\uDD0E",
   stale: "\uD83D\uDD70️",
-  awaiting_review: "·"
+  awaiting_review: "·",
+  merged_unreviewed: "\uD83D\uDEA8"
 };
 function collectInboxPrRows(repo, me, opts) {
   const { sweepEnabled, staleHours, maxReworks } = opts;
@@ -9675,10 +9747,24 @@ function collectInboxPrRows(repo, me, opts) {
       }
     } catch {}
   }
+  try {
+    for (const pr of selectMergedUnreviewed(ghPRListMineMerged(repo), { staleHours })) {
+      const cl = classifyMergedUnreviewed(pr);
+      scanned.push({
+        pr,
+        row: minePrRow(pr, cl, {
+          unresolvedThreads: 0,
+          degraded: false,
+          parentIsEscalated,
+          parentWasEscalatedFor
+        })
+      });
+    }
+  } catch {}
   return scanned;
 }
 function registerInboxCommand(program2) {
-  program2.command("inbox").description("Reconciler view: open PRs (by state: conflict / ci_failing / changes_requested / approved_ready / stale …) and in-progress issues with new comments. With the OPT-IN repo-wide conflict sweep (`config set conflict-sweep true`, or --conflict-sweep) it also lists conflicted PRs by other authors — trusted same-repo heads only (issue #393)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Force the repo-wide foreign-PR conflict sweep on for this run (default: the `conflict-sweep` config key, which is off)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  program2.command("inbox").description("Reconciler view: open PRs (by state: conflict / ci_failing / changes_requested / approved_ready / stale …) plus recently-merged @me PRs that bypassed the review gate (`merged_unreviewed`), and in-progress issues with new comments. With the OPT-IN repo-wide conflict sweep (`config set conflict-sweep true`, or --conflict-sweep) it also lists conflicted PRs by other authors — trusted same-repo heads only (issue #393)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Force the repo-wide foreign-PR conflict sweep on for this run (default: the `conflict-sweep` config key, which is off)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { project } = await loadCtx(program2);
     const repo = opts.repo ?? project.repoFullName;
     const me = ghCurrentLogin();
@@ -9735,6 +9821,7 @@ function registerInboxCommand(program2) {
       conflictSweep: sweepEnabled,
       humanOnlyConflicts: prs.filter((p) => p.humanOnly).length,
       wipActionable: actionableWip(prs),
+      mergedUnreviewed: count("merged_unreviewed"),
       gcCleaned: gc.cleaned.length,
       gcUnpushedKept: gc.unpushed.length + gc.dirty.length,
       gcFailed: gc.failed.length
@@ -9749,6 +9836,9 @@ function registerInboxCommand(program2) {
       }
       if (summary.humanOnlyConflicts) {
         console.log(`\uD83D\uDD12 ${summary.humanOnlyConflicts} conflicted PR(s) on an untrusted head (fork / non-collaborator) — reported only, never checked out by the loop.`);
+      }
+      if (summary.mergedUnreviewed) {
+        console.log(`\uD83D\uDEA8 ${summary.mergedUnreviewed} merged PR(s) bypassed the review gate — escalate once, never automerge.`);
       }
       if (prs.length) {
         console.log("");
@@ -9793,7 +9883,8 @@ var PLAN_ACTION_BY_STATE = {
   approved_ready: "automerge",
   needs_review: "review",
   stale: "nudge",
-  awaiting_review: "park"
+  awaiting_review: "park",
+  merged_unreviewed: "park"
 };
 function planAction(state, flags = {}) {
   if (flags.humanOnly)

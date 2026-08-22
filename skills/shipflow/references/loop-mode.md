@@ -272,6 +272,11 @@ loop-authored PR goes through `renaiss-shipflow pr note <n> --body …
   once aged, park until then. **The reviewer is never dispatched twice at one
   head** — its own unresolved findings are `review_comments` → a WORKER, and
   that is what makes review → fix → re-review terminate.
+- `merged_unreviewed` → already on `main` without a pre-merge review
+  (#552). `park` — never automerge / review / rebase. `escalateOnce: true`
+  → `issue escalate <parent> --for-pr <pr> --once-reason merged_unreviewed`
+  ONCE, then park until `stale-pr-hours` drops it. Post-merge label or
+  review does not hide the bypass.
 
 🔴 **`escalateOnceUnknown: true` = inbox INCOMPLETE — never stop on it.**
 The CLI couldn't read the parent's `escalate-once` markers; the row parks
@@ -312,7 +317,8 @@ human**` / evidence comments):
 WIP counts **actionable** open PRs only — `summary.wipActionable` from
 `inbox --json` (#451): reporter-parked (`awaiting_reporter`) PRs are a
 timer like `issue wait --on #X` and would jam admission (a PR whose PARENT
-issue is `needs-human`-escalated still counts; PR #470). `wipActionable` ≥
+issue is `needs-human`-escalated still counts; PR #470). `merged_unreviewed`
+is already on main (#552) — excluded too. `wipActionable` ≥
 `wip-limit` → skip B (drain A). Else admit up to **`loop-concurrency`**
 issues at once (default 3, #744) while in-flight fix workers +
 PRs-opened-THIS-PASS < `cap` — each step still a fresh subagent:
@@ -517,6 +523,8 @@ second ladder. This table is the human-readable projection of that map.
 Ladder, highest first: `reporter_corrected` › `awaiting_reporter` ›
 `conflict` › `ci_failing` › `changes_requested` › `review_comments` ›
 `ci_pending` › `approved_ready` › `needs_review` › `stale` › `awaiting_review`.
+Sidecar (not `classifyPR`): `merged_unreviewed` — recently-merged `@me`
+bypasses, collected separately (#552).
 
 `awaiting_reporter` outranks everything below it — `conflict` included —
 because every route below has a worker *act on the PR*, and an unconfirmed
@@ -540,6 +548,7 @@ still parks forever).
 | `needs_review` | green, unapproved, and the loop reviewer has NOT seen this head | `review` — dispatch loop-reviewer (`pr packet` → security scan → `pr approve`). At any age: a review that never ran is exactly the failure that takes hours. **Scope:** non-draft PRs linking a ShipFlow issue (`Closes #N` / `Part of #N`) only — the loop shares one login with the operator, so drafts and hand-written PRs are never auto-reviewed or auto-approved |
 | `stale` | green, unapproved, aged, and the loop is out of review moves (reviewer already saw this head, or the PR is out of scope above) | `nudge` the PR; escalate if blocked on a human |
 | `awaiting_review` | same as `stale`, not yet aged | `park` — ages into `stale` at `stale-pr-hours` (#439). Not "unreviewed": an unreviewed PR is `needs_review` |
+| `merged_unreviewed` | merged `@me` PR that bypassed the review gate in the last `stale-pr-hours`. Post-merge label/review does not hide it | `park` — never automerge / review / rebase. `escalateOnce` → escalate the parent once, then park; older than the window drop |
 
 ## Guardrails
 
