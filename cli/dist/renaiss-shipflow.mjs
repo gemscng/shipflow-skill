@@ -2180,6 +2180,8 @@ var init_shipflow_contract_data = __esm(() => {
       precedentContext: "<!-- shipflow:precedent-context",
       precedentApplied: "<!-- shipflow:precedent-applied",
       intentGateHint: "<!-- shipflow:intent-gate-hint -->",
+      intakeGateCleared: "<!-- shipflow:intake-gate-cleared",
+      intakeGateHint: "<!-- shipflow:intake-gate-hint -->",
       intentGateParentConfirm: "<!-- shipflow:intent-gate-parent-confirm",
       reworkFrom: "<!-- shipflow:rework-from",
       escalateOnce: "<!-- shipflow:escalate-once",
@@ -2588,6 +2590,17 @@ function isIntentGateAuditComment(c, trustedSlug) {
     return true;
   return TRUSTED_AUTHOR_ASSOCIATIONS.has((c.authorAssociation ?? "").trim().toUpperCase());
 }
+function intakeGateAuditLineAnchored(body) {
+  return INTAKE_GATE_AUDIT_LINE.test(lastMeaningfulLine(body));
+}
+function isIntakeGateAuditComment(c, trustedSlug) {
+  if (!intakeGateAuditLineAnchored(c.body))
+    return false;
+  const trusted = (typeof trustedSlug === "string" ? normalizeBotLogin(trustedSlug) : "") || INTENT_GATE_AUDIT_AUTHOR_SLUG;
+  if (trusted !== "" && c.authorIsBot === true && normalizeBotLogin(c.authorLogin) === trusted)
+    return true;
+  return TRUSTED_AUTHOR_ASSOCIATIONS.has((c.authorAssociation ?? "").trim().toUpperCase());
+}
 function intentGateEverCleared(e) {
   if (e.auditComments > 0)
     return true;
@@ -2835,7 +2848,7 @@ function foreignConflictedPRs(mine, all, me, opts = {}) {
     return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
   });
 }
-var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", MERGED_UNREVIEWED_REASON = "merged_unreviewed", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_OVERRIDE_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
+var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", MERGED_UNREVIEWED_REASON = "merged_unreviewed", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_OVERRIDE_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, INTAKE_GATE_AUDIT_MARKER, INTAKE_GATE_AUDIT_LINE, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
 var init_pr_state = __esm(() => {
   init_shipflow_contract_data();
   FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
@@ -2864,6 +2877,8 @@ var init_pr_state = __esm(() => {
   INTENT_GATE_AUDIT_MARKER = SHIPFLOW_CONTRACT.markers.intentGateCleared;
   INTENT_GATE_AUDIT_LINE = new RegExp(`^${INTENT_GATE_AUDIT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} by=\\S+ -->$`);
   INTENT_GATE_AUDIT_AUTHOR_SLUG = normalizeBotLogin(SHIPFLOW_CONTRACT.intentGate.auditAuthorSlug);
+  INTAKE_GATE_AUDIT_MARKER = SHIPFLOW_CONTRACT.markers.intakeGateCleared;
+  INTAKE_GATE_AUDIT_LINE = new RegExp(`^${INTAKE_GATE_AUDIT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} by=\\S+ -->$`);
   REWORK_FROM_MARKER = SHIPFLOW_CONTRACT.markers.reworkFrom;
   REWORK_FROM_RE = new RegExp(`${REWORK_FROM_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+id=(\\S+?)\\s*-->`, "g");
   CONFIRMATION_TOKENS = new Set(SHIPFLOW_CONTRACT.intentGate.confirmationTokens.map((t) => t.toLowerCase()));
@@ -4546,6 +4561,14 @@ function ghIntentGateClearance(repo, number, label) {
     auditComments: ghIntentGateAuditCount(repo, number),
     removals: ghLabelRemovals(repo, number, label)
   };
+}
+function ghIntakeGateAuditCount(repo, number) {
+  try {
+    const trusted = resolveIntentGateAuditAuthorSlug();
+    return ghIntentGateAuditCandidates(repo, number).filter((c) => isIntakeGateAuditComment(c, trusted.slug)).length;
+  } catch {
+    return 0;
+  }
 }
 function ghIssueAuthor(repo, number) {
   try {
@@ -6498,10 +6521,12 @@ var INTAKE_GATE_MARKER = "<!-- shipflow:intake-gated -->";
 function hasIntakeGateMarker(comments) {
   return comments.some((c) => c.viewerDidAuthor && /<!--\s*shipflow:intake-gated\s*-->/.test(c.body));
 }
-function classifyIntakeApproval(removals, lastEditedAt, renamedAt) {
+function classifyIntakeApproval(removals, lastEditedAt, renamedAt, opts) {
   let approvedAt = null;
   for (const r of removals) {
     if (!r.actorKnown)
+      continue;
+    if (r.actorIsBot === true && !opts?.hasIntakeAudit)
       continue;
     const t = Date.parse(r.createdAt ?? "");
     if (Number.isNaN(t))
@@ -6998,7 +7023,9 @@ ${section}` : section;
           let approval = "unapproved";
           try {
             const timeline = ghIssueTimelineSignals(repo, i.number, NEEDS_REPORTER_APPROVAL_LABEL);
-            approval = classifyIntakeApproval(timeline.removals, ghIssueLastEditedAt(repo, i.number), timeline.renamedAt);
+            const botStrip = timeline.removals.some((r) => r.actorKnown && r.actorIsBot === true);
+            const hasIntakeAudit = botStrip && ghIntakeGateAuditCount(repo, i.number) > 0;
+            approval = classifyIntakeApproval(timeline.removals, ghIssueLastEditedAt(repo, i.number), timeline.renamedAt, { hasIntakeAudit });
           } catch (e) {
             console.warn(`intake gate: could not read #${i.number}'s approval evidence (withheld this pass, nothing written): ${e.message}`);
           }
@@ -7024,7 +7051,9 @@ ${section}` : section;
         ghIssueComment(repo, i.number, [
           reArm ? `\uD83D\uDD12 **Intake gate re-armed** — this issue was approved, but its **body or title changed after** that approval, so the ShipFlow loop is no longer holding a maintainer's sign-off on the content it would build.` : `\uD83D\uDD12 **Intake gate** — this issue was filed from outside the code org (\`${i.authorAssociation || "unknown"}\`), so the ShipFlow loop will not build it until a maintainer approves.`,
           "",
-          reArm ? `**To re-approve:** remove the \`${NEEDS_REPORTER_APPROVAL_LABEL}\` label again after reading the current text. Approval binds to the content, not to the label.` : `**To approve:** remove the \`${NEEDS_REPORTER_APPROVAL_LABEL}\` label. The loop arms this gate **once** — it will not re-apply the label unless the issue is edited after approval, and the issue re-enters the queue on the next pass.`,
+          reArm ? `**To re-approve:** reply with a confirmation token after reading the current text, or remove the \`${NEEDS_REPORTER_APPROVAL_LABEL}\` label.` : `**To approve:** reply with a confirmation token, or remove the \`${NEEDS_REPORTER_APPROVAL_LABEL}\` label. The loop arms this gate **once**.`,
+          "",
+          SHIPFLOW_CONTRACT.intentGate.releaseHint,
           "",
           INTAKE_GATE_MARKER
         ].join(`

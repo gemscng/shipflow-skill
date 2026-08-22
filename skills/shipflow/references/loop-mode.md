@@ -349,19 +349,23 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
      stay independently pickable.
    - **Intake gate (#448):** author association not
      `OWNER`/`MEMBER`/`COLLABORATOR` (or unreadable — fails closed) →
-     labelled `needs-reporter-approval`, **not claimable** until someone
+     labelled `needs-reporter-approval`, **not claimable** until a trusted
+     confirmation token (same list as the #411 merge gate) or someone
      with **triage or above** removes the label (GitHub-enforced). Non-code
      contributors confirm in chat, where ShipFlow knows their identity.
      Unset = `code-org`.
      - **Arming happens ONCE** — hidden `shipflow:intake-gated` marker in
-       the gate comment; removal sticks (never re-applied) and IS the
-       approval. **Only a LOOP-AUTHORED marker counts**
-       (`viewerDidAuthor === false` → ignored); label removal stays the
-       only approval.
+       the gate comment; a trusted token or a named human unlabeled
+       sticks (never re-applied) and IS the approval. **Only a
+       LOOP-AUTHORED marker counts** (`viewerDidAuthor === false` →
+       ignored). The arming comment advertises `intentGate.releaseHint`.
      - **Approval = the removal EVENT, not label absence:** read the
-       `unlabeled` timeline live; require a **named actor** (NULL
-       rejected), else withhold, write nothing (stale-snapshot race,
+       `unlabeled` timeline live; a **named human** unlabeled still
+       approves; a **bot** unlabeled needs the intake-gate audit (#473)
+       else withhold. NULL actor rejected (stale-snapshot race,
        PR #450 round 5).
+     - **One reply ≠ two decisions:** if `needs-reporter-review` is also
+       on the issue, that confirm does **not** clear approval.
      - **Approval binds to the CONTENT:** body OR title edited **after**
        removal → re-arm (pre-approval edits untouched). `lastEditedAt` =
        body only; a retitle is a `RenamedTitleEvent`, and on a thin-bodied
@@ -372,10 +376,10 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
        control: don't invite read-only outside collaborators on a
        loop-built repo.
      - `config set intake-approval off` = gate fully off — stops arming AND
-       frees already-labelled issues (nothing removes
-       `needs-reporter-approval` automatically, #473 — `off` is the only
-       repo-wide recovery). `intake-approval reporter` accepted but not
-       honored on GitHub intake (#473) — gates like `code-org`.
+       frees already-labelled issues (`off` is the repo-wide recovery
+       from a mass-arming; the token path is per-issue).
+       `intake-approval reporter` accepted but not honored on GitHub
+       intake — gates like `code-org`.
      - Unreadable author association / comment list → gate that pass only,
        write **no** label.
    **Exit 4** / `issue: null` → nothing to admit.
