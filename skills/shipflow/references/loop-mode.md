@@ -382,6 +382,10 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
        intake — gates like `code-org`.
      - Unreadable author association / comment list → gate that pass only,
        write **no** label.
+     - **Later trusted lookup self-heals (#868):** a labelled issue whose
+       live association is OWNER/MEMBER/COLLABORATOR drops the label and
+       posts the intake-gate-cleared audit (`by=lookup-id`). Unreadable
+       lookup still writes nothing; still-outside stays labelled.
    **Exit 4** / `issue: null` → nothing to admit.
    - **Dependency check:** blocked-by/depends-on an unmerged `#X` →
      `renaiss-shipflow issue wait <n> --on <#X> --reason "…"`, pick the

@@ -6550,8 +6550,13 @@ function classifyIntakeApproval(removals, lastEditedAt, renamedAt, opts) {
 function decideIntakeGate(issue, ctx) {
   if (ctx.intakeMode === "off")
     return "none";
-  if (issue.labels.some((l) => l.name === NEEDS_REPORTER_APPROVAL_LABEL))
+  if (issue.labels.some((l) => l.name === NEEDS_REPORTER_APPROVAL_LABEL)) {
+    if (issue.associationLookupFailed)
+      return "none";
+    if (!isOutsideCodeOrg(issue.authorAssociation))
+      return "heal";
     return "none";
+  }
   if (!isOutsideCodeOrg(issue.authorAssociation))
     return "none";
   if (ctx.armedBefore === null)
@@ -6567,6 +6572,23 @@ function decideIntakeGate(issue, ctx) {
   if (issue.associationLookupFailed)
     return "gate-this-pass";
   return "arm";
+}
+var INTAKE_HEAL_AUDIT_BY = "lookup-id";
+function renderIntakeHealAudit(authorAssociation) {
+  const assoc = String(authorAssociation ?? "").trim().toUpperCase() || "unknown";
+  return [
+    `✅ **\`${NEEDS_REPORTER_APPROVAL_LABEL}\` cleared** — a later author-association lookup succeeded as trusted.`,
+    "",
+    "| Field | Value |",
+    "| --- | --- |",
+    "| Cleared by | association lookup |",
+    `| Read as | \`${assoc}\` |`,
+    "",
+    "Re-apply the label to gate this issue again.",
+    "",
+    `${SHIPFLOW_CONTRACT.markers.intakeGateCleared} by=${INTAKE_HEAL_AUDIT_BY} -->`
+  ].join(`
+`);
 }
 function isStaleInProgress(issue, claimed, openPRIssues) {
   if (!issue.labels.some((l) => l.name === IN_PROGRESS_LABEL))
@@ -7032,6 +7054,17 @@ ${section}` : section;
           approvalState = approval;
           action = decideIntakeGate(i, { intakeMode, armedBefore, approval });
         }
+      }
+      if (action === "heal") {
+        try {
+          ghIssueComment(repo, i.number, renderIntakeHealAudit(i.authorAssociation));
+          ghIssueRemoveLabel(repo, i.number, NEEDS_REPORTER_APPROVAL_LABEL);
+          i.labels = i.labels.filter((l) => l.name !== NEEDS_REPORTER_APPROVAL_LABEL);
+          console.warn(`♻️ #${i.number}: author association ${i.authorAssociation || "unknown"} — cleared "${NEEDS_REPORTER_APPROVAL_LABEL}" (later trusted lookup).`);
+        } catch (e) {
+          console.warn(`intake gate: heal failed for #${i.number} (label left in place): ${e.message}`);
+        }
+        continue;
       }
       if (action === "none")
         continue;
