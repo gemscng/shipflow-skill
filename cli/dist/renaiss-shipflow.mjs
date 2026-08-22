@@ -6631,6 +6631,26 @@ function evidenceThreadVerdict(status, threadNotified, threadError) {
       };
   }
 }
+function evidenceCommentVerdict(status, githubCommented, prCommented = false, commentError) {
+  const effective = status ?? (githubCommented || prCommented ? "delivered" : "skipped");
+  const reason = commentError || "no reason reported by the server";
+  switch (effective) {
+    case "failed":
+      return {
+        exitCode: EXIT_EVIDENCE_THREAD_FAILED,
+        note: `❌ GitHub comment FAILED — evidence did not land on GitHub: ${reason}`,
+        isError: true
+      };
+    case "delivered":
+      return { exitCode: 0, note: "\uD83D\uDCDD GitHub comment posted.", isError: false };
+    default:
+      return {
+        exitCode: 0,
+        note: "ℹ️  GitHub comment skipped — no commenter or hollow body (not a failure).",
+        isError: false
+      };
+  }
+}
 function validateEvidenceSelection(before, after, misc, labels = [], beforeCaptions = [], afterCaptions = [], imageCaptions = [], actual = [], actualCaptions = []) {
   const hasBefore = before.length > 0;
   const hasAfter = after.length > 0;
@@ -7250,11 +7270,12 @@ ${formatPrecedentSuggestion(precedent)}`;
       actualCaptions,
       images: misc.map(toImg)
     });
-    const verdict = evidenceThreadVerdict(res.threadStatus, res.threadNotified, res.threadError);
+    const threadVerdict = evidenceThreadVerdict(res.threadStatus, res.threadNotified, res.threadError);
+    const commentVerdict = evidenceCommentVerdict(res.commentStatus, res.githubCommented, !!res.prCommented, res.commentError);
     emit(opts, res, () => {
       const where = [];
       if (res.threadNotified)
-        where.push(verdict.partial ? "reporter thread (PARTIAL)" : "reporter thread");
+        where.push(threadVerdict.partial ? "reporter thread (PARTIAL)" : "reporter thread");
       if (res.prCommented)
         where.push("PR comment");
       if (res.githubCommented)
@@ -7262,12 +7283,16 @@ ${formatPrecedentSuggestion(precedent)}`;
       console.log(`\uD83E\uDDEA Evidence delivered to: ${where.join(" + ") || "nowhere (check server logs)"}`);
       for (const u of res.threadImageUrls ?? [])
         console.log(`  ${u}`);
-      if (!verdict.isError)
-        console.log(verdict.note);
+      if (!threadVerdict.isError)
+        console.log(threadVerdict.note);
+      if (!commentVerdict.isError)
+        console.log(commentVerdict.note);
     }, { pretty: true });
-    if (verdict.isError) {
-      console.error(verdict.note);
-      process.exit(verdict.exitCode);
+    const loud = [threadVerdict, commentVerdict].filter((v) => v.isError);
+    if (loud.length) {
+      for (const v of loud)
+        console.error(v.note);
+      process.exit(loud[0].exitCode);
     }
   }));
 }
