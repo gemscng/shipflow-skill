@@ -6590,6 +6590,25 @@ function renderIntakeHealAudit(authorAssociation) {
   ].join(`
 `);
 }
+var INTAKE_CLEAR_AUDIT_READ_AS = "intake clear";
+function renderIntakeClearAudit(login) {
+  const who = login.trim();
+  if (!who)
+    throw new Error("intake clear: refusing an unattributed audit (empty login)");
+  return [
+    `✅ **\`${NEEDS_REPORTER_APPROVAL_LABEL}\` cleared** — maintainer un-arm via \`${INTAKE_CLEAR_AUDIT_READ_AS}\`.`,
+    "",
+    "| Field | Value |",
+    "| --- | --- |",
+    `| Cleared by | @${who} |`,
+    `| Read as | \`${INTAKE_CLEAR_AUDIT_READ_AS}\` |`,
+    "",
+    "Re-apply the label to gate this issue again.",
+    "",
+    `${SHIPFLOW_CONTRACT.markers.intakeGateCleared} by=${who} -->`
+  ].join(`
+`);
+}
 function isStaleInProgress(issue, claimed, openPRIssues) {
   if (!issue.labels.some((l) => l.name === IN_PROGRESS_LABEL))
     return false;
@@ -7398,6 +7417,82 @@ async function readStdin() {
   for await (const c of process.stdin)
     chunks.push(c);
   return Buffer.concat(chunks).toString("utf-8");
+}
+
+// src/commands/intake.ts
+init_helpers();
+init_gh();
+var INTAKE_CLEAR_LIST_LIMIT = 1000;
+function hasApprovalLabel2(issue) {
+  return issue.labels.some((l) => l.name === NEEDS_REPORTER_APPROVAL_LABEL);
+}
+function clearLabelledIssue(repo, number, login) {
+  ghIssueComment(repo, number, renderIntakeClearAudit(login));
+  ghIssueRemoveLabel(repo, number, NEEDS_REPORTER_APPROVAL_LABEL);
+}
+function parseIssueNumber(raw) {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0 || String(n) !== raw.trim()) {
+    throw new UsageError(`intake clear: invalid --issue ${raw}`);
+  }
+  return n;
+}
+function printReport(r) {
+  const clearedList = r.cleared.length ? `: ${r.cleared.map((n) => `#${n}`).join(", ")}` : "";
+  console.log(`Cleared ${r.cleared.length} issue(s)${clearedList}.`);
+  if (r.skipped.length) {
+    console.log(`Skipped ${r.skipped.length} (not labelled): ${r.skipped.map((n) => `#${n}`).join(", ")}`);
+  }
+  if (r.failed.length) {
+    console.log(`Failed ${r.failed.length}: ${r.failed.map((f) => `#${f.number} — ${f.error}`).join("; ")}`);
+  }
+}
+function registerIntakeCommand(program2) {
+  const intake = program2.command("intake").description("Intake-gate maintainer actions");
+  intake.command("clear").description("Remove needs-reporter-approval (audit comment, then label)").option("--all", "Clear every open issue carrying the label").option("--issue <n>", "Clear one issue by number").option("--repo <fullname>", "Repo (default: the active project's)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    const hasAll = !!opts.all;
+    const hasIssue = opts.issue !== undefined && opts.issue !== "";
+    if (hasAll === hasIssue) {
+      throw new UsageError("intake clear: specify exactly one of --all or --issue <n>");
+    }
+    const issueNumber = hasIssue ? parseIssueNumber(opts.issue) : null;
+    const ctx = await loadGhCtx(program2, opts.repo);
+    const repo = ctx.project.repoFullName;
+    const login = ghCurrentLogin().trim();
+    if (!login) {
+      throw new UsageError("intake clear: gh login unresolved (`gh api user` failed) — refusing an unattributed audit; check `gh auth status`");
+    }
+    const report = { cleared: [], skipped: [], failed: [] };
+    const targets = [];
+    if (hasAll) {
+      const listed = ghIssueList(repo, "open", INTAKE_CLEAR_LIST_LIMIT, undefined, NEEDS_REPORTER_APPROVAL_LABEL);
+      if (listed.length === INTAKE_CLEAR_LIST_LIMIT) {
+        console.warn(`intake clear: listing window is full (${INTAKE_CLEAR_LIST_LIMIT}) — re-run --all if labels remain`);
+      }
+      targets.push(...listed);
+    } else {
+      try {
+        targets.push(ghIssueView(repo, issueNumber));
+      } catch (e) {
+        throw new UsageError(`intake clear: could not read #${issueNumber}: ${e.message}`);
+      }
+    }
+    for (const issue of targets) {
+      if (!hasApprovalLabel2(issue)) {
+        report.skipped.push(issue.number);
+        continue;
+      }
+      try {
+        clearLabelledIssue(repo, issue.number, login);
+        report.cleared.push(issue.number);
+      } catch (e) {
+        report.failed.push({ number: issue.number, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    emit(opts, report, () => printReport(report), { pretty: true });
+    if (report.failed.length)
+      process.exit(1);
+  }));
 }
 
 // src/commands/inbox.ts
@@ -11126,6 +11221,7 @@ registerStatusCommand(program2);
 registerVersionCommand(program2, pkg.version);
 registerIssuesCommand(program2);
 registerIssueCommand(program2);
+registerIntakeCommand(program2);
 registerInboxCommand(program2);
 registerLoopCommand(program2);
 registerFeaturesCommand(program2);

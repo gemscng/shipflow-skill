@@ -376,10 +376,14 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
        control: don't invite read-only outside collaborators on a
        loop-built repo.
      - `config set intake-approval off` = gate fully off — stops arming AND
-       frees already-labelled issues (`off` is the repo-wide recovery
-       from a mass-arming; the token path is per-issue).
-       `intake-approval reporter` accepted but not honored on GitHub
-       intake — gates like `code-org`.
+       frees already-labelled issues at pickup (labels stay on). Token
+       path is per-issue (#473 option 1). `intake-approval reporter`
+       accepted but not honored on GitHub intake — gates like `code-org`.
+     - **Bulk un-arm (#867):** `renaiss-shipflow intake clear --all` (or
+       `--issue <n>`) strips `needs-reporter-approval` and posts the
+       option-1 intake-gate-cleared audit as the operator. Mass-arm
+       recovery without per-issue `gh issue edit`. **The loop must never
+       call this** — operator-only; gh write is the authz.
      - Unreadable author association / comment list → gate that pass only,
        write **no** label.
      - **Later trusted lookup self-heals (#868):** a labelled issue whose
