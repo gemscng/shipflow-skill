@@ -8410,6 +8410,15 @@ init_pr_state();
 init_helpers();
 init_project();
 var LINT_MODES = ["warn", "strict"];
+function lintNearMissDeviationHeadings(body) {
+  const hits = findNearMissDeviationHeadings(body);
+  if (hits.length === 0)
+    return [];
+  const quoted = hits.map((h) => `\`${h}\``).join(", ");
+  return [
+    `body has near-miss Deviations heading(s) ${quoted} — retitle to a canonical \`${DEVIATIONS_HEADING_ALIASES[0]}\` heading (any level) or drop the section; a near-miss does not feed the intent gate and is not rewritten`
+  ];
+}
 var APPROVED_LABEL = SHIPFLOW_CONTRACT.labels.names.shipflowApproved;
 var REPORTER_REVIEW_LABEL = SHIPFLOW_CONTRACT.labels.names.needsReporterReview;
 function evalIntentGate(repo, number, prView, reads = {}) {
@@ -8869,7 +8878,11 @@ function registerPRCommand(program2) {
         process.exit(1);
       }
     }
-    const lintProblems = [...lintMessageBody(opts.body ?? ""), ...lintBodyLength(opts.body ?? "")];
+    const lintProblems = [
+      ...lintMessageBody(opts.body ?? ""),
+      ...lintBodyLength(opts.body ?? ""),
+      ...lintNearMissDeviationHeadings(opts.body ?? "")
+    ];
     if (lintProblems.length) {
       if (opts.lint === "strict") {
         console.error("PR body failed prose lint — restructure it (or drop --lint=strict):");
