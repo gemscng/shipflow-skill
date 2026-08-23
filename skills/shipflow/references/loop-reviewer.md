@@ -382,7 +382,10 @@ binds every autonomous LLM-judge decision:
 - **Reviewer-change acceptance runs on numbers, not vibes.** The contract's
   `evalAccept` expression (`recall>=+2pt AND precision>=-1pt over >=2 runs`)
   is the default lever for `cmd/revieweval -baseline`: exit 0 = auto-accept,
-  2 = auto-park, 3 = gray-zone → escalate to a human. Run recipe:
+  2 = auto-park, 3 = gray-zone → escalate to a human, 4 = all runs degraded
+  (every run poisoned by AI-call errors; no usable measurement; #414).
+  Exhaustive: verdicts 0/2/3/4 plus 1 (harness error, not a verdict); no
+  other codes. Run recipe:
   `apps/renaissshipflow-server/testdata/revieweval/README.md`.
 
 ## Message style — everything you write on GitHub
