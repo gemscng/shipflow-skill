@@ -4346,7 +4346,7 @@ function ghCurrentLogin() {
   }
 }
 function ghIssueListByLabel(repo, label, limit = 30) {
-  const out = _exec(`gh issue list --repo ${shellQuote(repo)} --state open --label ${shellQuote(label)} --limit ${limit} --json ${FIELDS},comments`).toString();
+  const out = _exec(`gh issue list --repo ${shellQuote(repo)} --state open --label ${shellQuote(label)} --limit ${limit} --json ${LIST_BY_LABEL_FIELDS}`).toString();
   return JSON.parse(out);
 }
 function ghOpenPRClosingIssues(repo) {
@@ -4639,7 +4639,7 @@ function ghResolveReviewThread(threadId) {
     _exec(`gh api graphql -f query=${shellQuote(m)} -f t=${shellQuote(threadId)}`, { stdio: "ignore" });
   } catch {}
 }
-var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner,headRefOid,mergedAt", GH_GRAPHQL_PAGE_MAX = 100, LABEL_COLORS, LABEL_PREFIX_COLORS;
+var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner,headRefOid,mergedAt", GH_GRAPHQL_PAGE_MAX = 100, LIST_BY_LABEL_FIELDS, LABEL_COLORS, LABEL_PREFIX_COLORS;
 var init_gh = __esm(() => {
   init_sh();
   init_shipflow_contract_data();
@@ -4656,6 +4656,7 @@ var init_gh = __esm(() => {
   SHIPFLOW_TRIAGED_MARKER = SHIPFLOW_CONTRACT.markers.triaged;
   VIA_SHIPFLOW_LABEL = SHIPFLOW_CONTRACT.labels.names.viaShipflow;
   DETAIL_FIELDS = `${FIELDS},author,milestone,updatedAt,closedAt`;
+  LIST_BY_LABEL_FIELDS = `${FIELDS},comments`;
   LABEL_COLORS = SHIPFLOW_CONTRACT.labels.colors;
   LABEL_PREFIX_COLORS = SHIPFLOW_CONTRACT.labels.prefixColors;
 });
