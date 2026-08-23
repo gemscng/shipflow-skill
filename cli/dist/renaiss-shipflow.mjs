@@ -10510,13 +10510,41 @@ function registerLoopCommand(program2) {
 
 // src/commands/features.ts
 init_helpers();
+
+// src/feature-map.ts
+var FEATURE_MAP_EMPTY_ERROR = "feature map loaded empty — 0 features is a failed load, not an empty project";
+var FEATURE_MAP_EMPTY_DEP = "empty-map";
+function featureMapEmptyEnvelope() {
+  return { error: FEATURE_MAP_EMPTY_ERROR, features: {}, degraded: [FEATURE_MAP_EMPTY_DEP] };
+}
+function featureRecord(fm) {
+  const features = fm?.features;
+  if (!features || typeof features !== "object" || Array.isArray(features))
+    return {};
+  return features;
+}
+function verdictForFeatureMapping(fm) {
+  if (Object.keys(featureRecord(fm)).length === 0)
+    return { status: "empty" };
+  return { status: "ok", mapping: fm };
+}
+
+// src/commands/features.ts
 function registerFeaturesCommand(program2) {
   program2.command("features").description("ShipFlow's feature map for this project (features → file paths/test info) — the reviewer's whole-system view").option("--json", "Output the raw feature map").option("--yaml", "Output YAML").option("--category <name>", "Filter to one category").action(runAction(async (opts) => {
     const { creds, client, project } = await loadCtx(program2);
     const fm = await client.getFeatureMapping(creds.org, project.projectId);
-    const features = fm.features ?? {};
+    const verdict = verdictForFeatureMapping(fm);
+    if (verdict.status === "empty") {
+      const envelope = featureMapEmptyEnvelope();
+      emit(opts, envelope, () => {
+        console.error(`Error: ${envelope.error}`);
+      }, { pretty: true });
+      process.exit(UNEXPECTED_EXIT_CODE);
+    }
+    const features = verdict.mapping.features ?? {};
     const keys = Object.keys(features).filter((k) => !opts.category || (features[k].category ?? "") === opts.category);
-    const jsonOut = opts.category ? { ...fm, features: Object.fromEntries(keys.map((k) => [k, features[k]])) } : fm;
+    const jsonOut = opts.category ? { ...verdict.mapping, features: Object.fromEntries(keys.map((k) => [k, features[k]])) } : verdict.mapping;
     emit(opts, jsonOut, () => {
       if (!keys.length) {
         console.log("No feature map for this project yet. Generate it from the ShipFlow dashboard.");

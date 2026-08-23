@@ -13,6 +13,11 @@ Feature → `name`, `description`, `category`, `layer`, `paths`,
 `test_priority`. Locate the touched feature(s) and the **neighbouring**
 features sharing paths/layers (the regression risk).
 
+**Fail closed on a missing map (issue #431).** A `features --json` result
+that exits non-zero, carries `degraded[]`, or lists **0 features** is a
+**hard error** — not an empty project. Do not review as if the map was
+consulted. Re-run, or `request_changes` naming the un-run feature-map step.
+
 ## Mode 1 — issue intake
 
 Mode 1 (issue intake) lives in `loop-reviewer-intake.md` — load THAT file
@@ -345,7 +350,8 @@ Never return `approve` unless all hold:
 - [ ] Health delta not negative (or explained + accepted).
 - [ ] Regression test added for the fixed bug (or skip justified: pure-CSS /
       no test framework).
-- [ ] `features --json` pulled; neighbouring features checked.
+- [ ] `features --json` pulled — non-zero exit, `degraded[]`, or 0 features
+      is a hard error (not an empty map); neighbouring features checked.
 
 Any doubt → `request_changes` — a wrong approve ships a bug; a re-review is
 cheap.
