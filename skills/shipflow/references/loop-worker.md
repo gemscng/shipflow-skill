@@ -64,7 +64,8 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    server, seed a test DB; environmental friction is not grounds to abandon.
 3. **Test** — run the project's tests, then **verify end-to-end in a real
    browser** for any UI/behavior change (`references/browser-testing.md`:
-   `bin/shipflow-browser --ensure`, scope from diff + adjacent pages, drive
+   `bin/shipflow-browser --ensure` + `--import-if-needed` (do not raw-import),
+   scope from diff + adjacent pages, drive
    the fix, `snapshot -D` + no new console errors, before/after
    **screenshots** Read, **score** affected + neighbour pages per
    `references/qa-report.md` — a dropped neighbour score = regression). Pure

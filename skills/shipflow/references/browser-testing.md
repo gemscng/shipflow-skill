@@ -73,8 +73,19 @@ the homepage + top nav.
   # … drive the browser against http://localhost:$PORT …
   kill_tree "$(cat "$RUN_DIR/dev.pid")"
   ```
-- Auth-walled pages: `$BROWSE cookie-import-browser chrome --domain <domain>`
-  (one-time macOS Keychain prompt).
+- Auth-walled pages: `--ensure` already persists cookies — **never re-import
+  on a healthy session**. Order:
+  1. `$BROWSE goto <url>`
+  2. If already authenticated, **STOP**.
+  3. If still on a login wall, run `--import-if-needed` (do not treat leftover domain cookies as success):
+     ```bash
+     "$PLUGIN_DIR/bin/shipflow-browser" --import-if-needed chrome --domain <domain>
+     ```
+     Never omit `--domain` (that opens the Chrome picker). The helper
+     skips only after a successful import stamp
+     (`$HOME/.cache/shipflow/cookie-import.$DOMAIN`) and serializes via a
+     `mkdir` lock under `$TMPDIR` (picker/Keychain at most once; `flock`
+     is missing on macOS).
 
 ## 4. Drive the fix end-to-end (before → after, one pair PER changed surface)
 

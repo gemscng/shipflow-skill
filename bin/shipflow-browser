@@ -5,12 +5,21 @@
 #
 #   BROWSE="$(shipflow-browser)"           # just resolve the command
 #   BROWSE="$(shipflow-browser --ensure)"  # resolve + heal a wedged browse server
+#   shipflow-browser --import-if-needed chrome --domain <d>
+#                                          # skip if import stamp exists; else
+#                                          # serialized cookie-import-browser
 #
 # --ensure heals the "Auth failed — server may have restarted" wedge (which
 # `browse restart` itself can't recover, since it tries to auth to the broken
 # server first) by killing the stale server + its chromium so the next command
 # respawns fresh. The chromium profile (cookies, auth, scroll) persists on disk,
 # so nothing is lost.
+#
+# --import-if-needed never opens the Chrome picker: --domain is required.
+# Skip only after a successful import stamp
+# ($HOME/.cache/shipflow/cookie-import.$DOMAIN) — login pages Set-Cookie, so
+# leftover domain cookies are not proof of auth. Concurrent cold-starts
+# serialize via a mkdir lock under $TMPDIR (flock is missing on macOS).
 set -euo pipefail
 
 # 1. Resolve the browse binary.
@@ -32,6 +41,7 @@ if [ -z "$BROWSE" ]; then
 fi
 
 # 2. Health-check + heal (only with --ensure, so plain resolution stays cheap).
+#    Stdout contract: a single line — the browse command — nothing else.
 if [ "${1:-}" = "--ensure" ]; then
   if ! "$BROWSE" status >/dev/null 2>&1; then
     # Wedged (auth failed / stale port). Kill the stale server + its chromium;
@@ -41,6 +51,83 @@ if [ "${1:-}" = "--ensure" ]; then
     sleep 1
     "$BROWSE" status >/dev/null 2>&1 || true # respawn fresh
   fi
+  echo "$BROWSE"
+  exit 0
+fi
+
+acquire_cookie_import_lock() {
+  local lock_dir="$1"
+  local waited=0
+  local old
+  while true; do
+    if mkdir "$lock_dir" 2>/dev/null; then
+      echo "$$" > "$lock_dir/pid"
+      return 0
+    fi
+    old=$(cat "$lock_dir/pid" 2>/dev/null || true)
+    if [ -n "$old" ] && ! kill -0 "$old" 2>/dev/null; then
+      rm -rf "$lock_dir"
+      continue
+    fi
+    if [ "$waited" -ge 150 ]; then
+      echo "shipflow-browser: timed out waiting for cookie-import lock $lock_dir" >&2
+      exit 1
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+}
+
+# 3. Stamp-gated cookie import (auth-walled pages). Never omit --domain.
+if [ "${1:-}" = "--import-if-needed" ]; then
+  shift
+  BROWSER="chrome"
+  DOMAIN=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --domain)
+        if [ -z "${2:-}" ] || [ "${2#--}" != "$2" ]; then
+          echo "shipflow-browser: --import-if-needed requires --domain <d> (picker-mode import is forbidden)" >&2
+          exit 2
+        fi
+        DOMAIN="$2"
+        shift 2
+        ;;
+      --*)
+        echo "shipflow-browser: unknown flag $1; --import-if-needed requires --domain <d> (picker-mode import is forbidden)" >&2
+        exit 2
+        ;;
+      *)
+        BROWSER="$1"
+        shift
+        ;;
+    esac
+  done
+  if [ -z "$DOMAIN" ]; then
+    echo "shipflow-browser: --import-if-needed requires --domain <d> (picker-mode import is forbidden)" >&2
+    exit 2
+  fi
+
+  STAMP="$HOME/.cache/shipflow/cookie-import.$DOMAIN"
+  if [ -f "$STAMP" ]; then
+    echo "shipflow-browser: skip import — already imported $DOMAIN" >&2
+    exit 0
+  fi
+
+  LOCK_DIR="${TMPDIR:-/tmp}/shipflow-cookie-import.lock"
+  acquire_cookie_import_lock "$LOCK_DIR"
+  trap 'rm -rf "$LOCK_DIR"' EXIT
+
+  if [ -f "$STAMP" ]; then
+    echo "shipflow-browser: skip import — already imported $DOMAIN" >&2
+    exit 0
+  fi
+
+  echo "shipflow-browser: importing cookies for $DOMAIN from $BROWSER" >&2
+  "$BROWSE" cookie-import-browser "$BROWSER" --domain "$DOMAIN"
+  mkdir -p "$HOME/.cache/shipflow"
+  : > "$STAMP"
+  exit 0
 fi
 
 echo "$BROWSE"
