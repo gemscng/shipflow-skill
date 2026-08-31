@@ -253,12 +253,23 @@ mean "irrelevant", they stop meaning anything.
    into the review body automatically.
 
    ```bash
-   echo '[{"path":"src/x.ts","line":42,"severity":"high","effort":"quick",
+   echo '[{"path":"src/x.ts","startLine":38,"line":42,"severity":"high","effort":"quick",
      "issue":"<=15 words","why":"mechanism + consequence","fix":"<=20 words",
      "suggestion":"exact replacement line (optional)"}]' \
    | renaiss-shipflow pr post-review <n> --verdict request_changes --findings - \
        --summary "1-2 sentences: what the PR does + overall risk"
    ```
+
+   **Anchor the SPAN, not one line (issue #956).** `line` alone highlights that
+   line plus GitHub's ~3 lines of leading context — a 4-line window that often
+   doesn't contain the code you are talking about. When the finding is about a
+   multi-line construct (a call with its arguments, a block, a chain), set
+   `startLine` to its FIRST line and leave `line` on its LAST, so the comment
+   covers what a reader must change. `start_line` is accepted as an alias.
+   Both endpoints must anchor to real diff lines **in the same hunk** — a range
+   that fails either check silently collapses to the single line (GitHub 422s a
+   bad multi-line comment, and one 422 drops every inline comment in the
+   review). One line is still correct for a genuinely one-line defect.
 
    ⛔ **`--findings -` is not optional on the pipe form (issue #427).** stdin
    is read only on an explicit `--findings -` (the `!isTTY` fallback was

@@ -8365,6 +8365,53 @@ function diffAnchors(diff) {
   }
   return out;
 }
+function startLineOf(f) {
+  const v = f.startLine ?? f.start_line;
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+}
+function diffHunks(diff) {
+  const out = new Map;
+  let path = "";
+  let ln = 0;
+  let hunk = 0;
+  for (const raw of diff.split(/\r?\n/)) {
+    const fm = FILE_RE.exec(raw);
+    if (fm) {
+      path = normPath(fm[1]);
+      ln = 0;
+      continue;
+    }
+    const hm = HUNK_RE.exec(raw);
+    if (hm) {
+      ln = parseInt(hm[1], 10);
+      hunk++;
+      continue;
+    }
+    if (!path || ln === 0)
+      continue;
+    if (raw.startsWith("-"))
+      continue;
+    if (raw.startsWith("+") || raw.startsWith(" ")) {
+      if (!out.has(path))
+        out.set(path, new Map);
+      out.get(path).set(ln, hunk);
+      ln++;
+    }
+  }
+  return out;
+}
+function findingSpan(f, anchors, hunks) {
+  const start = startLineOf(f);
+  if (start <= 0 || start >= f.line)
+    return [0, f.line];
+  const p = normPath(f.path);
+  if (!anchors.get(p)?.has(start))
+    return [0, f.line];
+  const h = hunks?.get(p);
+  if (h && h.get(start) !== h.get(f.line))
+    return [0, f.line];
+  return [start, f.line];
+}
 function splitAnchorable(findings, anchors) {
   const inline = [];
   const body = [];
@@ -8385,7 +8432,8 @@ function buildReviewPayload(opts) {
     lines.push("", "**Further findings (outside the annotated diff lines):**");
     for (const f of unanchored) {
       const p = normPath(f.path);
-      const anchor = f.line > 0 ? `${p}:${f.line}` : p;
+      const fs = startLineOf(f);
+      const anchor = f.line > 0 ? fs > 0 && fs < f.line ? `${p}:${fs}-${f.line}` : `${p}:${f.line}` : p;
       const fbLines = renderFindingBody(f).split(`
 
 ` + REVIEW_MARKER)[0].split(`
@@ -8400,7 +8448,15 @@ function buildReviewPayload(opts) {
     event: "COMMENT",
     body: lines.join(`
 `),
-    comments: inline.map((f) => ({ path: normPath(f.path), line: f.line, side: "RIGHT", body: renderFindingBody(f) }))
+    comments: inline.map((f) => {
+      const [start, line] = findingSpan(f, opts.anchors, opts.hunks);
+      const c = { path: normPath(f.path), line, side: "RIGHT", body: renderFindingBody(f) };
+      if (start > 0) {
+        c.start_line = start;
+        c.start_side = "RIGHT";
+      }
+      return c;
+    })
   };
 }
 
@@ -9352,14 +9408,16 @@ ${opts.body ?? ""}`;
       });
       process.exit(SCAN_EXIT);
     }
-    const anchors = diffAnchors(prDiff ?? ghPRDiffText(repo, number));
+    const diffText = prDiff ?? ghPRDiffText(repo, number);
+    const anchors = diffAnchors(diffText);
+    const hunks = diffHunks(diffText);
     const summary = [
       opts.summary ?? "",
       recordsScanLine(scan, approving) ? scanAttestationLine(scan, opts.scanReport, opts.scanDigest) : ""
     ].filter(Boolean).join(`
 
 `);
-    const payload = buildReviewPayload({ summary, verdict, findings, anchors });
+    const payload = buildReviewPayload({ summary, verdict, findings, anchors, hunks });
     if (stdinWatch && await stdinWatch.sawBytes())
       refuseUnflaggedPipe(number);
     stdinWatch?.release();
