@@ -13,8 +13,11 @@ use the FIRST format on this list that fits — prose is the fallback,
 never the default:
 
 1. **Table** — ≥3 parallel facts: files → changes, options → risks, checks → results.
-2. **`mermaid` block** — any flow, dependency, sequence, or state change of >2 steps
-   (GitHub renders mermaid natively). A small `flowchart LR` beats a paragraph of "then".
+2. **`mermaid` block** — only when the shape carries information prose can't:
+   branching, concurrency, or ≥3 components interacting (GitHub renders mermaid
+   natively). A linear A→B→C that restates one sentence or one formula is
+   noise, not a diagram (measured: #945's flowchart re-drew a single division) —
+   write the sentence.
 3. **Checklist** — `- [x]` verified / `- [ ]` pending. Judgeable at a glance.
 4. **Meter** — any ratio or progress: `▰▰▰▱▱ 3/5 merged`.
 5. **Image** — screenshots, recordings, rendered cards as evidence. Seeing beats reading.
@@ -36,6 +39,46 @@ GitHub collapses single newlines into one paragraph — put a **blank line
 between every section** or bold-led line, and write enumerations as real
 markdown lists (one item per line), never inline `1. … 2. …`.
 
+### Reader-first invariants (#958 — measured on 25 merged PRs)
+
+The reader is one human skimming a PR timeline that several agents wrote
+into. These rules exist because each was violated at measurable cost:
+
+- **One operative comment per decision.** Say a thing ONCE, in the
+  artifact that owns it. The formal review carries the verdict + findings;
+  the approve command's `--comment` is a **single stamp line** — never a
+  second copy of the review's tables, checklist, or scan record (PR #927
+  ended with six near-identical stamps; a reader cannot tell which is
+  current).
+- **Never hand-write a scan line.** The approve and post-review commands
+  compute and append the one authoritative `🔍 Security scan:` record;
+  a pasted copy is stripped, so writing one is pure waste (#874 carried
+  three).
+- **A no-change re-approve is ONE line.** After a rebase whose diff digest
+  is unchanged: `Re-approved <sha12> — rebase only, diff unchanged.` as
+  the entire review summary AND the entire approve comment. The full
+  gate rundown lives in the original review; repeating it makes the
+  reader diff two walls of text to learn nothing changed.
+- **Empty fields are omitted, not printed.** `health Δ n/a` is a row that
+  says nothing — a line/row/cell earns its place only when it has content.
+- **A blocked gate is not a code verdict.** When `request_changes` is
+  forced by infrastructure (feature map empty/404, scan capture failed,
+  CI runner outage), the FIRST body line is
+  `Not a code defect — <gate> could not run.` followed by the one action
+  that unblocks it. A bare red verdict on green code sends the author
+  hunting for a bug that isn't there (#935, #929).
+- **The recommendation appears once.** In the decision table's
+  Recommendation column when there is a table, else as the single
+  `**Recommendation:**` line — never both (#890 said "Hold" twice).
+- **No ephemeral paths in visible text.** `/tmp/...` worktree paths mean
+  nothing to a PR reader; machine-relevant detail rides in an HTML
+  comment (`<!-- … -->`), which keeps it in the record without the noise.
+- **Internal shorthand carries a gloss.** A contract/issue reference a
+  repo newcomer can't decode gets 3–6 words of why:
+  `#431 fail-closed (an empty map is a failed load)` — not bare
+  `#431 fail-closed`.
+- **Hashes are 12 chars visible.** Full digests belong in hidden markers.
+
 PR body template (sections, all visual-first, blank line between each):
 `Closes #N` (full fix) / `Part of #N` (slice) · **Root cause** ≤3 bullets, `mermaid`
 if the failure is a flow · **Changed** table (file → what) · **Testing** checklist
@@ -52,7 +95,7 @@ live demo. Build top-down:
 |---|---|---|---|
 | 1 | **Status header** | always — the first line | one blockquote line: `> <priority emoji> **P<n> · <type> · <area> · effort <S/M/L>** · <wave/source>` |
 | 2 | **Body core** | always | bug → the Repro core below; feature/task → the Why/What/Example core below |
-| 3 | **Mermaid diagram** | the defect or design has a flow, sequence, or state shape | small `flowchart`/`sequenceDiagram`/`stateDiagram` — beats prose causality |
+| 3 | **Mermaid diagram** | the defect or design branches, races, or spans ≥3 interacting components — never for a linear restatement of one line | small `flowchart`/`sequenceDiagram`/`stateDiagram` — beats prose causality when the SHAPE is the point |
 | 4 | **Evidence table** | any `file:line` claim | `\| Claim \| Where \|` — every claim grounded in `path:line` / links / screenshots |
 | 5 | **Acceptance checklist** | always | `- [ ]` items — the reviewer's coverage gate checks them 1:1 |
 | 6 | **`<details>` folds** | long logs, alt options, raw data | collapsed at the bottom, never unfolded |

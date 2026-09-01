@@ -3000,6 +3000,10 @@ function lintEscalationReason(reason) {
   if (/see the issue body/i.test(r)) {
     problems.push('says "see the issue body" — an escalation must be self-contained; inline the substance');
   }
+  const hasDecisionTable = /^\s*\|[^\n|]*\|\s*decision\s*\|\s*recommendation\s*\|/im.test(r);
+  if (hasDecisionTable && /^\s*\*\*recommendation:?\*\*/im.test(r)) {
+    problems.push("carries both a decision table with a Recommendation column and a separate **Recommendation:** line — state each recommendation once, in the table row it belongs to");
+  }
   if (r.includes(`
 `) && !r.split(`
 `).some((l) => /^###\s/.test(l) && isActionHeading(l))) {
@@ -8707,17 +8711,33 @@ function evaluateScanAttestation(i) {
   }
   return { ...base, ok: true, verdict: "verified", reason: "" };
 }
+function stripScanLines(text) {
+  const isScanLine = (l) => {
+    const t = l.trim();
+    return t.startsWith("\uD83D\uDD0D Security scan:") || t.startsWith("Security scan:") || t.startsWith("⛔ Security scan attestation");
+  };
+  return text.split(`
+`).filter((l) => !isScanLine(l)).join(`
+`).replace(/\n{3,}/g, `
+
+`).trim();
+}
 function scanAttestationLine(a, reportPath, digest) {
-  const report = reportPath ? ` · report: \`${reportPath}\`` : "";
+  const hidden = [];
+  if (reportPath)
+    hidden.push(`report: ${reportPath}`);
+  if (digest && digest.length > 12)
+    hidden.push(`sha256: ${digest}`);
+  const report = hidden.length ? ` <!-- ${hidden.join(" · ")} -->` : "";
   const bound = digest ? ` · diff sha256 \`${digest.slice(0, 12)}\`` : "";
   if (a.verdict === "not-required" && a.files !== null) {
     const census = a.expected === null ? " (GitHub's changed-file count could not be read)" : `, GitHub reports ${a.expected} changed`;
-    return `\uD83D\uDD0D Security scan: **${a.files} file(s) scanned**${census} — recorded; no scan gate applies to this change, so the attestation was not cross-checked${bound}${report}.`;
+    return `\uD83D\uDD0D Security scan: **${a.files} file(s) scanned**${census} — recorded (not an approval, so the digest was not cross-checked)${bound}.${report}`;
   }
   if (a.verdict === "not-required")
     return `\uD83D\uDD0D Security scan: not required — no scan gate applies to this change (docs-only, or no approval recorded).`;
   if (a.ok)
-    return `\uD83D\uDD0D Security scan: **${a.files} file(s) scanned**, GitHub reports ${a.expected} changed — attestation VERIFIED${bound}${report}.`;
+    return `\uD83D\uDD0D Security scan: **${a.files} file(s) scanned**, GitHub reports ${a.expected} changed — attestation VERIFIED${bound}.${report}`;
   return `⛔ Security scan attestation FAILED (${a.verdict}): ${a.reason}${report}`;
 }
 function recordsScanLine(a, approving) {
@@ -9412,7 +9432,7 @@ ${opts.body ?? ""}`;
     const anchors = diffAnchors(diffText);
     const hunks = diffHunks(diffText);
     const summary = [
-      opts.summary ?? "",
+      stripScanLines(opts.summary ?? ""),
       recordsScanLine(scan, approving) ? scanAttestationLine(scan, opts.scanReport, opts.scanDigest) : ""
     ].filter(Boolean).join(`
 
@@ -9469,7 +9489,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
       });
       process.exit(SCAN_EXIT);
     }
-    opts.comment = [opts.comment ?? "", scanAttestationLine(scan, opts.scanReport, opts.scanDigest), renderApprovedHeadMarker(headSha)].filter(Boolean).join(`
+    opts.comment = [stripScanLines(opts.comment ?? ""), scanAttestationLine(scan, opts.scanReport, opts.scanDigest), renderApprovedHeadMarker(headSha)].filter(Boolean).join(`
 
 `);
     try {

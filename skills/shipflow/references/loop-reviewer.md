@@ -307,6 +307,23 @@ mean "irrelevant", they stop meaning anything.
    ```
    Brief #<n> met ✓ · CI green · 0 open threads · health Δ+4 · features: cards, intake
    ```
+   Stamp rules (#958 — the stamp is a receipt, not a second review):
+   - **Only fields with content** — a `health Δ n/a` entry is omitted, never
+     printed.
+   - **The stamp is the WHOLE `--comment`.** Never paste the review's tables,
+     checklists, or a scan line into it — the review already carries them,
+     and the approve command appends the one authoritative scan record
+     itself (a pasted scan line is stripped).
+   - **Re-approving after a rebase with the diff digest unchanged** → the
+     summary and the stamp are both just:
+     `Re-approved <sha12> — rebase only, diff unchanged.`
+     The original review remains the gate record; repeating it makes the
+     reader diff two walls of text to learn nothing changed.
+   - **A gate blocked by infrastructure** (feature map empty/404, capture
+     failure, runner outage) opens the review body with
+     `Not a code defect — <gate> could not run.` + the one unblocking
+     action, before anything else. A bare red verdict on green code sends
+     the author bug-hunting (#935, #929).
    and:
    - **approve** (no unresolved threads, brief met, CI green) → after the
      empty-findings `post-review`, `renaiss-shipflow pr approve <pr> --scan-files <N> --scan-report <path> --scan-digest <hex> --comment

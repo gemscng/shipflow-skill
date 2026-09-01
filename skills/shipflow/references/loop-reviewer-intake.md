@@ -82,7 +82,12 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    open ambiguity + the assumption chosen; flag those that would change the
    architecture. A listed assumption costs one veto reply; a silent one is
    invisible until expensive. The orchestrator posts it on the issue
-   (`loop-mode.md`).
+   (`loop-mode.md`). Shape (#958): a table `| # | Unknown | Assumption |`
+   (or ≤6 bullets), then ONE closing line naming the veto path — not a
+   second copy of the brief. **On re-intake, supersede — never stack:** a
+   fresh assumptions comment must open `Supersedes the <date> intake
+   comment.` so the reader knows exactly one is live (issue #921 collected
+   two competing assumption sets with no ordering cue).
 6. **Uncertainty first, references over descriptions.** Lead with the most
    likely wrong (data-model changes, new type interfaces, user-facing
    behavior); routine refactoring last. When target behavior exists in code
