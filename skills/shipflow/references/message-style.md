@@ -79,10 +79,32 @@ into. These rules exist because each was violated at measurable cost:
   `#431 fail-closed`.
 - **Hashes are 12 chars visible.** Full digests belong in hidden markers.
 
+### Before → after — every change-describing message (#960)
+
+A message about a change — one **needed** (finding, bug, escalation option)
+or one **made** (PR body, fix comment, evidence) — always shows the pair:
+what the reader observes BEFORE and AFTER the change. A change described
+one-sided forces the reader to reconstruct the other half from prose.
+Render the pair in the FIRST graphical form that fits:
+
+1. **Code** — a ```suggestion / ```diff fence: the diff IS the pair, add no
+   prose copy of it.
+2. **Behavior / config / metric** — a `| Before | After |` table row
+   (findings JSON carries it as the `before` / `after` fields, ≤20 words
+   each; the CLI and server render the table).
+3. **UI** — paired screenshots, labeled Before / After.
+4. **Flow shape** — mermaid, only under the mermaid rule above (old branch
+   vs. new branch, or two small graphs).
+
+Both-or-neither: a lone half is not a pair — renderers drop it. Bug bodies
+already carry the pair as **Actual** (before) / **Expected** (after) —
+never duplicate it in prose; add a graphical pair only when the change is
+visual or structural (then it lands in the evidence table).
+
 PR body template (sections, all visual-first, blank line between each):
 `Closes #N` (full fix) / `Part of #N` (slice) · **Root cause** ≤3 bullets, `mermaid`
-if the failure is a flow · **Changed** table (file → what) · **Testing** checklist
-with numbers · **Evidence** images/links.
+if the failure is a flow · **Changed** table (file → before → after) · **Testing**
+checklist with numbers · **Evidence** images/links.
 
 ### Issue-body ladder — every ShipFlow-filed issue body
 
@@ -96,7 +118,7 @@ live demo. Build top-down:
 | 1 | **Status header** | always — the first line | one blockquote line: `> <priority emoji> **P<n> · <type> · <area> · effort <S/M/L>** · <wave/source>` |
 | 2 | **Body core** | always | bug → the Repro core below; feature/task → the Why/What/Example core below |
 | 3 | **Mermaid diagram** | the defect or design branches, races, or spans ≥3 interacting components — never for a linear restatement of one line | small `flowchart`/`sequenceDiagram`/`stateDiagram` — beats prose causality when the SHAPE is the point |
-| 4 | **Evidence table** | any `file:line` claim | `\| Claim \| Where \|` — every claim grounded in `path:line` / links / screenshots |
+| 4 | **Evidence table** | any `file:line` claim | `\| Claim \| Where \|` — every claim grounded in `path:line` / links / screenshots; a claim about a change adds Before / After columns (#960) |
 | 5 | **Acceptance checklist** | always | `- [ ]` items — the reviewer's coverage gate checks them 1:1 |
 | 6 | **`<details>` folds** | long logs, alt options, raw data | collapsed at the bottom, never unfolded |
 

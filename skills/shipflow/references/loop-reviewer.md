@@ -255,6 +255,7 @@ mean "irrelevant", they stop meaning anything.
    ```bash
    echo '[{"path":"src/x.ts","startLine":38,"line":42,"severity":"high","effort":"quick",
      "issue":"<=15 words","why":"mechanism + consequence","fix":"<=20 words",
+     "before":"observable behavior now, <=20 words","after":"observable behavior once fixed",
      "suggestion":"exact replacement line (optional)"}]' \
    | renaiss-shipflow pr post-review <n> --verdict request_changes --findings - \
        --summary "1-2 sentences: what the PR does + overall risk"
@@ -270,6 +271,14 @@ mean "irrelevant", they stop meaning anything.
    that fails either check silently collapses to the single line (GitHub 422s a
    bad multi-line comment, and one 422 drops every inline comment in the
    review). One line is still correct for a genuinely one-line defect.
+
+   **Every finding carries `before` / `after` (issue #960)** — the observable
+   behavior now vs. once fixed, ≤20 words each; the CLI renders them as a
+   `| Before | After |` table under the issue line. Behavior, not code (the
+   suggestion block already shows the code pair). Both-or-neither: a lone
+   half is dropped at render. Can't state an observable difference? The
+   finding is probably a style nit — drop it (`message-style.md` § Before →
+   after).
 
    ⛔ **`--findings -` is not optional on the pipe form (issue #427).** stdin
    is read only on an explicit `--findings -` (the `!isTTY` fallback was

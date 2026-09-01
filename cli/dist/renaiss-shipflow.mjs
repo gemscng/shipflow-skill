@@ -8309,8 +8309,25 @@ function findingsIssueGuardError(findings) {
   return;
 }
 var REVIEW_MARKER = SHIPFLOW_CONTRACT.markers.loopReview;
+function beforeAfterCell(s) {
+  return s.replace(/\s+/g, " ").trim().replace(/\|/g, "\\|");
+}
+function renderBeforeAfter(before, after) {
+  const b = beforeAfterCell(before ?? "");
+  const a = beforeAfterCell(after ?? "");
+  if (!b || !a)
+    return "";
+  return `| Before | After |
+| --- | --- |
+| ${b} | ${a} |`;
+}
 function renderFindingBody(f) {
   let b = `${severityBadge(f.severity)}${effortTag(f.effort)} ${f.issue}`;
+  const ba = renderBeforeAfter(f.before, f.after);
+  if (ba)
+    b += `
+
+${ba}`;
   if (f.why?.trim())
     b += `
 
