@@ -5121,7 +5121,7 @@ function cacheHits(cacheReadTokens, tokensIn) {
     return "0";
   if (!tokensIn || tokensIn <= 0)
     return num(read);
-  const pct = Math.round(read / tokensIn * 100);
+  const pct = Math.round(read / (read + tokensIn) * 100);
   return `${num(read)} (${pct}%)`;
 }
 function buildStageRows(stats) {
