@@ -30,6 +30,10 @@ Rules that hold for every format:
 - Asking a human to choose? Render a **decision table** — `| # | Decision | Recommendation |`
   — whose `#` matches the `N: answer` reply protocol. Every option row carries the
   loop's recommendation; never a bare open question.
+- An option that hands the loop production access (`DATABASE_URL`, prod
+  secrets, prod API keys) is never on the table — the choices for prod
+  data work are "operator runs it" or "reproduce on a local DB first"
+  (the escalation lint refuses the former; loop-mode.md § Guardrails).
 - Table cells read in one breath: the ≤30-word visible-line cap applies **per cell**.
 - Detail nobody needs in order to act folds into `<details>`; it never renders unfolded.
 - Cut openers ("I have reviewed…"), hedges, and restatements of the diff.
@@ -126,7 +130,7 @@ the body, edited in place at every state change**, between
 
 | Line | Carries | Rule |
 |---|---|---|
-| header | state · decision count · since | states: 🟢 Loop working · 🔵 PR in review · ⏸ Waiting on you · 🔴 Blocked externally · ✅ Merged. `since` resets only when the state changes |
+| header | state · decision count · since | states: ⚪ Queued · 🟢 Loop working · 🔵 PR in review · ⏸ Waiting on you · 🔴 Blocked externally · ✅ Merged. `since` resets only when the state changes (`--since <iso>` to backdate from the label/comment that set it) |
 | **State** | meter `▰▰▰▱▱` (claimed 1 · PR open 3 · approved 4 · merged 5) · `PR #n <standing>` · `blocked: <gate> → #<owner issue>` | empty parts omitted, never blank |
 | **Decide** | every reply the human can type, each with its consequence | `waiting` requires ≥1; omitted otherwise |
 | **Impact** | what it costs if nobody acts | hoisted from the ladder's `**Impact**` line unless given |

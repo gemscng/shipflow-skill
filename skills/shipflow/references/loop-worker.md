@@ -62,6 +62,14 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    `git blame`, `triage.relatedCommits`, `git log --since` / bisect for
    regressions. Make the change. Genuinely try to verify — start the dev
    server, seed a test DB; environmental friction is not grounds to abandon.
+   **Data lives locally, never in prod:** reproduce and verify against the
+   project's local DB (compose stack, seeded dev DB, fixtures). No local DB
+   and the fix needs one → `issue escalate <n> --category missing-secret
+   --reason "…"` asking the human to set one up; a prod write the fix depends on
+   (backfill, seed, row repair) is the operator's step — your PR ships
+   the script + dry-run, the escalation asks them to run it and paste the
+   result. Never ask for, accept, or use a prod `DATABASE_URL` or secret
+   (loop-mode.md § Guardrails).
 3. **Test** — run the project's tests, then **verify end-to-end in a real
    browser** for any UI/behavior change (`references/browser-testing.md`:
    `bin/shipflow-browser --ensure` + `--import-if-needed` (do not raw-import),

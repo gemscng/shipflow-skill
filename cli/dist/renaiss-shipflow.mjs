@@ -2918,6 +2918,24 @@ ${items.join(`
 `)}` : items.join(`
 `);
 }
+function prodAccessOptionLines(reason) {
+  const out = [];
+  for (const raw of reason.split(`
+`)) {
+    const line = raw.trim();
+    if (!/\bloop\b/i.test(line))
+      continue;
+    if (!/\b(grant(?:s|ed|ing)?|give|hand|share|provide|expose)\b/i.test(line))
+      continue;
+    const prodNoun = /(DATABASE_URL|\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:KEY|SECRET|TOKEN|URL)\b|\bprod(?:uction)?\s+(?:db|database|credentials?|secrets?|access|api\s*keys?|env)\b|\b(?:access|credentials?|secrets?)\s+(?:to|for|on)\s+(?:the\s+)?prod(?:uction)?\b|\bapi\s*keys?\b)/;
+    if (!prodNoun.test(line))
+      continue;
+    if (/\b(do\s+not|don'?t|never|no)\s+(?:\w+\s+){0,2}(grant|give|hand|share|provide|expose)/i.test(line))
+      continue;
+    out.push(line);
+  }
+  return out;
+}
 function isActionHeading(heading) {
   return /action\s+needed/i.test(heading);
 }
@@ -3011,6 +3029,9 @@ function lintEscalationReason(reason) {
 `) && !r.split(`
 `).some((l) => /^###\s/.test(l) && isActionHeading(l))) {
     problems.push('structured reason is missing the "### \uD83D\uDC64 Action needed" section — lead with the concrete steps');
+  }
+  for (const line of prodAccessOptionLines(r)) {
+    problems.push(`offers the loop production access ("${line.slice(0, 60)}…") — the loop never gets a prod DATABASE_URL/secret; ` + 'make the option "operator runs it" or "reproduce on a local DB first"');
   }
   const hasReplyOption = /^\s*(?:[-*]\s*)?`?\d+:\s+\S/m.test(r);
   if (r.includes(`
@@ -3162,7 +3183,7 @@ var init_escalation_format = __esm(() => {
     "money-write": "Enabling this writes real money-bearing values (prices, payouts, billing) to live systems. " + "A bad value reaches customers immediately, and transactions made at a wrong value can't be " + "undone by reverting data. The loop never self-authorizes money writes — a human owns the go/no-go.",
     "prod-config": "This changes production configuration (env vars, flags, infrastructure) whose blast radius " + "spans everything behind it; a mistake can take production down or silently change live " + "behavior. The loop never applies production config itself.",
     security: "This touches a security- or trust-critical surface (authn/authz, secrets, injection-prone " + "parsing) where a mistake is exploitable and autonomous validation can't establish safety.",
-    "missing-secret": "The work is blocked on a credential, secret, or account only a human can provision. Nothing " + "is wrong with the code — the loop lacks access it cannot grant itself.",
+    "missing-secret": "The work is blocked on a credential, secret, or account only a human can provision. Nothing " + "is wrong with the code — the loop lacks access it cannot grant itself. Production data access " + "is never the remedy: the loop works against a local DB, and a prod write is the operator's step.",
     "external-dependency": "Blocked on an external system or third party (vendor approval, DNS, a service outside this " + "repo) that the loop cannot drive.",
     invalid: "The issue looks invalid, duplicate, or out of scope; closing someone's issue is a judgment " + "call the loop leaves to a human."
   };
@@ -6830,11 +6851,12 @@ init_prompts();
 init_shipflow_contract_data();
 var JUDGE_OPEN = SHIPFLOW_CONTRACT.markers.judge;
 var JUDGE_END = SHIPFLOW_CONTRACT.markers.judgeEnd;
-var JUDGE_STATES = ["working", "review", "waiting", "blocked", "merged"];
+var JUDGE_STATES = ["queued", "working", "review", "waiting", "blocked", "merged"];
 function isJudgeState(s) {
   return JUDGE_STATES.includes(s);
 }
 var STATE_LABEL = {
+  queued: { emoji: "⚪", label: "Queued — nothing needed from you" },
   working: { emoji: "\uD83D\uDFE2", label: "Loop working" },
   review: { emoji: "\uD83D\uDD35", label: "PR in review" },
   waiting: { emoji: "⏸", label: "Waiting on you" },
@@ -6895,7 +6917,7 @@ function renderJudgeBlock(spec) {
     state.push(`blocked: ${judgeCell(spec.blocker)}`);
   lines.push(`> **State** ${meter2(judgeProgress(spec))}${state.length ? ` ${state.join(" · ")}` : ""}`);
   if (spec.decisions.length)
-    lines.push(`> **Decide** ${spec.decisions.map((d) => "`" + judgeCell(d) + "`").join(" · ")}`);
+    lines.push(`> **Decide** ${spec.decisions.map((d) => "`" + judgeCell(d).replace(/`/g, "") + "`").join(" · ")}`);
   if (spec.impact?.trim())
     lines.push(`> **Impact** ${judgeCell(spec.impact)}`);
   return `${JUDGE_OPEN} state=${spec.state} since=${spec.since} -->
@@ -7452,7 +7474,7 @@ ${formatPrecedentSuggestion(precedent)}`;
     }, () => console.log(`\uD83D\uDEA7 #${number} escalated${updated ? " (existing \uD83D\uDEA7 comment updated)" : ""} → labelled "${NEEDS_HUMAN_LABEL}"${owner ? `, owner @${owner}` : ""}${surfaced ? ", precedent on file surfaced" : ""}${released ? " and claim released" : " (claim kept — loop skips it this run)"}.`));
   }));
   const collectDecisions = (v, prev) => prev.concat([v]);
-  issue.command("judge <number>").description(`Upsert the Judge block at the TOP of the issue body — ≤4 lines a human reads to decide: state, PR/blocker, the replies to type, impact (issue #969). Idempotent; "since" survives while the state is unchanged. States: ${JUDGE_STATES.join(" | ")}.`).requiredOption("--state <state>", `One of ${JUDGE_STATES.join(", ")}`).option("--pr <number>", "The PR carrying the fix (required for state=review)").option("--pr-status <text>", 'PR standing in ≤8 words: "green (CI 2/2, scan clean)", "approved", "CI red"').option("--blocker <text>", 'What stops it and who owns that: "feature-map gate → #965" (required for state=blocked)').option("--decide <reply>", 'Repeatable. A reply the human can type + its consequence: "1: done → loop re-reviews" (≥1 required for state=waiting)', collectDecisions, []).option("--impact <text>", "What it costs if nobody acts (default: hoisted from the body's **Impact** line)").option("--progress <0-5>", "Override the pipeline meter (default derived: claimed 1 · PR open 3 · approved 4 · merged 5)").option("--repo <fullname>", "Override target repo").option("--dry-run", "Render and report without editing the issue").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  issue.command("judge <number>").description(`Upsert the Judge block at the TOP of the issue body — ≤4 lines a human reads to decide: state, PR/blocker, the replies to type, impact (issue #969). Idempotent; "since" survives while the state is unchanged. States: ${JUDGE_STATES.join(" | ")}.`).requiredOption("--state <state>", `One of ${JUDGE_STATES.join(", ")}`).option("--pr <number>", "The PR carrying the fix (required for state=review)").option("--pr-status <text>", 'PR standing in ≤8 words: "green (CI 2/2, scan clean)", "approved", "CI red"').option("--blocker <text>", 'What stops it and who owns that: "feature-map gate → #965" (required for state=blocked)').option("--decide <reply>", 'Repeatable. A reply the human can type + its consequence: "1: done → loop re-reviews" (≥1 required for state=waiting)', collectDecisions, []).option("--impact <text>", "What it costs if nobody acts (default: hoisted from the body's **Impact** line)").option("--progress <0-5>", "Override the pipeline meter (default derived: claimed 1 · PR open 3 · approved 4 · merged 5)").option("--since <iso>", "When the current state began (default: kept from the existing block while the state is unchanged, else now)").option("--repo <fullname>", "Override target repo").option("--dry-run", "Render and report without editing the issue").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     if (!isJudgeState(opts.state))
@@ -7465,7 +7487,9 @@ ${formatPrecedentSuggestion(precedent)}`;
       throw new UsageError(`--progress must be 0–5 (got ${JSON.stringify(opts.progress)})`);
     const current = ghIssueView(repo, number);
     const existing = parseJudgeBlock(current.body ?? "");
-    const since = existing && existing.state === opts.state ? existing.since : new Date().toISOString();
+    if (opts.since != null && Number.isNaN(Date.parse(opts.since)))
+      throw new UsageError(`--since must be an ISO timestamp (got ${JSON.stringify(opts.since)})`);
+    const since = opts.since != null ? new Date(opts.since).toISOString() : existing && existing.state === opts.state ? existing.since : new Date().toISOString();
     const spec = {
       state: opts.state,
       since,

@@ -497,6 +497,7 @@ change, never by hand:
 
 | Moment | Command |
 |---|---|
+| admitted, not yet claimed (intake passed) | `issue judge <n> --state queued` — tells the reader nothing is asked of them |
 | claimed (`issue work` / `issue next`) | `issue judge <n> --state working` |
 | PR opened / re-pushed | `issue judge <n> --state review --pr <pr> --pr-status "CI pending"` → later `"green (CI 2/2, scan clean)"` / `"approved"` |
 | gate can't run, dependency open | `issue judge <n> --state blocked --blocker "<gate> → #<owner issue>"` |
@@ -595,6 +596,16 @@ governs it.
   "Spawned / headless sessions") no human can confirm: `pr automerge` +
   `merge-policy` is the whole merge story; `release` is skipped (escalate
   if genuinely needed).
+- **Production data is off-limits to the loop.** Never request, accept,
+  or use a production `DATABASE_URL`, prod secrets, or prod API keys — not
+  as a worker, not as an escalation option ("grant the loop prod access"
+  is refused by the escalation lint). Data work runs against a
+  **local DB** (the project's compose stack / seeded dev DB — `loop-worker.md`
+  step 2); when none exists, `issue escalate <n> --category missing-secret
+  --reason "…"` asking the human to **set one up locally**, and hand any prod write (backfill,
+  seed, one-row fix) to the operator with a pasted-back result as the
+  reply. A wrong write against a local DB is free; against prod it is not
+  (decided 2026-09-02, renaiss-os-index #1620/#1403/#1419).
 - **Orchestrator context discipline:** dispatch, don't do — compact JSON
   and one-line subagent returns only, never source files, diffs, or test
   logs (that's what lets `cap=all` run without bloat).
