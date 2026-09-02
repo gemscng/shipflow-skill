@@ -431,10 +431,12 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    DUPLICATE_SCAN_LIMIT)` — closed issues and merged PRs are never
    scored, so a restatement of a closed issue always files clean
    (defensible; a refile is often deliberate).
-   **Post the brief's "Unknowns & assumptions" on the issue**, comment
-   ending `<!-- shipflow:loop -->` (never trips the needs-human
-   auto-unblock), before dispatching — a reply IS the veto (Phase A treats
-   it as the decision).
+   **Post the brief's "Unknowns & assumptions" on the issue** via
+   `renaiss-shipflow issue brief <n> --body-file <path|->` (#969) before
+   dispatching — it appends `<!-- shipflow:loop -->` (never trips the
+   needs-human auto-unblock) and on a re-intake EDITS the same comment,
+   folding the old brief under History; never post a second brief by hand.
+   A reply IS the veto (Phase A treats it as the decision).
 3. **Worker — fix.** Dispatch with issue + triage + brief. It pulls the
    feature map itself (`features --json`); creates
    `.worktrees/shipflow-loop-<n>` off `origin/<default>` and works only
@@ -487,6 +489,22 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
 
 No `issue done` here — the claim stays until the PR merges (A's automerge
 releases it), keeping the issue out of `issue next` meanwhile.
+
+**Judge block — keep it current (#969).** The top of every loop-touched
+issue is the human's decision surface (`message-style.md` § Judge block);
+the orchestrator runs `renaiss-shipflow issue judge <n>` at each state
+change, never by hand:
+
+| Moment | Command |
+|---|---|
+| claimed (`issue work` / `issue next`) | `issue judge <n> --state working` |
+| PR opened / re-pushed | `issue judge <n> --state review --pr <pr> --pr-status "CI pending"` → later `"green (CI 2/2, scan clean)"` / `"approved"` |
+| gate can't run, dependency open | `issue judge <n> --state blocked --blocker "<gate> → #<owner issue>"` |
+| escalated (right after the escalation posts) | `issue judge <n> --state waiting --pr <pr> --decide "1: done → loop re-reviews" --decide "1: skip → loop parks this"` — one `--decide` per reply the footer accepts |
+| merged (A's automerge) | `issue judge <n> --state merged --pr <pr>` |
+
+`--json` returns `linesToAction`; > 4 means the block is missing or a
+`Decide` line is absent — fix before dispatching.
 
 ### C. Bug sweep — when there's nothing left to fix, hunt for new bugs
 

@@ -2166,7 +2166,7 @@ var init_shipflow_contract_data = __esm(() => {
       }
     },
     markers: {
-      $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate <n> --reason` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. MATCHING SEMANTICS (issue #411 changed these deliberately — the note above used to read `Do NOT change these matching semantics`): `commentIsLoopMachinery` no longer denylists three specific markers, it matches `markerPrefix` — ANY `<!-- shipflow:` token — because a denylist of known shapes guarding an unbounded set of free-form agent prose fails OPEN on every new shape the loop invents (measured on PRs #401 and #405, which cleared a merge blocker nobody confirmed). `markerPrefix` is the OPEN token every ShipFlow marker starts with; a comment carrying any of them is machinery and can never stand in for a human decision. `loopReview` stamps the loop reviewer's verdict comment (CLI review-contract.ts renderFindingBody + `approve --comment`) — it was a CLI-local const the server could not see, which is exactly how #405 cleared its own gate. `approvedHead` is the OPEN token the approve command stamps on that same attestation comment, rendered as `<!-- shipflow:approved-head sha=<40hex> -->` (issue #637): `isApproved` / `classifyPR` / `mergeDecision` bind `shipflow-approved` to the reviewed head — a label without a matching SHA, or a missing/unreadable SHA, is not approved (fail closed). Quote-stripped and own-line-anchored. A clean rebase invalidates this slice; digest-equal keep-approval is a later product choice. `intentGateCleared` is the OPEN token on the server's attributable audit comment posted on EVERY `needs-reporter-review` removal, rendered as `<!-- shipflow:intent-gate-cleared by=<login> -->`; the CLI's intent gate reads it as the clearance artifact instead of trusting the bare `unlabeled` timeline event (see the `intentGate` section) — and reads it ANCHORED (own line, `by=<login> -->` shape) and ONLY from a bot/trusted-association author, because a bare Contains over every comment let anyone who can quote the literal disarm the gate permanently. `intentGateHint` stamps the server's one-time nudge posted when a human reply on a gated thread misses the release grammar; its presence is also how the nudge stays one-time (fail-stuck was previously invisible — the miss path only logged). `intentGateParentConfirm` is the OPEN token on the one-time nudge posted on a gated PR when a trusted confirm token landed on its parent issue instead (issue #557), rendered as `<!-- shipflow:intent-gate-parent-confirm id=<comment-id> -->`. It does NOT reuse `intentGateHint` (that marker suppresses the near-miss nudge). Presence of this token on the PR is the once-key per (PR, parent confirm). The comment never removes `needs-reporter-review`; only a token on the PR thread (or a hand label removal) does. `reworkFrom` is the OPEN-TOKEN a rework worker stamps on the comment it posts after acting on a reporter's CORRECTION of an intent-gated PR (issue #442), rendered as `<!-- shipflow:rework-from id=<comment-id> -->` — the `id=` attribute convention mirrors `precedentApplied`'s `pid=`. The CLI's `reporterCorrectionOn` reads the id back so suppression is EXACT (that comment has been answered) rather than timestamp-ordered, and counts the markers to enforce the rework ceiling; the server needs no accessor because `markerPrefix` already makes any comment carrying it machinery. It is the anti-self-loop backstop: without it a loop comment on a gated PR reads as a fresh reporter correction and the loop reworks in response to itself. `escalateOnce` is the OPEN-TOKEN the CLI stamps INSIDE the escalation banner when `issue escalate --for-pr <n> --once-reason <r>` is given, rendered as `<!-- shipflow:escalate-once pr=<n> reason=<r> -->` — the `pr=`/`reason=` attribute convention mirrors `precedentContext`'s `cat=`/`q=`. It is the PERMANENT once-key for `inbox`'s `escalateOnce` row (issue #488): the key USED to be the parent issue's live `needs-human` label, but the server's UnblockNeedsHuman removes that label on any non-bot, non-machinery comment BY DESIGN, so the only once-key was erased the moment a human replied and the row re-escalated every tick forever. A comment marker cannot be erased by a reply, and unlike a label it CARRIES THE REASON — so the invariant it enforces is `at most one escalation per (PR, reason), EVER`: a new reason on the same PR earns exactly one more, and the PR is capped at one escalation per `ESCALATE_ONCE_REASONS` entry, forever. The CLI reads it back from the PARENT issue's comments under THREE filters, ALL required, because each of the first two was measured insufficient on its own: (1) only comments the CLI's own account authored (`viewerDidAuthor`); (2) only ANCHORED — alone on its line, starting at COLUMN 0, no leading whitespace — because a quoted marker is a claim, not evidence; those two are the intent-gate audit record's rule (#411). (3) only from comments that ARE an escalation banner (`isEscalationBanner`, the same `escalationBannerHeading` prefix `findLatestEscalationComment` selects on) — added in PR #489 round 4. Filters 1+2 alone accepted an anchored marker from ANY CLI-authored comment on the parent, and the CLI writes many comments that are not banners: `issue wait --reason <text>` posts one on that very issue with LLM-composed text interpolated raw, on the path loop-mode.md mandates. That reason forged a permanent key and silently spent the one escalation the (PR, reason) pair ever earns — issue #488's exact harm through the adjacent door. Scoping the READ was chosen over neutralizing yet another writer: rounds 2 and 3 each hardened one side of this boundary and left the other open, whereas a key that counts ONLY where the single writer of a key (`formatEscalationBody`) puts one means adding a new CLI comment can never create a new forgery surface. The harvester `extractEscalateOnceMarkers` is scoped by the same predicate one hop earlier, so an unscoped harvest cannot LAUNDER a forged key out of a non-banner comment and into a banner via the `--update` carry-forward. Neutralization below stays defence in depth, not the wall. The anchor tolerated leading indentation until PR #489 round 3; that tolerance bought nothing (the renderer always emits a marker at column 0) and cost a forgery route, since four leading spaces is exactly how markdown spells a code block. Trailing whitespace and CRLF ARE tolerated — opposite polarity: a real key that fails to match reads as never-filed and re-opens the storm, and trailing space cannot smuggle a marker in. NEUTRALIZATION (the other half, PR #489 round 3): every banner is a comment the CLI's OWN account authors, so ANY free-form string folded into one is a forgery vector — an own-line marker in it reads back as a filed key and permanently suppresses an escalation a human is waiting on. So EVERY operator- or server-supplied string reaching a banner has its `<!-- shipflow:` tokens escaped to `&lt;!-- shipflow:` (readable, unmatchable): the free-text `--reason`, `--owner`, and the echoed precedent `answer`/`author`/`sourceUrl`/`category`/`fingerprint`/`id`. Round 2 neutralized the precedent answer ALONE and left `--reason` beside it raw; that asymmetry was itself the defect, so the rule is positional now — nothing free-form reaches a banner un-neutralized. The escaped replacement is DERIVED from `markerPrefix` (only the leading `<` is escaped), never a hand-written twin, so the two halves cannot drift. Whitespace collapsing runs BEFORE escaping (PR #489 round 4): the other order left a token already split across a line break unmatched, then REBUILT it into a live one — inert only because every call site happens to prefix the field, a positional accident rather than a property of the neutralizer. The two `PrecedentMatch` numerics folded into a banner (`sourceIssue`, `reuseCount`) are coerced with `Number()` at the render site: that response is an unchecked cast over server JSON, so `number` is a compile-time claim, not a fact about the bytes. Single-line fields additionally have newlines collapsed, or a value could BREAK OUT of the line the renderer composed for it and land a marker at column 0 anyway (`pid=`/`cat=` are interpolated into a marker line themselves). The RAW reason is still what `precedentContext` encodes — the server fingerprints that text — so the two must not be conflated. WRITE SIDE: `issue escalate --update` REPLACES a banner body in place, and `findLatestEscalationComment` matches ANY CLI-authored comment opening with the banner heading — which the escalate-once banner is — so the CLI carries every anchored marker on the edited body FORWARD (`preserveEscalateOnceMarkers`). Without that, an ordinary UNKEYED re-escalation of the same parent (the path the escalation contract MANDATES: `Shrink, don't stack — one live escalation per issue`) erased the key and handed that (PR, reason) back its per-tick storm forever. Related: a keyed escalation SKIPS the precedent lookup entirely. The reason it must never auto-apply is that the server's undo retires the precedent but cannot un-write a permanent marker, so an undone auto-application would park the row forever with its promised fresh escalation never arriving. PR #489 round 2 achieved that by DEMOTING the `apply` verdict after the call; round 3 moved it before, because `precedents/match` increments the reuse count and writes an `Applied` event BEFORE it returns — so demoting downstream still left the server having booked a reuse that never happened, advancing take-rate metrics and pushing the precedent toward premature re-confirmation. Not asking is the only way not to be counted. Consequence: a keyed escalation shows no `Precedent on file` suggestion; restoring that needs a non-mutating surface-only match on the SERVER. Do NOT key this off `escalationOutstanding`/`findLatestEscalationComment`: those ask whether an escalation is OUTSTANDING (issue #486), the opposite polarity of whether one was EVER FILED, and sharing a helper between the two reintroduces this bug. The server needs no accessor — `markerPrefix` already makes any comment carrying it machinery. Only the literals are single-sourced — each consumer still owns its own matching semantics.",
+      $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate <n> --reason` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. MATCHING SEMANTICS (issue #411 changed these deliberately — the note above used to read `Do NOT change these matching semantics`): `commentIsLoopMachinery` no longer denylists three specific markers, it matches `markerPrefix` — ANY `<!-- shipflow:` token — because a denylist of known shapes guarding an unbounded set of free-form agent prose fails OPEN on every new shape the loop invents (measured on PRs #401 and #405, which cleared a merge blocker nobody confirmed). `markerPrefix` is the OPEN token every ShipFlow marker starts with; a comment carrying any of them is machinery and can never stand in for a human decision. `loopReview` stamps the loop reviewer's verdict comment (CLI review-contract.ts renderFindingBody + `approve --comment`) — it was a CLI-local const the server could not see, which is exactly how #405 cleared its own gate. `approvedHead` is the OPEN token the approve command stamps on that same attestation comment, rendered as `<!-- shipflow:approved-head sha=<40hex> -->` (issue #637): `isApproved` / `classifyPR` / `mergeDecision` bind `shipflow-approved` to the reviewed head — a label without a matching SHA, or a missing/unreadable SHA, is not approved (fail closed). Quote-stripped and own-line-anchored. A clean rebase invalidates this slice; digest-equal keep-approval is a later product choice. `intentGateCleared` is the OPEN token on the server's attributable audit comment posted on EVERY `needs-reporter-review` removal, rendered as `<!-- shipflow:intent-gate-cleared by=<login> -->`; the CLI's intent gate reads it as the clearance artifact instead of trusting the bare `unlabeled` timeline event (see the `intentGate` section) — and reads it ANCHORED (own line, `by=<login> -->` shape) and ONLY from a bot/trusted-association author, because a bare Contains over every comment let anyone who can quote the literal disarm the gate permanently. `intentGateHint` stamps the server's one-time nudge posted when a human reply on a gated thread misses the release grammar; its presence is also how the nudge stays one-time (fail-stuck was previously invisible — the miss path only logged). `intentGateParentConfirm` is the OPEN token on the one-time nudge posted on a gated PR when a trusted confirm token landed on its parent issue instead (issue #557), rendered as `<!-- shipflow:intent-gate-parent-confirm id=<comment-id> -->`. It does NOT reuse `intentGateHint` (that marker suppresses the near-miss nudge). Presence of this token on the PR is the once-key per (PR, parent confirm). The comment never removes `needs-reporter-review`; only a token on the PR thread (or a hand label removal) does. `reworkFrom` is the OPEN-TOKEN a rework worker stamps on the comment it posts after acting on a reporter's CORRECTION of an intent-gated PR (issue #442), rendered as `<!-- shipflow:rework-from id=<comment-id> -->` — the `id=` attribute convention mirrors `precedentApplied`'s `pid=`. The CLI's `reporterCorrectionOn` reads the id back so suppression is EXACT (that comment has been answered) rather than timestamp-ordered, and counts the markers to enforce the rework ceiling; the server needs no accessor because `markerPrefix` already makes any comment carrying it machinery. It is the anti-self-loop backstop: without it a loop comment on a gated PR reads as a fresh reporter correction and the loop reworks in response to itself. `escalateOnce` is the OPEN-TOKEN the CLI stamps INSIDE the escalation banner when `issue escalate --for-pr <n> --once-reason <r>` is given, rendered as `<!-- shipflow:escalate-once pr=<n> reason=<r> -->` — the `pr=`/`reason=` attribute convention mirrors `precedentContext`'s `cat=`/`q=`. It is the PERMANENT once-key for `inbox`'s `escalateOnce` row (issue #488): the key USED to be the parent issue's live `needs-human` label, but the server's UnblockNeedsHuman removes that label on any non-bot, non-machinery comment BY DESIGN, so the only once-key was erased the moment a human replied and the row re-escalated every tick forever. A comment marker cannot be erased by a reply, and unlike a label it CARRIES THE REASON — so the invariant it enforces is `at most one escalation per (PR, reason), EVER`: a new reason on the same PR earns exactly one more, and the PR is capped at one escalation per `ESCALATE_ONCE_REASONS` entry, forever. The CLI reads it back from the PARENT issue's comments under THREE filters, ALL required, because each of the first two was measured insufficient on its own: (1) only comments the CLI's own account authored (`viewerDidAuthor`); (2) only ANCHORED — alone on its line, starting at COLUMN 0, no leading whitespace — because a quoted marker is a claim, not evidence; those two are the intent-gate audit record's rule (#411). (3) only from comments that ARE an escalation banner (`isEscalationBanner`, the same `escalationBannerHeading` prefix `findLatestEscalationComment` selects on) — added in PR #489 round 4. Filters 1+2 alone accepted an anchored marker from ANY CLI-authored comment on the parent, and the CLI writes many comments that are not banners: `issue wait --reason <text>` posts one on that very issue with LLM-composed text interpolated raw, on the path loop-mode.md mandates. That reason forged a permanent key and silently spent the one escalation the (PR, reason) pair ever earns — issue #488's exact harm through the adjacent door. Scoping the READ was chosen over neutralizing yet another writer: rounds 2 and 3 each hardened one side of this boundary and left the other open, whereas a key that counts ONLY where the single writer of a key (`formatEscalationBody`) puts one means adding a new CLI comment can never create a new forgery surface. The harvester `extractEscalateOnceMarkers` is scoped by the same predicate one hop earlier, so an unscoped harvest cannot LAUNDER a forged key out of a non-banner comment and into a banner via the `--update` carry-forward. Neutralization below stays defence in depth, not the wall. The anchor tolerated leading indentation until PR #489 round 3; that tolerance bought nothing (the renderer always emits a marker at column 0) and cost a forgery route, since four leading spaces is exactly how markdown spells a code block. Trailing whitespace and CRLF ARE tolerated — opposite polarity: a real key that fails to match reads as never-filed and re-opens the storm, and trailing space cannot smuggle a marker in. NEUTRALIZATION (the other half, PR #489 round 3): every banner is a comment the CLI's OWN account authors, so ANY free-form string folded into one is a forgery vector — an own-line marker in it reads back as a filed key and permanently suppresses an escalation a human is waiting on. So EVERY operator- or server-supplied string reaching a banner has its `<!-- shipflow:` tokens escaped to `&lt;!-- shipflow:` (readable, unmatchable): the free-text `--reason`, `--owner`, and the echoed precedent `answer`/`author`/`sourceUrl`/`category`/`fingerprint`/`id`. Round 2 neutralized the precedent answer ALONE and left `--reason` beside it raw; that asymmetry was itself the defect, so the rule is positional now — nothing free-form reaches a banner un-neutralized. The escaped replacement is DERIVED from `markerPrefix` (only the leading `<` is escaped), never a hand-written twin, so the two halves cannot drift. Whitespace collapsing runs BEFORE escaping (PR #489 round 4): the other order left a token already split across a line break unmatched, then REBUILT it into a live one — inert only because every call site happens to prefix the field, a positional accident rather than a property of the neutralizer. The two `PrecedentMatch` numerics folded into a banner (`sourceIssue`, `reuseCount`) are coerced with `Number()` at the render site: that response is an unchecked cast over server JSON, so `number` is a compile-time claim, not a fact about the bytes. Single-line fields additionally have newlines collapsed, or a value could BREAK OUT of the line the renderer composed for it and land a marker at column 0 anyway (`pid=`/`cat=` are interpolated into a marker line themselves). The RAW reason is still what `precedentContext` encodes — the server fingerprints that text — so the two must not be conflated. WRITE SIDE: `issue escalate --update` REPLACES a banner body in place, and `findLatestEscalationComment` matches ANY CLI-authored comment opening with the banner heading — which the escalate-once banner is — so the CLI carries every anchored marker on the edited body FORWARD (`preserveEscalateOnceMarkers`). Without that, an ordinary UNKEYED re-escalation of the same parent (the path the escalation contract MANDATES: `Shrink, don't stack — one live escalation per issue`) erased the key and handed that (PR, reason) back its per-tick storm forever. Related: a keyed escalation SKIPS the precedent lookup entirely. The reason it must never auto-apply is that the server's undo retires the precedent but cannot un-write a permanent marker, so an undone auto-application would park the row forever with its promised fresh escalation never arriving. PR #489 round 2 achieved that by DEMOTING the `apply` verdict after the call; round 3 moved it before, because `precedents/match` increments the reuse count and writes an `Applied` event BEFORE it returns — so demoting downstream still left the server having booked a reuse that never happened, advancing take-rate metrics and pushing the precedent toward premature re-confirmation. Not asking is the only way not to be counted. Consequence: a keyed escalation shows no `Precedent on file` suggestion; restoring that needs a non-mutating surface-only match on the SERVER. Do NOT key this off `escalationOutstanding`/`findLatestEscalationComment`: those ask whether an escalation is OUTSTANDING (issue #486), the opposite polarity of whether one was EVER FILED, and sharing a helper between the two reintroduces this bug. The server needs no accessor — `markerPrefix` already makes any comment carrying it machinery. Only the literals are single-sourced — each consumer still owns its own matching semantics. `judge`/`judgeEnd` (issue #969) bracket the loop-maintained JUDGE BLOCK at the TOP of an issue body — the four lines a human reads to decide (state · PR/blocker · enumerated replies · impact), rendered as `<!-- shipflow:judge state=<s> since=<iso> -->…<!-- shipflow:judge-end -->` and upserted in place by `issue judge <n>` at every state change so the thread never has to be scrolled to learn where the issue stands. `judge` is an OPEN token (attributes follow); `judgeEnd` is the literal closer. Body-resident, so `commentIsLoopMachinery` never sees it. `intake` stamps the ONE live intake/assumptions comment per issue that `issue brief <n>` edits in place (superseded text folds into a History details block) — the same one-live-comment rule the \uD83D\uDEA7 banner follows via `--update`.",
       triaged: "<!-- shipflow:triaged -->",
       loop: "<!-- shipflow:loop -->",
       loopReview: "<!-- shipflow:loop-review -->",
@@ -2185,7 +2185,10 @@ var init_shipflow_contract_data = __esm(() => {
       intentGateParentConfirm: "<!-- shipflow:intent-gate-parent-confirm",
       reworkFrom: "<!-- shipflow:rework-from",
       escalateOnce: "<!-- shipflow:escalate-once",
-      approvedHead: "<!-- shipflow:approved-head"
+      approvedHead: "<!-- shipflow:approved-head",
+      judge: "<!-- shipflow:judge",
+      judgeEnd: "<!-- shipflow:judge-end -->",
+      intake: "<!-- shipflow:intake -->"
     },
     intentGate: {
       $comment: "The release rule for the #190 intent gate (`needs-reporter-review`), single-sourced so the server's matcher, the CLI's ping comment and the skill docs cannot drift (issue #411 — the doc promised a rule the code did not implement). POLARITY: the label is a merge blocker held until a human CONFIRMS, so this is an AUTHORIZATION control, not a sentiment classifier. THE RULE: the quote-stripped body must reduce to EXACTLY ONE meaningful line — blank lines and pure-decoration lines (a `---` rule) are scaffolding, but a fenced block and everything in it COUNT as content — and that line, with leading/trailing markdown decoration and punctuation trimmed, must EQUAL one of `confirmationTokens` (case-insensitive, emoji skin-tone/variation modifiers normalised away). Nothing else clears the gate: the token is the WHOLE reply, or it does not confirm. WHY THE WHOLE BODY (PR #441, third review pass): whole-line equality judged `block[0]` and ignored everything after it, so a bare token on line 1 confirmed whatever followed. Measured through the real handler, all of `Confirmed`+`But scope it to the CLI only`, `\uD83D\uDC4D`+`not this implementation though`, `yes`+`Actually no, revert it`, `LGTM`+`hold the merge, this is wrong`, `confirmed`+`- but only the CLI half` CLEARED, and so did the blank-line forms `confirmed`+`Actually no, revert it` and `Yes`+`Actually no, revert it`. Every one is #411's exact harm: a merge on a reading the reporter had just narrowed. A SINGLE newline was enough, and that settles the scoping question — the rule ALREADY refuses extra words on the token's own line (`Confirmed — ship it` is armed), so accepting arbitrary text one newline later is incoherent: the same act, the same ambiguity, the opposite answer. Drawing the boundary at the line or at the paragraph only moves the hole down; this defect has now appeared at three granularities. Requiring the whole body is NOT the denylist the veto list was — it never inspects what follows, it refuses when anything follows. THE PRICE: `confirmed` plus a thank-you parks too. Accepted — commentary goes in a separate comment, costing one extra reply, never a wrong merge. A pasted fenced block counts as content here (unlike in the `N: answer` block parser, which skips fences whole so a fence's inner line can never be promoted to the judged line): `/confirm` over a fenced `no` was measured clearing, and a token with an attachment is not a token alone. WHY AN EXACT TOKEN AND NOT A GRAMMAR (PR #441, second review pass): the previous design matched an affirmative OPENING WORD and then vetoed a list of negations and contrastives found later in the paragraph. That is a denylist of known shapes guarding an unbounded set of free-form natural language — the exact anti-pattern this issue exists to close, re-earned inside its own fix. Negation-after-affirmative has no finite enumeration: `Confirmed the bug still repros`, `Yes, change the copy first` and `ok 1 - test passed` all survived a 27-word veto list, and each one FAILED OPEN — it merged a reading nobody confirmed. An exact token has the correct failure polarity for EVERY input, not merely for the inputs somebody remembered to enumerate: anything that is not the token leaves the gate armed, which one more reply fixes. Tokens must be unambiguous ALONE, as a whole line — that is what excludes `ok`, `sure`, `agreed`, `correct` and every bare imperative (`ship`, `merge`, `approve`, `proceed`), which read as consent or as an instruction depending on the sentence they open. The `N: answer` reply protocol also releases the gate, but it is held to the SAME stands-alone invariant as the token path (PR #441, fourth review pass): the decision block must BE the whole quote-stripped reply (no meaningful line outside it, a pasted fence included), EVERY line of that block must itself be a decision line, EVERY answer must be a `confirmationTokens` entry, and an escalation banner must actually be outstanding on the thread. Both positional checks are load-bearing and neither alone suffices — measured by ablation, the length test alone leaves `1: yes` + NEWLINE + `Actually no, revert it` clearing (same paragraph, so the counts match) and the per-line test alone leaves `1: yes` + BLANK LINE + `revert it` clearing (a later paragraph the block never reached). Reading the answers had fixed WHAT the block said but not WHERE it stopped, so this door stayed fail-OPEN at both granularities after the token path had closed both — and the escalation-outstanding guard does not mitigate it, because answering `N:` is exactly what a reporter does on an escalated thread — a content-agnostic `^\\\\d+:` match let `1: no, redo it` clear the blocker it was rejecting, and a pasted stack-trace line `10: undefined is not a function` do it by accident. FAIL-STUCK IS THE PRICE, and it is paid deliberately in two places, BOTH of which must state that the token is the whole reply or a reporter cannot discover it: `releaseHint` is the exact sentence the CLI puts on the PR when it APPLIES the label, and the server posts a one-time `intentGateHint` nudge naming the tokens whenever a human reply misses — including when the commenter's `author_association` is untrusted, which was the one branch that failed stuck in silence. Both render the token list FROM `confirmationTokens`, never from a hand-written copy, so neither can drift from the matcher — preserve that. Removing the label by hand stays the human override. Do NOT re-add a free-text grammar here to make it friendlier — narrowing the openers is safe, widening them is how this control dies. AUDIT AUTHOR (issue #537): `auditAuthorSlug` is the GitHub App slug that posts the `intentGateCleared` audit comment — the ONE bot identity the CLI's `isIntentGateAuditComment` trusts. It exists because the reader had to move to REST to see botness at all: `gh issue view --json comments` is GraphQL, where a Bot's `login` carries NO `[bot]` suffix and a GitHub App's `authorAssociation` is `NONE`, so the `[bot]`-suffix test the CLI shipped could never fire and the #411 clearance path was dead from the day it landed (measured on PR #489, gh 2.95.0). REST's `user.type == \"Bot\"` restores the signal — but botness ALONE is not identity: `gemini-code-assist[bot]` and `chatgpt-codex-connector[bot]` are also `type: Bot` and comment on these very PRs, so trusting any bot would trade a dead control for a forgeable one. The CLI therefore requires `user.type == \"Bot\"` AND the login, normalised (trailing `[bot]` stripped, case-folded), to EQUAL this slug. It is a ONE-ENTRY ALLOWLIST on purpose: this is an authorization predicate on a merge gate, and the failure mode of a wrong entry must be fail-STUCK (one more reporter reply, or a hand removal of the label — the standing human override), never fail-OPEN. A self-hosted deployment that installs the App under a different slug edits THIS key — never a literal in the CLI, and never by widening the rule to \"any bot\". The `[bot]` suffix is stripped rather than required because the two APIs disagree about it; the suffix is a rendering detail of REST, not an identity. A PAT-backed machine user has `type: \"User\"` and keeps clearing through the OWNER/MEMBER/COLLABORATOR association branch, which this key does not touch.",
@@ -3008,6 +3011,11 @@ function lintEscalationReason(reason) {
 `) && !r.split(`
 `).some((l) => /^###\s/.test(l) && isActionHeading(l))) {
     problems.push('structured reason is missing the "### \uD83D\uDC64 Action needed" section — lead with the concrete steps');
+  }
+  const hasReplyOption = /^\s*(?:[-*]\s*)?`?\d+:\s+\S/m.test(r);
+  if (r.includes(`
+`) && !hasDecisionTable && !hasReplyOption) {
+    problems.push("no enumerated reply — end with the replies a human can type and what each does, e.g. `1: done → loop re-reviews` / `1: skip → loop parks this`");
   }
   for (const line of overlongActionLines(r)) {
     problems.push(`"Action needed" line over ${ACTION_LINE_WORD_LIMIT} words ("${line.slice(0, 60)}…") — ` + `a step (or table cell) must read in one breath; move the detail to "### Why it's blocked" (it renders folded)`);
@@ -4108,6 +4116,9 @@ ${SHIPFLOW_TRIAGED_MARKER}`;
 `).map((s) => s.trim()).filter(Boolean).reverse().find((l) => l.startsWith("http")) ?? out.trim();
   const number = parseInt(url.split("/").pop() || "0", 10);
   return { url, number };
+}
+function ghIssueEditBody(repo, number, body) {
+  _exec(`gh issue edit ${number} --repo ${shellQuote(repo)} --body ${shellQuote(body)}`, { stdio: "ignore" });
 }
 function ghIssueAddAssignees(repo, number, logins) {
   if (!logins.length)
@@ -6814,6 +6825,162 @@ function renderScreenshotsSection(shots) {
 
 // src/commands/issue.ts
 init_prompts();
+
+// src/judge-block.ts
+init_shipflow_contract_data();
+var JUDGE_OPEN = SHIPFLOW_CONTRACT.markers.judge;
+var JUDGE_END = SHIPFLOW_CONTRACT.markers.judgeEnd;
+var JUDGE_STATES = ["working", "review", "waiting", "blocked", "merged"];
+function isJudgeState(s) {
+  return JUDGE_STATES.includes(s);
+}
+var STATE_LABEL = {
+  working: { emoji: "\uD83D\uDFE2", label: "Loop working" },
+  review: { emoji: "\uD83D\uDD35", label: "PR in review" },
+  waiting: { emoji: "⏸", label: "Waiting on you" },
+  blocked: { emoji: "\uD83D\uDD34", label: "Blocked externally" },
+  merged: { emoji: "✅", label: "Merged" }
+};
+function judgeCell(s) {
+  const prefix = SHIPFLOW_CONTRACT.markers.markerPrefix;
+  return s.replace(/\s+/g, " ").trim().split(prefix).join("&lt;" + prefix.slice(1));
+}
+function judgeProgress(spec) {
+  if (spec.progress != null && Number.isFinite(spec.progress))
+    return Math.max(0, Math.min(5, Math.floor(spec.progress)));
+  if (spec.state === "merged")
+    return 5;
+  if (spec.pr)
+    return /approved/i.test(spec.prStatus ?? "") ? 4 : 3;
+  return spec.state === "working" ? 1 : 0;
+}
+function meter2(n) {
+  const k = Math.max(0, Math.min(5, n));
+  return "▰".repeat(k) + "▱".repeat(5 - k);
+}
+function shortTime(iso) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(iso);
+  return m ? `${m[1]} ${m[2]}Z` : iso;
+}
+function validateJudgeSpec(spec) {
+  const p = [];
+  if (spec.state === "waiting" && spec.decisions.length === 0) {
+    p.push("state=waiting needs at least one --decide `N: reply → consequence` — the reader must know what to type");
+  }
+  if (spec.state === "blocked" && !spec.blocker?.trim()) {
+    p.push('state=blocked needs --blocker "<gate/dependency> → #<issue>"');
+  }
+  if (spec.state === "review" && !spec.pr) {
+    p.push("state=review needs --pr <n>");
+  }
+  spec.decisions.forEach((d, i) => {
+    if (!/^\d+:\s+\S/.test(d.trim()))
+      p.push(`--decide #${i + 1} must start with \`N: \` (the reply the human types): ${JSON.stringify(d)}`);
+    if (!/→/.test(d))
+      p.push(`--decide #${i + 1} must state its consequence after \`→\`: ${JSON.stringify(d)}`);
+  });
+  return p;
+}
+function renderJudgeBlock(spec) {
+  const { emoji, label } = STATE_LABEL[spec.state];
+  const head = [`${emoji} **${label}**`];
+  if (spec.decisions.length)
+    head.push(`${spec.decisions.length} decision${spec.decisions.length === 1 ? "" : "s"}`);
+  head.push(`since ${shortTime(spec.since)}`);
+  const lines = [`> ${head.join(" · ")}`];
+  const state = [];
+  if (spec.pr)
+    state.push(`PR #${spec.pr}${spec.prStatus?.trim() ? ` ${judgeCell(spec.prStatus)}` : ""}`);
+  if (spec.blocker?.trim())
+    state.push(`blocked: ${judgeCell(spec.blocker)}`);
+  lines.push(`> **State** ${meter2(judgeProgress(spec))}${state.length ? ` ${state.join(" · ")}` : ""}`);
+  if (spec.decisions.length)
+    lines.push(`> **Decide** ${spec.decisions.map((d) => "`" + judgeCell(d) + "`").join(" · ")}`);
+  if (spec.impact?.trim())
+    lines.push(`> **Impact** ${judgeCell(spec.impact)}`);
+  return `${JUDGE_OPEN} state=${spec.state} since=${spec.since} -->
+${lines.join(`
+`)}
+${JUDGE_END}`;
+}
+var esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var BLOCK_RE = new RegExp(`${esc(JUDGE_OPEN)} state=[^\\n]*-->\\n[\\s\\S]*?${esc(JUDGE_END)}\\n*`);
+function parseJudgeBlock(body) {
+  const m = new RegExp(`${esc(JUDGE_OPEN)} state=(\\S+) since=(\\S+) -->`).exec(body);
+  if (!m || !isJudgeState(m[1]))
+    return null;
+  return { state: m[1], since: m[2] };
+}
+function upsertJudgeBlock(body, block) {
+  if (BLOCK_RE.test(body))
+    return body.replace(BLOCK_RE, `${block}
+
+`);
+  return `${block}
+
+${body.replace(/^\s+/, "")}`;
+}
+function extractImpact(body) {
+  const rest = body.replace(BLOCK_RE, "");
+  const m = /^\*\*Impact\*\*\s+(.+?)\s*$/m.exec(rest);
+  return m ? m[1].trim() : undefined;
+}
+function linesToAction(body) {
+  const lines = body.split(`
+`);
+  const open = lines.findIndex((l) => l.startsWith(`${JUDGE_OPEN} state=`));
+  if (open >= 0) {
+    const end = lines.findIndex((l, i) => i > open && l.startsWith(JUDGE_END));
+    const decide = lines.findIndex((l, i) => i > open && (end < 0 || i < end) && /^>\s*\*\*Decide\*\*/.test(l));
+    return (decide >= 0 ? decide : open + 1) + 1;
+  }
+  const cue = lines.findIndex((l) => /^>\s*\*\*Decide\*\*/.test(l) || /action needed|remedy:|unblock:/i.test(l));
+  return cue >= 0 ? cue + 1 : -1;
+}
+
+// src/intake-note.ts
+init_shipflow_contract_data();
+var INTAKE_MARKER = SHIPFLOW_CONTRACT.markers.intake;
+var LOOP_MARKER = SHIPFLOW_CONTRACT.markers.loop;
+function findLatestIntakeComment(comments) {
+  for (let i = comments.length - 1;i >= 0; i--) {
+    const c = comments[i];
+    if (c.viewerDidAuthor === false)
+      continue;
+    if (c.body.split(/\r?\n/).some((l) => l.trim() === INTAKE_MARKER))
+      return c;
+  }
+  return null;
+}
+function stripLoopMarkers(body) {
+  return body.split(`
+`).filter((l) => {
+    const t = l.trim();
+    return t !== INTAKE_MARKER && t !== LOOP_MARKER;
+  }).join(`
+`).trim();
+}
+function renderIntakeBody(brief, previous) {
+  const head = brief.trim();
+  const parts = [head];
+  const prev = previous ? stripLoopMarkers(previous) : "";
+  if (prev) {
+    parts.push(`<details>
+<summary>History — superseded ${new Date().toISOString().slice(0, 10)}</summary>
+
+${prev}
+
+</details>`);
+  }
+  return `${parts.join(`
+
+`)}
+
+${INTAKE_MARKER}
+${LOOP_MARKER}`;
+}
+
+// src/commands/issue.ts
 init_helpers();
 async function loadTriage(ctx, repo, number) {
   try {
@@ -7283,6 +7450,59 @@ ${formatPrecedentSuggestion(precedent)}`;
       once: once ?? null,
       precedent: surfaced ? { outcome: precedent.outcome, sourceIssue: precedent.precedent.sourceIssue, answer: precedent.precedent.answer } : null
     }, () => console.log(`\uD83D\uDEA7 #${number} escalated${updated ? " (existing \uD83D\uDEA7 comment updated)" : ""} → labelled "${NEEDS_HUMAN_LABEL}"${owner ? `, owner @${owner}` : ""}${surfaced ? ", precedent on file surfaced" : ""}${released ? " and claim released" : " (claim kept — loop skips it this run)"}.`));
+  }));
+  const collectDecisions = (v, prev) => prev.concat([v]);
+  issue.command("judge <number>").description(`Upsert the Judge block at the TOP of the issue body — ≤4 lines a human reads to decide: state, PR/blocker, the replies to type, impact (issue #969). Idempotent; "since" survives while the state is unchanged. States: ${JUDGE_STATES.join(" | ")}.`).requiredOption("--state <state>", `One of ${JUDGE_STATES.join(", ")}`).option("--pr <number>", "The PR carrying the fix (required for state=review)").option("--pr-status <text>", 'PR standing in ≤8 words: "green (CI 2/2, scan clean)", "approved", "CI red"').option("--blocker <text>", 'What stops it and who owns that: "feature-map gate → #965" (required for state=blocked)').option("--decide <reply>", 'Repeatable. A reply the human can type + its consequence: "1: done → loop re-reviews" (≥1 required for state=waiting)', collectDecisions, []).option("--impact <text>", "What it costs if nobody acts (default: hoisted from the body's **Impact** line)").option("--progress <0-5>", "Override the pipeline meter (default derived: claimed 1 · PR open 3 · approved 4 · merged 5)").option("--repo <fullname>", "Override target repo").option("--dry-run", "Render and report without editing the issue").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+    const ctx = await loadCtx(program2);
+    const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    if (!isJudgeState(opts.state))
+      throw new UsageError(`--state must be one of ${JUDGE_STATES.join(", ")} (got ${JSON.stringify(opts.state)})`);
+    const pr = opts.pr != null ? parseInt(opts.pr, 10) : undefined;
+    if (opts.pr != null && (!Number.isFinite(pr) || pr <= 0))
+      throw new UsageError(`--pr must be a PR number (got ${JSON.stringify(opts.pr)})`);
+    const progress = opts.progress != null ? parseInt(opts.progress, 10) : undefined;
+    if (opts.progress != null && (!Number.isFinite(progress) || progress < 0 || progress > 5))
+      throw new UsageError(`--progress must be 0–5 (got ${JSON.stringify(opts.progress)})`);
+    const current = ghIssueView(repo, number);
+    const existing = parseJudgeBlock(current.body ?? "");
+    const since = existing && existing.state === opts.state ? existing.since : new Date().toISOString();
+    const spec = {
+      state: opts.state,
+      since,
+      pr,
+      prStatus: opts.prStatus,
+      blocker: opts.blocker,
+      decisions: opts.decide,
+      impact: opts.impact ?? extractImpact(current.body ?? ""),
+      progress
+    };
+    const problems = validateJudgeSpec(spec);
+    if (problems.length)
+      throw new UsageError(`Judge block refused:
+- ${problems.join(`
+- `)}`);
+    const block = renderJudgeBlock(spec);
+    const body = upsertJudgeBlock(current.body ?? "", block);
+    if (!opts.dryRun)
+      ghIssueEditBody(repo, number, body);
+    const lines = linesToAction(body);
+    emit(opts, { number, state: spec.state, since, pr: pr ?? null, decisions: spec.decisions.length, linesToAction: lines, updated: existing != null, dryRun: !!opts.dryRun, block }, () => console.log(`${opts.dryRun ? "(dry-run) " : ""}Judge block ${existing ? "updated" : "added"} on #${number}: state=${spec.state}, lines-to-action ${lines < 0 ? "none" : lines}.
+
+${block}`));
+  }));
+  issue.command("brief <number>").description("Post or refresh the ONE live loop comment on an issue (intake brief / 'Unknowns & assumptions'). A second run edits the same comment in place and folds the previous text under History — the thread never grows a second intake table (issue #969).").requiredOption("--body-file <path>", "Markdown body; '-' reads stdin").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+    const ctx = await loadCtx(program2);
+    const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    const brief = readFileSync3(opts.bodyFile === "-" ? 0 : opts.bodyFile, "utf8").trim();
+    if (!brief)
+      throw new UsageError("--body-file is empty");
+    const existing = findLatestIntakeComment(ghIssueComments(repo, number));
+    const body = renderIntakeBody(brief, existing?.body);
+    if (existing)
+      ghUpdateIssueComment(existing.id, body);
+    else
+      ghIssueComment(repo, number, body);
+    emit(opts, { number, updated: existing != null, commentId: existing?.id ?? null }, () => console.log(`Intake brief ${existing ? "updated in place (previous text folded under History)" : "posted"} on #${number}.`));
   }));
   issue.command("wait <number>").description("Park an issue on a dependency: label ⏳ waiting-on + comment. Unlike escalate, no human is needed — issue next skips it while the dependency is open and re-admits it automatically when the dependency merges/closes.").option("--on <ref>", "The blocking issue/PR: #123, 123, owner/repo#123, or a GitHub issue/PR URL").option("--reason <reason>", "One line on why this waits", "").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for ⏳ waiting-on)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     if (!opts.on?.trim()) {

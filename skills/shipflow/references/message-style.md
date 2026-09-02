@@ -106,6 +106,54 @@ PR body template (sections, all visual-first, blank line between each):
 if the failure is a flow · **Changed** table (file → before → after) · **Testing**
 checklist with numbers · **Evidence** images/links.
 
+### Judge block — the top of every loop-touched issue (#969)
+
+The purpose of every message on an issue is one human **judging** with the
+least context-gathering. Measured before #969 a reader scrolled 62 / 30 / 33
+lines (#962 / #963 / #965) to reach the line that said what to do, because
+state lived in the thread's chronology and the ladder is ordered for the
+worker (repro first, decision nowhere). The Judge block fixes the reading
+order without touching the ladder: **≤4 blockquote lines, first thing in
+the body, edited in place at every state change**, between
+`<!-- shipflow:judge state=<s> since=<iso> -->` … `<!-- shipflow:judge-end -->`.
+
+```
+> ⏸ **Waiting on you** · 1 decision · since 2026-09-01 05:41Z
+> **State** ▰▰▰▱▱ PR #966 green (CI 2/2, scan clean) · blocked: feature-map gate → #965
+> **Decide** `1: done → loop re-reviews` · `1: skip → loop parks this`
+> **Impact** `renaiss-shipflow test` red on clean main
+```
+
+| Line | Carries | Rule |
+|---|---|---|
+| header | state · decision count · since | states: 🟢 Loop working · 🔵 PR in review · ⏸ Waiting on you · 🔴 Blocked externally · ✅ Merged. `since` resets only when the state changes |
+| **State** | meter `▰▰▰▱▱` (claimed 1 · PR open 3 · approved 4 · merged 5) · `PR #n <standing>` · `blocked: <gate> → #<owner issue>` | empty parts omitted, never blank |
+| **Decide** | every reply the human can type, each with its consequence | `waiting` requires ≥1; omitted otherwise |
+| **Impact** | what it costs if nobody acts | hoisted from the ladder's `**Impact**` line unless given |
+
+**Never hand-write it** — `renaiss-shipflow issue judge <n> --state <s> [--pr
+N --pr-status "…"] [--blocker "… → #M"] [--decide "1: done → …"]… [--impact
+"…"]` renders, validates (waiting without a reply, blocked without a blocker,
+a decision without `N: ` or `→` are refused) and upserts it idempotently.
+`--json` reports `linesToAction` — the reviewer's self-verify metric, target
+≤ 4. The loop runs it at claim (`working`), PR open (`review`), gate blocked
+(`blocked`), escalation (`waiting`, decisions = the escalation's replies) and
+merge (`merged`); server-filed issues get their first block on the loop's
+claim.
+
+**Enumerate every reply.** The escalation footer's `N: <answer>` is a
+grammar, not a vocabulary: a decision must spell out the replies it accepts
+and what each does — `1: done → loop re-reviews` · `1: skip → loop parks
+this` — even when there is one action. `lintEscalationReason` refuses a
+structured reason with neither a decision table nor a `N: … → …` line.
+
+**One live loop comment per issue.** The intake brief ("Unknowns &
+assumptions") goes through `renaiss-shipflow issue brief <n> --body-file
+<path|->`: the first run posts it (ending `<!-- shipflow:intake -->` +
+`<!-- shipflow:loop -->`), every later run edits that comment in place and
+folds the superseded text under `<details>History</details>`. A second
+intake table in a thread is a bug (#962).
+
 ### Issue-body ladder — every ShipFlow-filed issue body
 
 **Authoritative for EVERY issue body ShipFlow files** — loop bug-sweep /
@@ -115,7 +163,7 @@ live demo. Build top-down:
 
 | # | Element | When | Shape |
 |---|---|---|---|
-| 1 | **Status header** | always — the first line | one blockquote line: `> <priority emoji> **P<n> · <type> · <area> · effort <S/M/L>** · <wave/source>` |
+| 1 | **Status header** | always — the first line (the loop's Judge block, when present, sits above it — #969) | one blockquote line: `> <priority emoji> **P<n> · <type> · <area> · effort <S/M/L>** · <wave/source>` |
 | 2 | **Body core** | always | bug → the Repro core below; feature/task → the Why/What/Example core below |
 | 3 | **Mermaid diagram** | the defect or design branches, races, or spans ≥3 interacting components — never for a linear restatement of one line | small `flowchart`/`sequenceDiagram`/`stateDiagram` — beats prose causality when the SHAPE is the point |
 | 4 | **Evidence table** | any `file:line` claim | `\| Claim \| Where \|` — every claim grounded in `path:line` / links / screenshots; a claim about a change adds Before / After columns (#960) |

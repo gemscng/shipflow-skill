@@ -389,6 +389,10 @@ Never return `approve` unless all hold:
       no test framework).
 - [ ] `features --json` pulled — non-zero exit, `degraded[]`, or 0 features
       is a hard error (not an empty map); neighbouring features checked.
+- [ ] Parent issue's Judge block reads the truth (#969): state `review`
+      naming this PR, `linesToAction ≤ 4` from `renaiss-shipflow issue judge
+      <n> --state review --pr <pr> --pr-status "<standing>" --json`. A stale
+      or missing block is a finding for the orchestrator, not a code verdict.
 
 Any doubt → `request_changes` — a wrong approve ships a bug; a re-review is
 cheap.
