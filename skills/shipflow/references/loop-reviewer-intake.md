@@ -39,7 +39,13 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    names someone, else the CLI resolves `signoff-owner` → issue author.
    Re-escalating: `--update` edits the 🚧 comment in place; shrink to what
    remains open, mark settled "resolved by #N". One live escalation per
-   issue.
+   issue — a second plain escalate while `needs-human` is on is REFUSED
+   (#969), so re-escalate with `--update`. Shape (`message-style.md`
+   § Escalation comment): Action-needed ≤ 10 lines, decision table
+   `| # | Decision | Recommendation | If chosen |`, everything else in
+   `### Why it's blocked` (it folds). When the answer must land on a PR
+   ("confirm on PR #N"), say so in the reason — the banner links the
+   PR's comment box.
 1b. **Product priority — check before any "worth building now?" escalation.**
    `renaiss-shipflow priorities --json` parses `docs/PRIORITIES.md` (owner's
    ordered work-class greenlist + WIP share). Human-edited ONLY — the loop

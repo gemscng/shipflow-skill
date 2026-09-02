@@ -27,9 +27,12 @@ Rules that hold for every format:
 
 - Lead with the outcome: verdict / fixed / blocked — then the visuals.
 - `path:line`, numbers, and short quotes beat descriptions.
-- Asking a human to choose? Render a **decision table** — `| # | Decision | Recommendation |`
-  — whose `#` matches the `N: answer` reply protocol. Every option row carries the
-  loop's recommendation; never a bare open question.
+- Asking a human to choose? Render a **decision table** —
+  `| # | Decision | Recommendation | If chosen |` — whose `#` matches the
+  `N: answer` reply protocol. Every option row carries the loop's
+  recommendation AND what happens when that option is picked (#969: 2 of
+  25 live tables said; the lint now requires the column, or a `→` in every
+  option cell); never a bare open question.
 - An option that hands the loop production access (`DATABASE_URL`, prod
   secrets, prod API keys) is never on the table — the choices for prod
   data work are "operator runs it" or "reproduce on a local DB first"
@@ -114,6 +117,29 @@ PR body template (sections, all visual-first, blank line between each):
 `Closes #N` (full fix) / `Part of #N` (slice) · **Root cause** ≤3 bullets, `mermaid`
 if the failure is a flow · **Changed** table (file → before → after) · **Testing**
 checklist with numbers · **Evidence** images/links.
+
+### Escalation comment — the 🚧 shape (#969)
+
+Measured on 38 live escalations: median 38 lines and 215 words, three
+`<details>` folds each, the same footer and rationale paragraph on every
+one, and 13 that asked the reader to reply on a PR they had to go find.
+The comment the escalate command renders is now **≤ 8 visible lines**:
+
+| Line | Carries |
+|---|---|
+| 1 | `🚧 **Needs a human** — <category> · @<owner> decides` |
+| 2 (only when the reply belongs elsewhere) | `**Reply on PR #N, not here →** <PR comment-box URL>` — auto-added when the reason says "confirm … PR #N" |
+| 3–7 | the `### 👤 Action needed` section: steps and the decision table, **≤ 10 lines** (lint) |
+| 8 | ONE `<details>` holding every other section (`Why it's blocked · Ready once unblocked`) |
+| footer | one `<sub>` line: reply protocol + the category rationale's first sentence |
+
+Rules the lint enforces on `--reason`: Action-needed section present and
+≤ 10 lines; every decision table carries **If chosen** (or `→` in each
+option); a `**Recommendation:**` line never doubles a table column; every
+ask ends in enumerated replies; no option hands the loop production
+access. **One live 🚧 per issue**: a second plain escalation while the
+label is on is refused — use `--update` (edits in place) or `--force` to
+stack deliberately; the escalate-once path is exempt.
 
 ### Judge block — the top of every loop-touched issue (#969)
 

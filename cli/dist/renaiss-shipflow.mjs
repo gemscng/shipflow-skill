@@ -2952,26 +2952,68 @@ function foldSecondarySections(reason) {
   }
   const anyAction = sections.some((s) => s.heading && isActionHeading(s.heading));
   let firstHeaded = true;
-  const rendered = sections.map((s) => {
+  const visibleParts = [];
+  const folded = [];
+  for (const s of sections) {
     const body = s.lines.join(`
 `).trim();
-    if (s.heading === null)
-      return body;
+    if (s.heading === null) {
+      if (body)
+        visibleParts.push(body);
+      continue;
+    }
     const visible = anyAction ? isActionHeading(s.heading) : firstHeaded;
     firstHeaded = false;
     if (visible)
-      return `### ${s.heading}
-${body}`;
-    return `<details>
-<summary><b>${s.heading}</b></summary>
+      visibleParts.push(`### ${s.heading}
+${body}`);
+    else
+      folded.push(s);
+  }
+  if (folded.length) {
+    const summary = folded.map((s) => s.heading).join(" · ");
+    const inner = folded.map((s) => folded.length === 1 ? s.lines.join(`
+`).trim() : `**${s.heading}**
 
-${body}
-
-</details>`;
-  }).filter(Boolean);
-  return rendered.join(`
+${s.lines.join(`
+`).trim()}`).join(`
 
 `);
+    visibleParts.push(`<details>
+<summary><b>${summary}</b></summary>
+
+${inner}
+
+</details>`);
+  }
+  return visibleParts.join(`
+
+`);
+}
+function detectReplyOnPr(reason) {
+  for (const line of reason.split(`
+`)) {
+    if (!/\bconfirm/i.test(line))
+      continue;
+    const m = /\bPR\s*#(\d+)/i.exec(line);
+    if (m)
+      return parseInt(m[1], 10);
+  }
+  return;
+}
+function actionSectionLineCount(reason) {
+  let inAction = false;
+  let n = 0;
+  for (const line of reason.split(`
+`)) {
+    if (/^###\s/.test(line)) {
+      inAction = isActionHeading(line);
+      continue;
+    }
+    if (inAction && line.trim())
+      n++;
+  }
+  return n;
 }
 function normalizeOwner(raw) {
   const login = (raw ?? "").trim().replace(/^@/, "");
@@ -3021,9 +3063,21 @@ function lintEscalationReason(reason) {
   if (/see the issue body/i.test(r)) {
     problems.push('says "see the issue body" — an escalation must be self-contained; inline the substance');
   }
-  const hasDecisionTable = /^\s*\|[^\n|]*\|\s*decision\s*\|\s*recommendation\s*\|/im.test(r);
+  const tableHeader = /^\s*\|\s*#\s*\|([^\n]*)$/m.exec(r);
+  const hasDecisionTable = !!tableHeader && /\|\s*recommendation\s*\|/i.test(tableHeader[1]);
   if (hasDecisionTable && /^\s*\*\*recommendation:?\*\*/im.test(r)) {
     problems.push("carries both a decision table with a Recommendation column and a separate **Recommendation:** line — state each recommendation once, in the table row it belongs to");
+  }
+  if (tableHeader && !/if chosen|consequence|outcome|then|result/i.test(tableHeader[1])) {
+    const rows = r.split(`
+`).filter((l) => /^\s*\|\s*\d+\s*\|/.test(l));
+    if (rows.length && !rows.every((l) => l.includes("→"))) {
+      problems.push("decision table has no **If chosen** column — each option must say what happens when picked: `| # | Decision | Recommendation | If chosen |`");
+    }
+  }
+  const actionLines = actionSectionLineCount(r);
+  if (actionLines > ACTION_SECTION_LINE_CAP) {
+    problems.push(`"Action needed" section is ${actionLines} visible lines — cap ${ACTION_SECTION_LINE_CAP}: one line per step or option, move detail into a "### Why it's blocked" section (it folds)`);
   }
   if (r.includes(`
 `) && !r.split(`
@@ -3035,7 +3089,7 @@ function lintEscalationReason(reason) {
   }
   const hasReplyOption = /^\s*(?:[-*]\s*)?`?\d+:\s+\S/m.test(r);
   if (r.includes(`
-`) && !hasDecisionTable && !hasReplyOption) {
+`) && !tableHeader && !hasReplyOption) {
     problems.push("no enumerated reply — end with the replies a human can type and what each does, e.g. `1: done → loop re-reviews` / `1: skip → loop parks this`");
   }
   for (const line of overlongActionLines(r)) {
@@ -3153,29 +3207,28 @@ function formatEscalationBody(reason, opts = {}) {
   }
   const why = foldSecondarySections(bulletizeReason(neutralizeMarkers(reason.trim()))) || "_No reason given._";
   const owner = normalizeOwner(opts.owner);
+  const tail = [
+    ...opts.category ? [neutralizeInline(opts.category)] : [],
+    ...owner ? [`@${neutralizeInline(owner)} decides`] : []
+  ];
+  const banner = tail.length ? `${SHIPFLOW_CONTRACT.markers.escalationBannerHeading} — ${tail.join(" · ")}` : ESCALATION_BANNER;
+  const replyOnPr = opts.repo ? detectReplyOnPr(reason) : undefined;
+  const replyOn = replyOnPr ? [`**Reply on PR #${replyOnPr}, not here →** https://github.com/${neutralizeInline(opts.repo)}/pull/${replyOnPr}#new_comment_field`, ""] : [];
+  const rationale = opts.category ? ESCALATION_CATEGORIES[opts.category].split(/(?<=\.)\s/)[0] : "";
   return [
-    ESCALATION_BANNER,
+    banner,
     "",
-    ...owner ? [`**Owner:** @${neutralizeInline(owner)}`, ""] : [],
+    ...replyOn,
     why,
     "",
-    ...opts.category ? [
-      "<details>",
-      `<summary><b>Why a human must decide — ${opts.category}</b></summary>`,
-      "",
-      ESCALATION_CATEGORIES[opts.category],
-      "",
-      "</details>",
-      ""
-    ] : [],
     "---",
-    `<sub>Reply with your decision (\`1: <answer>\` per numbered item works) — the **\`${SHIPFLOW_CONTRACT.labels.names.needsHuman}\`** label clears automatically and the loop resumes.</sub>`,
+    `<sub>Reply \`1: <answer>\` per numbered item (\`1.\` works too) — the **\`${SHIPFLOW_CONTRACT.labels.names.needsHuman}\`** label clears automatically and the loop resumes.` + (rationale ? ` Why a human — ${opts.category}: ${rationale}` : "") + "</sub>",
     ...opts.category ? [encodePrecedentContext(opts.category, reason.trim())] : [],
     ...opts.once ? [renderEscalateOnceMarker(opts.once.pr, opts.once.reason)] : []
   ].join(`
 `);
 }
-var ESCALATION_CATEGORIES, ACTION_LINE_WORD_LIMIT, RE_ESCAPE, ESCALATION_BANNER;
+var ESCALATION_CATEGORIES, ACTION_SECTION_LINE_CAP = 10, ACTION_LINE_WORD_LIMIT, RE_ESCAPE, ESCALATION_BANNER;
 var init_escalation_format = __esm(() => {
   init_shipflow_contract_data();
   init_pr_state();
@@ -7574,10 +7627,19 @@ ${section}` : section;
     const owner = normalizeOwner(opts.owner ?? resolveSignoffOwner() ?? ghIssueAuthor(repo, number));
     let body;
     try {
-      body = formatEscalationBody(reason, { category: opts.category, owner, once });
+      body = formatEscalationBody(reason, { category: opts.category, owner, once, repo });
     } catch (e) {
       console.error(e.message);
       process.exit(1);
+    }
+    if (!opts.update && !once && !opts.force) {
+      const labelsNow = ghIssueView(repo, number).labels.map((l) => l.name);
+      if (labelsNow.includes(NEEDS_HUMAN_LABEL)) {
+        const live = findLatestEscalationComment(ghIssueComments(repo, number));
+        if (live) {
+          throw new UsageError(`#${number} already has a live \uD83D\uDEA7 escalation (comment ${live.id}) and the ${NEEDS_HUMAN_LABEL} label is still on — ` + "re-escalate with --update so the human sees ONE current ask (message-style.md: one live escalation per issue), or --force to stack a second banner deliberately.");
+        }
+      }
     }
     let precedent;
     let disclosure;
