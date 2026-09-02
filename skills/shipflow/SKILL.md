@@ -82,6 +82,7 @@ are identical across harnesses.
 | "run regression" | `renaiss-shipflow regression --json` |
 | "cut a release" | `renaiss-shipflow release --tag vX.Y.Z --json` |
 | "sign in" | `renaiss-shipflow login` |
+| "connect with my gh token (App install not approved yet)" | `renaiss-shipflow login --with-gh-token --org <org>` — bridge (#980); GitHub events are not delivered until the App is installed |
 | "link this repo" | `renaiss-shipflow init` |
 | "list config profiles" | `renaiss-shipflow profiles` — switch with `--profile <name>` or `SHIPFLOW_PROFILE` |
 

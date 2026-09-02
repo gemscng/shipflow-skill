@@ -192,6 +192,25 @@ assumptions") goes through `renaiss-shipflow issue brief <n> --body-file
 folds the superseded text under `<details>History</details>`. A second
 intake table in a thread is a bug (#962).
 
+### Provenance — every comment says it is ShipFlow's (#980)
+
+ShipFlow may comment under a human member's own GitHub account (a
+token-mode tenant, or the operator's `gh`), so nothing is ever inferred
+from the author. Every comment ShipFlow writes ends with the visible footer
+`<sub>🤖 ShipFlow</sub>` and the hidden marker
+`<!-- shipflow:by surface=<server|cli|chatbot> -->`. The stamp is appended
+automatically at the write choke points (server `AddComment` /
+`UpdateIssueComment` / `ReplyToReviewComment` / `CreatePRReview`, CLI
+`ghIssueComment` / `ghUpdateIssueComment` / `ghCreateReview`) and ONLY
+when the body carries no `<!-- shipflow:` marker yet — a deliberately shaped
+comment (🚧 banner, judge block, reply ack, intake note, review finding) is
+unchanged. Issue and PR BODIES are not stamped: a ShipFlow-filed issue already
+carries `<!-- shipflow:triaged -->`, and the ladder below owns that shape.
+Readers keep judging by shape: any `<!-- shipflow:` marker means machinery,
+never a human decision. A reply a human types in GitHub's box carries
+neither, so every gate keeps working with one shared account. Never
+hand-write the footer or the marker.
+
 ### Issue-body ladder — every ShipFlow-filed issue body
 
 **Authoritative for EVERY issue body ShipFlow files** — loop bug-sweep /

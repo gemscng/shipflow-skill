@@ -2166,7 +2166,7 @@ var init_shipflow_contract_data = __esm(() => {
       }
     },
     markers: {
-      $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate <n> --reason` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. MATCHING SEMANTICS (issue #411 changed these deliberately — the note above used to read `Do NOT change these matching semantics`): `commentIsLoopMachinery` no longer denylists three specific markers, it matches `markerPrefix` — ANY `<!-- shipflow:` token — because a denylist of known shapes guarding an unbounded set of free-form agent prose fails OPEN on every new shape the loop invents (measured on PRs #401 and #405, which cleared a merge blocker nobody confirmed). `markerPrefix` is the OPEN token every ShipFlow marker starts with; a comment carrying any of them is machinery and can never stand in for a human decision. `loopReview` stamps the loop reviewer's verdict comment (CLI review-contract.ts renderFindingBody + `approve --comment`) — it was a CLI-local const the server could not see, which is exactly how #405 cleared its own gate. `approvedHead` is the OPEN token the approve command stamps on that same attestation comment, rendered as `<!-- shipflow:approved-head sha=<40hex> -->` (issue #637): `isApproved` / `classifyPR` / `mergeDecision` bind `shipflow-approved` to the reviewed head — a label without a matching SHA, or a missing/unreadable SHA, is not approved (fail closed). Quote-stripped and own-line-anchored. A clean rebase invalidates this slice; digest-equal keep-approval is a later product choice. `intentGateCleared` is the OPEN token on the server's attributable audit comment posted on EVERY `needs-reporter-review` removal, rendered as `<!-- shipflow:intent-gate-cleared by=<login> -->`; the CLI's intent gate reads it as the clearance artifact instead of trusting the bare `unlabeled` timeline event (see the `intentGate` section) — and reads it ANCHORED (own line, `by=<login> -->` shape) and ONLY from a bot/trusted-association author, because a bare Contains over every comment let anyone who can quote the literal disarm the gate permanently. `intentGateHint` stamps the server's one-time nudge posted when a human reply on a gated thread misses the release grammar; its presence is also how the nudge stays one-time (fail-stuck was previously invisible — the miss path only logged). `intentGateParentConfirm` is the OPEN token on the one-time nudge posted on a gated PR when a trusted confirm token landed on its parent issue instead (issue #557), rendered as `<!-- shipflow:intent-gate-parent-confirm id=<comment-id> -->`. It does NOT reuse `intentGateHint` (that marker suppresses the near-miss nudge). Presence of this token on the PR is the once-key per (PR, parent confirm). The comment never removes `needs-reporter-review`; only a token on the PR thread (or a hand label removal) does. `reworkFrom` is the OPEN-TOKEN a rework worker stamps on the comment it posts after acting on a reporter's CORRECTION of an intent-gated PR (issue #442), rendered as `<!-- shipflow:rework-from id=<comment-id> -->` — the `id=` attribute convention mirrors `precedentApplied`'s `pid=`. The CLI's `reporterCorrectionOn` reads the id back so suppression is EXACT (that comment has been answered) rather than timestamp-ordered, and counts the markers to enforce the rework ceiling; the server needs no accessor because `markerPrefix` already makes any comment carrying it machinery. It is the anti-self-loop backstop: without it a loop comment on a gated PR reads as a fresh reporter correction and the loop reworks in response to itself. `escalateOnce` is the OPEN-TOKEN the CLI stamps INSIDE the escalation banner when `issue escalate --for-pr <n> --once-reason <r>` is given, rendered as `<!-- shipflow:escalate-once pr=<n> reason=<r> -->` — the `pr=`/`reason=` attribute convention mirrors `precedentContext`'s `cat=`/`q=`. It is the PERMANENT once-key for `inbox`'s `escalateOnce` row (issue #488): the key USED to be the parent issue's live `needs-human` label, but the server's UnblockNeedsHuman removes that label on any non-bot, non-machinery comment BY DESIGN, so the only once-key was erased the moment a human replied and the row re-escalated every tick forever. A comment marker cannot be erased by a reply, and unlike a label it CARRIES THE REASON — so the invariant it enforces is `at most one escalation per (PR, reason), EVER`: a new reason on the same PR earns exactly one more, and the PR is capped at one escalation per `ESCALATE_ONCE_REASONS` entry, forever. The CLI reads it back from the PARENT issue's comments under THREE filters, ALL required, because each of the first two was measured insufficient on its own: (1) only comments the CLI's own account authored (`viewerDidAuthor`); (2) only ANCHORED — alone on its line, starting at COLUMN 0, no leading whitespace — because a quoted marker is a claim, not evidence; those two are the intent-gate audit record's rule (#411). (3) only from comments that ARE an escalation banner (`isEscalationBanner`, the same `escalationBannerHeading` prefix `findLatestEscalationComment` selects on) — added in PR #489 round 4. Filters 1+2 alone accepted an anchored marker from ANY CLI-authored comment on the parent, and the CLI writes many comments that are not banners: `issue wait --reason <text>` posts one on that very issue with LLM-composed text interpolated raw, on the path loop-mode.md mandates. That reason forged a permanent key and silently spent the one escalation the (PR, reason) pair ever earns — issue #488's exact harm through the adjacent door. Scoping the READ was chosen over neutralizing yet another writer: rounds 2 and 3 each hardened one side of this boundary and left the other open, whereas a key that counts ONLY where the single writer of a key (`formatEscalationBody`) puts one means adding a new CLI comment can never create a new forgery surface. The harvester `extractEscalateOnceMarkers` is scoped by the same predicate one hop earlier, so an unscoped harvest cannot LAUNDER a forged key out of a non-banner comment and into a banner via the `--update` carry-forward. Neutralization below stays defence in depth, not the wall. The anchor tolerated leading indentation until PR #489 round 3; that tolerance bought nothing (the renderer always emits a marker at column 0) and cost a forgery route, since four leading spaces is exactly how markdown spells a code block. Trailing whitespace and CRLF ARE tolerated — opposite polarity: a real key that fails to match reads as never-filed and re-opens the storm, and trailing space cannot smuggle a marker in. NEUTRALIZATION (the other half, PR #489 round 3): every banner is a comment the CLI's OWN account authors, so ANY free-form string folded into one is a forgery vector — an own-line marker in it reads back as a filed key and permanently suppresses an escalation a human is waiting on. So EVERY operator- or server-supplied string reaching a banner has its `<!-- shipflow:` tokens escaped to `&lt;!-- shipflow:` (readable, unmatchable): the free-text `--reason`, `--owner`, and the echoed precedent `answer`/`author`/`sourceUrl`/`category`/`fingerprint`/`id`. Round 2 neutralized the precedent answer ALONE and left `--reason` beside it raw; that asymmetry was itself the defect, so the rule is positional now — nothing free-form reaches a banner un-neutralized. The escaped replacement is DERIVED from `markerPrefix` (only the leading `<` is escaped), never a hand-written twin, so the two halves cannot drift. Whitespace collapsing runs BEFORE escaping (PR #489 round 4): the other order left a token already split across a line break unmatched, then REBUILT it into a live one — inert only because every call site happens to prefix the field, a positional accident rather than a property of the neutralizer. The two `PrecedentMatch` numerics folded into a banner (`sourceIssue`, `reuseCount`) are coerced with `Number()` at the render site: that response is an unchecked cast over server JSON, so `number` is a compile-time claim, not a fact about the bytes. Single-line fields additionally have newlines collapsed, or a value could BREAK OUT of the line the renderer composed for it and land a marker at column 0 anyway (`pid=`/`cat=` are interpolated into a marker line themselves). The RAW reason is still what `precedentContext` encodes — the server fingerprints that text — so the two must not be conflated. WRITE SIDE: `issue escalate --update` REPLACES a banner body in place, and `findLatestEscalationComment` matches ANY CLI-authored comment opening with the banner heading — which the escalate-once banner is — so the CLI carries every anchored marker on the edited body FORWARD (`preserveEscalateOnceMarkers`). Without that, an ordinary UNKEYED re-escalation of the same parent (the path the escalation contract MANDATES: `Shrink, don't stack — one live escalation per issue`) erased the key and handed that (PR, reason) back its per-tick storm forever. Related: a keyed escalation SKIPS the precedent lookup entirely. The reason it must never auto-apply is that the server's undo retires the precedent but cannot un-write a permanent marker, so an undone auto-application would park the row forever with its promised fresh escalation never arriving. PR #489 round 2 achieved that by DEMOTING the `apply` verdict after the call; round 3 moved it before, because `precedents/match` increments the reuse count and writes an `Applied` event BEFORE it returns — so demoting downstream still left the server having booked a reuse that never happened, advancing take-rate metrics and pushing the precedent toward premature re-confirmation. Not asking is the only way not to be counted. Consequence: a keyed escalation shows no `Precedent on file` suggestion; restoring that needs a non-mutating surface-only match on the SERVER. Do NOT key this off `escalationOutstanding`/`findLatestEscalationComment`: those ask whether an escalation is OUTSTANDING (issue #486), the opposite polarity of whether one was EVER FILED, and sharing a helper between the two reintroduces this bug. The server needs no accessor — `markerPrefix` already makes any comment carrying it machinery. Only the literals are single-sourced — each consumer still owns its own matching semantics. `judge`/`judgeEnd` (issue #969) bracket the loop-maintained JUDGE BLOCK at the TOP of an issue body — the four lines a human reads to decide (state · PR/blocker · enumerated replies · impact), rendered as `<!-- shipflow:judge state=<s> since=<iso> -->…<!-- shipflow:judge-end -->` and upserted in place by `issue judge <n>` at every state change so the thread never has to be scrolled to learn where the issue stands. `judge` is an OPEN token (attributes follow); `judgeEnd` is the literal closer. Body-resident, so `commentIsLoopMachinery` never sees it. `intake` stamps the ONE live intake/assumptions comment per issue that `issue brief <n>` edits in place (superseded text folds into a History details block) — the same one-live-comment rule the \uD83D\uDEA7 banner follows via `--update`.",
+      $comment: "Hidden issue-lifecycle markers + the escalation-banner literals. `triaged` is stamped on every ShipFlow-created issue so the issues.opened webhook suppresses the redundant AI Issue Triage pass (server domain.IssueAutoTriagedMarker + CLI ghIssueCreate). `loop` marks loop-progress comments — matched by the server's needs-human auto-unblock, written by the loop per the skill contract. `interpretationNote` is the deliberate-reinterpretation flag a worker embeds in a PR body when it ships an off-brief reading of the ask (issue #190): the CLI intent gate (`pr automerge`/`pr ready`, via packet.hasInterpretationSignal) treats its presence as a first-class merge blocker so the human reporter confirms before it reaches production, and the server companion pings the reporter on the resulting needs-reporter-review label. `escalationBannerEmoji` (\uD83D\uDEA7) is what the server matches with a LOOSE HasPrefix (legacy comments depend on it). `escalationBannerHeading` is the stricter prefix the CLI matches with startsWith AND the opening of the CLI's rendered banner; it MUST start with escalationBannerEmoji (parity-tested), so a CLI-posted banner always satisfies the server's loose match. `verificationManifestHeading` is the section heading text a PR author uses to declare post-deploy verification assertions (issue #207); the server matches it tolerantly (case-insensitive, ignoring leading `#` and trailing punctuation) to extract the manifest, then posts its verdict comment stamped with `verificationComment`. `precedentContext` and `precedentApplied` are the decision-precedent-store markers (issue #210, slice 3). `precedentContext` is a HIDDEN OPEN-TOKEN the CLI appends to every `issue escalate <n> --reason` banner carrying the raw ask so the server's webhook capture can fingerprint the exact same text a later `precedents/match` lookup will — rendered as `<!-- shipflow:precedent-context cat=<category> q=<base64(reason)> -->` (the `cat=`/`q=` attributes are the CLI→server convention). `precedentApplied` is the OPEN-TOKEN on the auto-application disclosure comment (`\uD83D\uDD01 Auto-resolved per your #N decision`), rendered as `<!-- shipflow:precedent-applied pid=<id> -->`; the server's undo watcher matches it with a loose Contains and reads `pid=` to know which precedent a one-word `undo`/`no` reply reverses, and `commentIsLoopMachinery` learns it so a disclosure can never itself clear needs-human/needs-reporter-review. Both are OPEN tokens (no trailing `-->` in the literal) matched with Contains, like the escalation-banner emoji is matched with HasPrefix — the render closes the tag after the attributes. MATCHING SEMANTICS (issue #411 changed these deliberately — the note above used to read `Do NOT change these matching semantics`): `commentIsLoopMachinery` no longer denylists three specific markers, it matches `markerPrefix` — ANY `<!-- shipflow:` token — because a denylist of known shapes guarding an unbounded set of free-form agent prose fails OPEN on every new shape the loop invents (measured on PRs #401 and #405, which cleared a merge blocker nobody confirmed). `markerPrefix` is the OPEN token every ShipFlow marker starts with; a comment carrying any of them is machinery and can never stand in for a human decision. `loopReview` stamps the loop reviewer's verdict comment (CLI review-contract.ts renderFindingBody + `approve --comment`) — it was a CLI-local const the server could not see, which is exactly how #405 cleared its own gate. `approvedHead` is the OPEN token the approve command stamps on that same attestation comment, rendered as `<!-- shipflow:approved-head sha=<40hex> -->` (issue #637): `isApproved` / `classifyPR` / `mergeDecision` bind `shipflow-approved` to the reviewed head — a label without a matching SHA, or a missing/unreadable SHA, is not approved (fail closed). Quote-stripped and own-line-anchored. A clean rebase invalidates this slice; digest-equal keep-approval is a later product choice. `intentGateCleared` is the OPEN token on the server's attributable audit comment posted on EVERY `needs-reporter-review` removal, rendered as `<!-- shipflow:intent-gate-cleared by=<login> -->`; the CLI's intent gate reads it as the clearance artifact instead of trusting the bare `unlabeled` timeline event (see the `intentGate` section) — and reads it ANCHORED (own line, `by=<login> -->` shape) and ONLY from a bot/trusted-association author, because a bare Contains over every comment let anyone who can quote the literal disarm the gate permanently. `intentGateHint` stamps the server's one-time nudge posted when a human reply on a gated thread misses the release grammar; its presence is also how the nudge stays one-time (fail-stuck was previously invisible — the miss path only logged). `intentGateParentConfirm` is the OPEN token on the one-time nudge posted on a gated PR when a trusted confirm token landed on its parent issue instead (issue #557), rendered as `<!-- shipflow:intent-gate-parent-confirm id=<comment-id> -->`. It does NOT reuse `intentGateHint` (that marker suppresses the near-miss nudge). Presence of this token on the PR is the once-key per (PR, parent confirm). The comment never removes `needs-reporter-review`; only a token on the PR thread (or a hand label removal) does. `reworkFrom` is the OPEN-TOKEN a rework worker stamps on the comment it posts after acting on a reporter's CORRECTION of an intent-gated PR (issue #442), rendered as `<!-- shipflow:rework-from id=<comment-id> -->` — the `id=` attribute convention mirrors `precedentApplied`'s `pid=`. The CLI's `reporterCorrectionOn` reads the id back so suppression is EXACT (that comment has been answered) rather than timestamp-ordered, and counts the markers to enforce the rework ceiling; the server needs no accessor because `markerPrefix` already makes any comment carrying it machinery. It is the anti-self-loop backstop: without it a loop comment on a gated PR reads as a fresh reporter correction and the loop reworks in response to itself. `escalateOnce` is the OPEN-TOKEN the CLI stamps INSIDE the escalation banner when `issue escalate --for-pr <n> --once-reason <r>` is given, rendered as `<!-- shipflow:escalate-once pr=<n> reason=<r> -->` — the `pr=`/`reason=` attribute convention mirrors `precedentContext`'s `cat=`/`q=`. It is the PERMANENT once-key for `inbox`'s `escalateOnce` row (issue #488): the key USED to be the parent issue's live `needs-human` label, but the server's UnblockNeedsHuman removes that label on any non-bot, non-machinery comment BY DESIGN, so the only once-key was erased the moment a human replied and the row re-escalated every tick forever. A comment marker cannot be erased by a reply, and unlike a label it CARRIES THE REASON — so the invariant it enforces is `at most one escalation per (PR, reason), EVER`: a new reason on the same PR earns exactly one more, and the PR is capped at one escalation per `ESCALATE_ONCE_REASONS` entry, forever. The CLI reads it back from the PARENT issue's comments under THREE filters, ALL required, because each of the first two was measured insufficient on its own: (1) only comments the CLI's own account authored (`viewerDidAuthor`); (2) only ANCHORED — alone on its line, starting at COLUMN 0, no leading whitespace — because a quoted marker is a claim, not evidence; those two are the intent-gate audit record's rule (#411). (3) only from comments that ARE an escalation banner (`isEscalationBanner`, the same `escalationBannerHeading` prefix `findLatestEscalationComment` selects on) — added in PR #489 round 4. Filters 1+2 alone accepted an anchored marker from ANY CLI-authored comment on the parent, and the CLI writes many comments that are not banners: `issue wait --reason <text>` posts one on that very issue with LLM-composed text interpolated raw, on the path loop-mode.md mandates. That reason forged a permanent key and silently spent the one escalation the (PR, reason) pair ever earns — issue #488's exact harm through the adjacent door. Scoping the READ was chosen over neutralizing yet another writer: rounds 2 and 3 each hardened one side of this boundary and left the other open, whereas a key that counts ONLY where the single writer of a key (`formatEscalationBody`) puts one means adding a new CLI comment can never create a new forgery surface. The harvester `extractEscalateOnceMarkers` is scoped by the same predicate one hop earlier, so an unscoped harvest cannot LAUNDER a forged key out of a non-banner comment and into a banner via the `--update` carry-forward. Neutralization below stays defence in depth, not the wall. The anchor tolerated leading indentation until PR #489 round 3; that tolerance bought nothing (the renderer always emits a marker at column 0) and cost a forgery route, since four leading spaces is exactly how markdown spells a code block. Trailing whitespace and CRLF ARE tolerated — opposite polarity: a real key that fails to match reads as never-filed and re-opens the storm, and trailing space cannot smuggle a marker in. NEUTRALIZATION (the other half, PR #489 round 3): every banner is a comment the CLI's OWN account authors, so ANY free-form string folded into one is a forgery vector — an own-line marker in it reads back as a filed key and permanently suppresses an escalation a human is waiting on. So EVERY operator- or server-supplied string reaching a banner has its `<!-- shipflow:` tokens escaped to `&lt;!-- shipflow:` (readable, unmatchable): the free-text `--reason`, `--owner`, and the echoed precedent `answer`/`author`/`sourceUrl`/`category`/`fingerprint`/`id`. Round 2 neutralized the precedent answer ALONE and left `--reason` beside it raw; that asymmetry was itself the defect, so the rule is positional now — nothing free-form reaches a banner un-neutralized. The escaped replacement is DERIVED from `markerPrefix` (only the leading `<` is escaped), never a hand-written twin, so the two halves cannot drift. Whitespace collapsing runs BEFORE escaping (PR #489 round 4): the other order left a token already split across a line break unmatched, then REBUILT it into a live one — inert only because every call site happens to prefix the field, a positional accident rather than a property of the neutralizer. The two `PrecedentMatch` numerics folded into a banner (`sourceIssue`, `reuseCount`) are coerced with `Number()` at the render site: that response is an unchecked cast over server JSON, so `number` is a compile-time claim, not a fact about the bytes. Single-line fields additionally have newlines collapsed, or a value could BREAK OUT of the line the renderer composed for it and land a marker at column 0 anyway (`pid=`/`cat=` are interpolated into a marker line themselves). The RAW reason is still what `precedentContext` encodes — the server fingerprints that text — so the two must not be conflated. WRITE SIDE: `issue escalate --update` REPLACES a banner body in place, and `findLatestEscalationComment` matches ANY CLI-authored comment opening with the banner heading — which the escalate-once banner is — so the CLI carries every anchored marker on the edited body FORWARD (`preserveEscalateOnceMarkers`). Without that, an ordinary UNKEYED re-escalation of the same parent (the path the escalation contract MANDATES: `Shrink, don't stack — one live escalation per issue`) erased the key and handed that (PR, reason) back its per-tick storm forever. Related: a keyed escalation SKIPS the precedent lookup entirely. The reason it must never auto-apply is that the server's undo retires the precedent but cannot un-write a permanent marker, so an undone auto-application would park the row forever with its promised fresh escalation never arriving. PR #489 round 2 achieved that by DEMOTING the `apply` verdict after the call; round 3 moved it before, because `precedents/match` increments the reuse count and writes an `Applied` event BEFORE it returns — so demoting downstream still left the server having booked a reuse that never happened, advancing take-rate metrics and pushing the precedent toward premature re-confirmation. Not asking is the only way not to be counted. Consequence: a keyed escalation shows no `Precedent on file` suggestion; restoring that needs a non-mutating surface-only match on the SERVER. Do NOT key this off `escalationOutstanding`/`findLatestEscalationComment`: those ask whether an escalation is OUTSTANDING (issue #486), the opposite polarity of whether one was EVER FILED, and sharing a helper between the two reintroduces this bug. The server needs no accessor — `markerPrefix` already makes any comment carrying it machinery. Only the literals are single-sourced — each consumer still owns its own matching semantics. `judge`/`judgeEnd` (issue #969) bracket the loop-maintained JUDGE BLOCK at the TOP of an issue body — the four lines a human reads to decide (state · PR/blocker · enumerated replies · impact), rendered as `<!-- shipflow:judge state=<s> since=<iso> -->…<!-- shipflow:judge-end -->` and upserted in place by `issue judge <n>` at every state change so the thread never has to be scrolled to learn where the issue stands. `judge` is an OPEN token (attributes follow); `judgeEnd` is the literal closer. Body-resident, so `commentIsLoopMachinery` never sees it. `intake` stamps the ONE live intake/assumptions comment per issue that `issue brief <n>` edits in place (superseded text folds into a History details block) — the same one-live-comment rule the \uD83D\uDEA7 banner follows via `--update`. `by` (issue #980) is the OPEN-TOKEN provenance stamp every ShipFlow-written comment carries, rendered `<!-- shipflow:by surface=<server|cli|chatbot> -->` and appended, together with the visible `provenanceFooter` (`<sub>\uD83E\uDD16 ShipFlow</sub>`), at the write choke points (server GitHubHelper.AddComment / UpdateIssueComment / ReplyToReviewComment / CreatePRReview, CLI ghIssueComment / ghUpdateIssueComment / ghCreateReview; the chatbot relay stamps its own `surface=chatbot` one hop earlier) ONLY when the body carries no `markerPrefix` token yet — so every present and future writer is machinery by construction, not by audit, and an already-marked body comes out byte-identical. It exists because a token-mode tenant acts as a human member's own account: authorship cannot tell ShipFlow from the operator, so `commentIsLoopMachinery` (which already keys on `markerPrefix`) and the CLI's shape-based reply finders are the only discriminators, and an unmarked writer would read as a human and could clear a gate. `provenanceFooter` is the human-visible half; it lives inside `<sub>` and never on its own line, so the anchored-marker readers (escalate-once, intent-gate-cleared) ignore it. A reply a human types in GitHub's comment box never carries either.",
       triaged: "<!-- shipflow:triaged -->",
       loop: "<!-- shipflow:loop -->",
       loopReview: "<!-- shipflow:loop-review -->",
@@ -2188,7 +2188,9 @@ var init_shipflow_contract_data = __esm(() => {
       approvedHead: "<!-- shipflow:approved-head",
       judge: "<!-- shipflow:judge",
       judgeEnd: "<!-- shipflow:judge-end -->",
-      intake: "<!-- shipflow:intake -->"
+      intake: "<!-- shipflow:intake -->",
+      by: "<!-- shipflow:by",
+      provenanceFooter: "\uD83E\uDD16 ShipFlow"
     },
     intentGate: {
       $comment: "The release rule for the #190 intent gate (`needs-reporter-review`), single-sourced so the server's matcher, the CLI's ping comment and the skill docs cannot drift (issue #411 — the doc promised a rule the code did not implement). POLARITY: the label is a merge blocker held until a human CONFIRMS, so this is an AUTHORIZATION control, not a sentiment classifier. THE RULE: the quote-stripped body must reduce to EXACTLY ONE meaningful line — blank lines and pure-decoration lines (a `---` rule) are scaffolding, but a fenced block and everything in it COUNT as content — and that line, with leading/trailing markdown decoration and punctuation trimmed, must EQUAL one of `confirmationTokens` (case-insensitive, emoji skin-tone/variation modifiers normalised away). Nothing else clears the gate: the token is the WHOLE reply, or it does not confirm. WHY THE WHOLE BODY (PR #441, third review pass): whole-line equality judged `block[0]` and ignored everything after it, so a bare token on line 1 confirmed whatever followed. Measured through the real handler, all of `Confirmed`+`But scope it to the CLI only`, `\uD83D\uDC4D`+`not this implementation though`, `yes`+`Actually no, revert it`, `LGTM`+`hold the merge, this is wrong`, `confirmed`+`- but only the CLI half` CLEARED, and so did the blank-line forms `confirmed`+`Actually no, revert it` and `Yes`+`Actually no, revert it`. Every one is #411's exact harm: a merge on a reading the reporter had just narrowed. A SINGLE newline was enough, and that settles the scoping question — the rule ALREADY refuses extra words on the token's own line (`Confirmed — ship it` is armed), so accepting arbitrary text one newline later is incoherent: the same act, the same ambiguity, the opposite answer. Drawing the boundary at the line or at the paragraph only moves the hole down; this defect has now appeared at three granularities. Requiring the whole body is NOT the denylist the veto list was — it never inspects what follows, it refuses when anything follows. THE PRICE: `confirmed` plus a thank-you parks too. Accepted — commentary goes in a separate comment, costing one extra reply, never a wrong merge. A pasted fenced block counts as content here (unlike in the `N: answer` block parser, which skips fences whole so a fence's inner line can never be promoted to the judged line): `/confirm` over a fenced `no` was measured clearing, and a token with an attachment is not a token alone. WHY AN EXACT TOKEN AND NOT A GRAMMAR (PR #441, second review pass): the previous design matched an affirmative OPENING WORD and then vetoed a list of negations and contrastives found later in the paragraph. That is a denylist of known shapes guarding an unbounded set of free-form natural language — the exact anti-pattern this issue exists to close, re-earned inside its own fix. Negation-after-affirmative has no finite enumeration: `Confirmed the bug still repros`, `Yes, change the copy first` and `ok 1 - test passed` all survived a 27-word veto list, and each one FAILED OPEN — it merged a reading nobody confirmed. An exact token has the correct failure polarity for EVERY input, not merely for the inputs somebody remembered to enumerate: anything that is not the token leaves the gate armed, which one more reply fixes. Tokens must be unambiguous ALONE, as a whole line — that is what excludes `ok`, `sure`, `agreed`, `correct` and every bare imperative (`ship`, `merge`, `approve`, `proceed`), which read as consent or as an instruction depending on the sentence they open. The `N: answer` reply protocol also releases the gate, but it is held to the SAME stands-alone invariant as the token path (PR #441, fourth review pass): the decision block must BE the whole quote-stripped reply (no meaningful line outside it, a pasted fence included), EVERY line of that block must itself be a decision line, EVERY answer must be a `confirmationTokens` entry, and an escalation banner must actually be outstanding on the thread. Both positional checks are load-bearing and neither alone suffices — measured by ablation, the length test alone leaves `1: yes` + NEWLINE + `Actually no, revert it` clearing (same paragraph, so the counts match) and the per-line test alone leaves `1: yes` + BLANK LINE + `revert it` clearing (a later paragraph the block never reached). Reading the answers had fixed WHAT the block said but not WHERE it stopped, so this door stayed fail-OPEN at both granularities after the token path had closed both — and the escalation-outstanding guard does not mitigate it, because answering `N:` is exactly what a reporter does on an escalated thread — a content-agnostic `^\\\\d+:` match let `1: no, redo it` clear the blocker it was rejecting, and a pasted stack-trace line `10: undefined is not a function` do it by accident. FAIL-STUCK IS THE PRICE, and it is paid deliberately in two places, BOTH of which must state that the token is the whole reply or a reporter cannot discover it: `releaseHint` is the exact sentence the CLI puts on the PR when it APPLIES the label, and the server posts a one-time `intentGateHint` nudge naming the tokens whenever a human reply misses — including when the commenter's `author_association` is untrusted, which was the one branch that failed stuck in silence. Both render the token list FROM `confirmationTokens`, never from a hand-written copy, so neither can drift from the matcher — preserve that. Removing the label by hand stays the human override. Do NOT re-add a free-text grammar here to make it friendlier — narrowing the openers is safe, widening them is how this control dies. AUDIT AUTHOR (issue #537): `auditAuthorSlug` is the GitHub App slug that posts the `intentGateCleared` audit comment — the ONE bot identity the CLI's `isIntentGateAuditComment` trusts. It exists because the reader had to move to REST to see botness at all: `gh issue view --json comments` is GraphQL, where a Bot's `login` carries NO `[bot]` suffix and a GitHub App's `authorAssociation` is `NONE`, so the `[bot]`-suffix test the CLI shipped could never fire and the #411 clearance path was dead from the day it landed (measured on PR #489, gh 2.95.0). REST's `user.type == \"Bot\"` restores the signal — but botness ALONE is not identity: `gemini-code-assist[bot]` and `chatgpt-codex-connector[bot]` are also `type: Bot` and comment on these very PRs, so trusting any bot would trade a dead control for a forgeable one. The CLI therefore requires `user.type == \"Bot\"` AND the login, normalised (trailing `[bot]` stripped, case-folded), to EQUAL this slug. It is a ONE-ENTRY ALLOWLIST on purpose: this is an authorization predicate on a merge gate, and the failure mode of a wrong entry must be fail-STUCK (one more reporter reply, or a hand removal of the label — the standing human override), never fail-OPEN. A self-hosted deployment that installs the App under a different slug edits THIS key — never a literal in the CLI, and never by widening the rule to \"any bot\". The `[bot]` suffix is stripped rather than required because the two APIs disagree about it; the suffix is a rendering detail of REST, not an identity. A PAT-backed machine user has `type: \"User\"` and keeps clearing through the OWNER/MEMBER/COLLABORATOR association branch, which this key does not touch.",
@@ -3702,6 +3704,9 @@ class ShipFlowClient {
   async exchangeGhToken(ghToken) {
     return this.request("POST", `/api/v1/auth/token`, { access_token: ghToken });
   }
+  async connectWithToken(ghToken, org) {
+    return this.request("POST", `/api/v1/auth/token-connect`, { github_token: ghToken, org });
+  }
   async refreshJWT(refreshToken) {
     return this.request("POST", `/api/v1/auth/refresh`, { refreshToken });
   }
@@ -4200,6 +4205,24 @@ var init_sh = __esm(() => {
   spawnImpl = spawnSync;
 });
 
+// src/provenance.ts
+function renderProvenanceMarker(surface = PROVENANCE_SURFACE_CLI) {
+  const s = surface.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "") || PROVENANCE_SURFACE_CLI;
+  return `${SHIPFLOW_CONTRACT.markers.by} surface=${s} -->`;
+}
+function stampProvenance(body, surface = PROVENANCE_SURFACE_CLI) {
+  if (!body.trim() || body.includes(SHIPFLOW_CONTRACT.markers.markerPrefix))
+    return body;
+  return `${body.replace(/\n+$/, "")}
+
+<sub>${SHIPFLOW_CONTRACT.markers.provenanceFooter}</sub>
+${renderProvenanceMarker(surface)}`;
+}
+var PROVENANCE_SURFACE_CLI = "cli";
+var init_provenance = __esm(() => {
+  init_shipflow_contract_data();
+});
+
 // src/gh.ts
 function ghInstalled() {
   try {
@@ -4620,7 +4643,7 @@ function ghIssueRemoveLabel(repo, number, label) {
   } catch {}
 }
 function ghIssueComment(repo, number, body) {
-  _exec(`gh issue comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(body)}`, { stdio: "ignore" });
+  _exec(`gh issue comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(stampProvenance(body))}`, { stdio: "ignore" });
 }
 function ghLabelRemovals(repo, number, label) {
   return ghIssueTimelineSignals(repo, number, label).removals;
@@ -4749,11 +4772,16 @@ function ghIssueComments(repo, number) {
 }
 function ghUpdateIssueComment(commentId, body) {
   const m = "mutation($id:ID!,$b:String!){updateIssueComment(input:{id:$id,body:$b}){issueComment{id}}}";
-  _exec(`gh api graphql -f query=${shellQuote(m)} -f id=${shellQuote(commentId)} -f b=${shellQuote(body)}`, { stdio: "ignore" });
+  _exec(`gh api graphql -f query=${shellQuote(m)} -f id=${shellQuote(commentId)} -f b=${shellQuote(stampProvenance(body))}`, { stdio: "ignore" });
 }
 function ghCreateReview(repo, number, payload) {
   const [owner, name] = repo.split("/");
-  _exec(`gh api repos/${shellQuote(owner)}/${shellQuote(name)}/pulls/${number}/reviews --method POST --input -`, { input: JSON.stringify(payload), stdio: ["pipe", "ignore", "pipe"] });
+  const stamped = {
+    ...payload,
+    body: stampProvenance(payload.body),
+    comments: payload.comments.map((c) => ({ ...c, body: stampProvenance(c.body) }))
+  };
+  _exec(`gh api repos/${shellQuote(owner)}/${shellQuote(name)}/pulls/${number}/reviews --method POST --input -`, { input: JSON.stringify(stamped), stdio: ["pipe", "ignore", "pipe"] });
 }
 function ghReviewThreads(repo, number) {
   const [owner, name] = repo.split("/");
@@ -4801,6 +4829,7 @@ var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_REA
 var init_gh = __esm(() => {
   init_sh();
   init_shipflow_contract_data();
+  init_provenance();
   init_pr_state();
   init_config();
   init_sh();
@@ -5351,7 +5380,59 @@ init_client();
 init_config();
 init_prompts();
 init_helpers();
-function formatNoTenantHelp(body) {
+
+// src/github-credential.ts
+function credentialMode(github) {
+  if (!github)
+    return "none";
+  if (github.mode)
+    return github.mode;
+  return github.connected ? "app" : "none";
+}
+function day(iso) {
+  return iso ? iso.slice(0, 10) : "";
+}
+function formatGitHubCredentialLine(github) {
+  const mode = credentialMode(github);
+  if (mode === "app") {
+    const parts = ["GitHub App"];
+    if (github?.installationId)
+      parts.push(`installation ${github.installationId}`);
+    parts.push("events delivered");
+    if (github?.tokenIdle && github.account)
+      parts.push(`idle token from @${github.account}`);
+    return parts.join(" · ");
+  }
+  if (mode === "token") {
+    const parts = ["personal token"];
+    if (github?.account)
+      parts.push(`@${github.account}`);
+    if (github?.tokenType)
+      parts.push(github.tokenType);
+    parts.push(github?.tokenExpiresAt ? `expires ${day(github.tokenExpiresAt)}` : "no expiry");
+    const status = github?.tokenStatus ?? "active";
+    const icon = { active: "✅", expiring: "⚠️", revoked: "⛔", insufficient: "⚠️" };
+    parts.push(`${icon[status] ?? "❔"} ${status}`);
+    if (status !== "active" && github?.tokenDetail)
+      parts.push(github.tokenDetail);
+    parts.push("events: not delivered");
+    return parts.join(" · ");
+  }
+  return "not connected";
+}
+function formatTokenConnectSummary(org, github) {
+  const who = github?.account ? `@${github.account}` : "your GitHub account";
+  const kind = github?.tokenType ? ` (${github.tokenType}${github.tokenExpiresAt ? `, expires ${day(github.tokenExpiresAt)}` : ", no expiry"})` : "";
+  return [
+    `Connected ${org} with a personal token: ShipFlow acts as ${who}${kind}.`,
+    "GitHub events are not delivered in token mode — workflows run when triggered from the CLI, the dashboard, or a schedule.",
+    "Install the GitHub App when an org admin approves it; ShipFlow switches over automatically and keeps the token idle."
+  ].join(`
+`);
+}
+
+// src/commands/login.ts
+function parseNoTenantPayload(body) {
   let payload;
   try {
     payload = JSON.parse(body);
@@ -5359,6 +5440,12 @@ function formatNoTenantHelp(body) {
     return null;
   }
   if (payload?.error?.code !== "NO_TENANT")
+    return null;
+  return payload;
+}
+function formatNoTenantHelp(body) {
+  const payload = parseNoTenantPayload(body);
+  if (!payload)
     return null;
   const appSlug = payload.appSlug || "renaissshipflow";
   const installUrl = `https://github.com/apps/${appSlug}/installations/new`;
@@ -5377,12 +5464,60 @@ function formatNoTenantHelp(body) {
   } else {
     lines.push("", "No organizations were found on your GitHub account — install the app on one to get started.");
   }
-  lines.push("", "Once the app is installed, run `renaiss-shipflow login` again.");
+  lines.push("", "Waiting on an org admin to approve the App? Bridge the gap with your gh token instead (#980):", "  renaiss-shipflow login --with-gh-token --org <org>", "ShipFlow then acts as your GitHub account; GitHub events are not delivered until the App is installed.", "", "Once the app is installed, run `renaiss-shipflow login` again.");
   return lines.join(`
 `);
 }
+function pickTokenConnectOrg(orgs, explicit) {
+  if (explicit?.trim())
+    return explicit.trim();
+  const candidates = (orgs ?? []).filter((o) => !o.installed && !o.connected);
+  return candidates.length === 1 ? candidates[0].login : null;
+}
+function tokenConnectCandidates(orgs) {
+  return (orgs ?? []).filter((o) => !o.installed && !o.connected).map((o) => o.login);
+}
+function tokenConnectTargetAfterExchange(tenants, org) {
+  const o = org?.trim();
+  if (!o) {
+    const have = tenants.map((t) => t.tenant.githubOrg).join(", ");
+    return {
+      kind: "note",
+      message: `You already belong to ${tenants.length} ShipFlow tenant${tenants.length === 1 ? "" : "s"} (${have}); ` + "pass --org <login> to connect another org with your gh token."
+    };
+  }
+  const hit = tenants.find((t) => t.tenant.githubOrg.toLowerCase() === o.toLowerCase());
+  return hit ? { kind: "already", org: hit.tenant.githubOrg } : { kind: "connect", org: o };
+}
+function formatTokenConnectError(status, body) {
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    parsed = undefined;
+  }
+  const code = parsed?.error?.code;
+  if (status === 422 || code === "GITHUB_TOKEN_INSUFFICIENT") {
+    const problems = parsed?.report?.problems ?? [];
+    const lines = ["Your gh token does not cover what ShipFlow needs for this org:"];
+    for (const p of problems)
+      lines.push(`  • ${p}`);
+    if (problems.length === 0 && parsed?.error?.message)
+      lines.push(`  • ${parsed.error.message}`);
+    lines.push("", "Fix: `gh auth refresh -s repo,read:org` (classic scopes), or make sure your account can reach the org's repositories, then retry.");
+    return lines.join(`
+`);
+  }
+  if (status === 409 || code === "TENANT_EXISTS") {
+    return parsed?.error?.message || "This organization is already connected to ShipFlow. Run `renaiss-shipflow login` without --with-gh-token.";
+  }
+  if (status === 503 || code === "TOKEN_STORAGE_UNAVAILABLE") {
+    return "This ShipFlow server cannot store tokens: SECRET_ENCRYPTION_KEY is not configured. Ask whoever runs it to set one.";
+  }
+  return null;
+}
 function registerLoginCommand(program2) {
-  program2.command("login").description("Sign in to ShipFlow (uses gh auth)").option("--no-gh-bootstrap", "Don't auto-run `gh auth login` if gh isn't logged in").action(runAction(async (opts) => {
+  program2.command("login").description("Sign in to ShipFlow (uses gh auth)").option("--no-gh-bootstrap", "Don't auto-run `gh auth login` if gh isn't logged in").option("--with-gh-token", "If no ShipFlow org exists for your account yet, connect one with your gh token — a bridge while the GitHub App install awaits an org admin's approval (#980)").option("--org <login>", "Org to connect with --with-gh-token (defaults to your only org without the App)").action(runAction(async (opts) => {
     if (!ghInstalled()) {
       console.error("gh (GitHub CLI) is not installed. See https://cli.github.com/");
       process.exit(1);
@@ -5405,20 +5540,35 @@ function registerLoginCommand(program2) {
     const apiUrl = resolveApiUrl(program2.opts().apiUrl);
     const client = new ShipFlowClient({ baseUrl: apiUrl });
     let result;
+    let connectedLine = "";
     try {
       result = await client.exchangeGhToken(ghToken);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 403) {
-        const help = formatNoTenantHelp(err.body);
-        if (help) {
-          console.error(help);
-          process.exit(1);
+      if (opts.withGhToken) {
+        const target = tokenConnectTargetAfterExchange(result.tenants, opts.org);
+        if (target.kind === "connect") {
+          const connected = await connectOrgWithGhToken(client, ghToken, target.org);
+          result = connected.result;
+          connectedLine = connected.line;
+        } else if (target.kind === "note") {
+          console.error(target.message);
         }
       }
-      throw err;
+    } catch (err) {
+      const payload = err instanceof ApiError && err.status === 403 ? parseNoTenantPayload(err.body) : null;
+      if (!payload)
+        throw err;
+      if (!opts.withGhToken) {
+        console.error(formatNoTenantHelp(err instanceof ApiError ? err.body : "") ?? String(err));
+        process.exit(1);
+      }
+      const org = await pickOrgForTokenConnect(payload, opts.org);
+      const connected = await connectOrgWithGhToken(client, ghToken, org);
+      result = connected.result;
+      connectedLine = connected.line;
     }
-    let chosen = result.tenants[0];
-    if (result.tenants.length > 1) {
+    const wanted = opts.org?.trim().toLowerCase();
+    let chosen = result.tenants.find((t) => wanted && t.tenant.githubOrg.toLowerCase() === wanted) ?? result.tenants[0];
+    if (result.tenants.length > 1 && !(wanted && chosen.tenant.githubOrg.toLowerCase() === wanted)) {
       const idx = await promptSelect("You belong to multiple ShipFlow tenants. Pick one:", result.tenants.map((t) => `${t.tenant.displayName} (${t.tenant.githubOrg})`));
       chosen = result.tenants[idx];
     }
@@ -5445,12 +5595,42 @@ Git identity captured: ${cfg.gitName} <${cfg.gitEmail}> — apply per-repo with 
     saveConfig(cfg);
     const profile = activeProfile();
     const where = profile ? ` [profile: ${profile}]` : "";
+    if (connectedLine)
+      console.log(connectedLine);
     console.log(`Signed in as @${process.env.USER ?? "you"} for ${chosen.tenant.displayName} (${apiUrl})${where}.${gitLine}`);
     if (!profile && result.tenants.length > 1) {
       console.log(`Tip: you belong to multiple tenants — keep them side by side with profiles, e.g.
 ` + `  renaiss-shipflow --profile ${chosen.tenant.githubOrg} login`);
     }
   }));
+}
+async function pickOrgForTokenConnect(payload, explicitOrg) {
+  const picked = pickTokenConnectOrg(payload.orgs, explicitOrg);
+  if (picked)
+    return picked;
+  const candidates = tokenConnectCandidates(payload.orgs);
+  if (candidates.length === 0) {
+    console.error(`No org to connect: every GitHub org on your account already has the ShipFlow App or a tenant.
+` + "Run `renaiss-shipflow login` without --with-gh-token, or name one explicitly with --org <login>.");
+    process.exit(1);
+  }
+  const idx = await promptSelect("Which org should ShipFlow connect with your gh token?", candidates);
+  return candidates[idx];
+}
+async function connectOrgWithGhToken(client, ghToken, org) {
+  try {
+    const connected = await client.connectWithToken(ghToken, org);
+    return { result: connected, line: formatTokenConnectSummary(org, connected.github) };
+  } catch (err) {
+    if (err instanceof ApiError) {
+      const msg = formatTokenConnectError(err.status, err.body);
+      if (msg) {
+        console.error(msg);
+        process.exit(1);
+      }
+    }
+    throw err;
+  }
 }
 
 // src/commands/git-identity.ts
@@ -5741,6 +5921,7 @@ init_helpers();
 import { readdirSync as readdirSync3, readFileSync as readFileSync2 } from "node:fs";
 import { join as join3 } from "node:path";
 import { homedir as homedir3 } from "node:os";
+init_client();
 
 // src/cli-drift.ts
 import { execSync as execSync4 } from "node:child_process";
@@ -5997,6 +6178,29 @@ function installedPluginVersion(cacheBase = join3(homedir3(), ".claude", "plugin
     return null;
   }
 }
+async function probeGitHubCredential(apiUrl) {
+  const auth = resolveAuthToken();
+  const creds = loadCredentials();
+  if (!auth || !creds)
+    return null;
+  let timer;
+  try {
+    const client = new ShipFlowClient({ baseUrl: apiUrl, ...buildClientAuth(auth, creds) });
+    const org = await Promise.race([
+      client.getOrg("default"),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timed out after 8s")), 8000);
+      })
+    ]);
+    return { line: formatGitHubCredentialLine(org.github), github: org.github };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    return { line: `unknown (${error})`, error };
+  } finally {
+    if (timer)
+      clearTimeout(timer);
+  }
+}
 async function probeServer(apiUrl) {
   try {
     const res = await fetch(`${apiUrl}/api/v1/version`, { signal: AbortSignal.timeout(8000) });
@@ -6010,7 +6214,11 @@ function registerVersionCommand(program2, cliVersion2) {
     const cli = cliVersion2;
     const plugin = installedPluginVersion();
     const apiUrl = resolveApiUrl(opts.apiUrl);
-    const [server, registry] = await Promise.all([probeServer(apiUrl), fetchRegistryLatest()]);
+    const [server, registry, githubCred] = await Promise.all([
+      probeServer(apiUrl),
+      fetchRegistryLatest(),
+      probeGitHubCredential(apiUrl)
+    ]);
     const drift = classifyDrift(cli, registry.latest);
     const channel = resolveCliChannel();
     const updaterPath = channel === "launcher-cache" ? resolveLauncherUpdater() : null;
@@ -6018,7 +6226,8 @@ function registerVersionCommand(program2, cliVersion2) {
     const mainCli = readMainCliVersion();
     const publishLag = buildPublishLag(mainCli.version, registry.latest, mainCli.error ?? registry.error);
     const warnings = driftWarnings({ cli, plugin, registryLatest: registry.latest, registryError: registry.error, drift, channel, updaterPath, publishLag });
-    emit(opts, { cli, plugin, server: { url: apiUrl, ...server }, registry, drift, channel, remediation, warnings, publishLag }, () => {
+    const github = githubCred ? { ...githubCred.github, line: githubCred.line, ...githubCred.error ? { error: githubCred.error } : {} } : null;
+    emit(opts, { cli, plugin, server: { url: apiUrl, ...server }, registry, drift, channel, remediation, warnings, publishLag, github }, () => {
       const serverCell = server.error ? `unreachable (${server.error})` : `${server.version ? `${server.version} · ` : ""}${(server.revision || "unknown").slice(0, 12)}${server.dirty ? "+dirty" : ""}${server.buildTime ? ` · built ${server.buildTime}` : ""}`;
       const driftIcon = { current: "✅", stale: "⛔", ahead: "\uD83E\uDDEA", unknown: "❔" };
       const lagIcon = { "in-sync": "✅", "main-ahead": "⚠️", "npm-ahead": "ℹ️", unknown: "❔" };
@@ -6028,7 +6237,8 @@ function registerVersionCommand(program2, cliVersion2) {
         ["plugin/skill", plugin ?? "not installed"],
         [`server (${apiUrl})`, serverCell],
         ["npm latest", registry.latest ? `${registry.latest} — drift ${driftIcon[drift]} ${drift}` : `unreachable (${registry.error}) — drift ❔ unknown`],
-        ["origin/main CLI", lagCell]
+        ["origin/main CLI", lagCell],
+        ...githubCred ? [["github credential", githubCred.line]] : []
       ]))
         console.log(line);
       for (const w of warnings)
