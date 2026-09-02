@@ -6476,6 +6476,75 @@ function lintIssueOutcome(body) {
     "body has no Example/Repro and no Expected result/Outcome — add one concrete scenario " + "and the observable behavior once it lands (issue-body ladder, message-style.md)"
   ];
 }
+var MAX_TITLE_CHARS = 60;
+var TITLE_AREA_PREFIX = /^\s*\[[^\]\n]{1,40}\]\s*/;
+var TITLE_BARE_IDENTIFIER = /^[\w./:#@\-()[\]<>]+$/;
+function lintIssueTitle(title) {
+  const t = title.trim();
+  if (!t)
+    return [];
+  const problems = [];
+  const chars = [...t].length;
+  if (chars > MAX_TITLE_CHARS) {
+    problems.push(`title is ${chars} chars — say the user-visible outcome in ≤${MAX_TITLE_CHARS}`);
+  }
+  if (TITLE_AREA_PREFIX.test(t)) {
+    problems.push('title opens with a "[…]" prefix — area rides on a label, not the title');
+  }
+  if (/[.。]$/.test(t) && !/\.\.\.$/.test(t) && !/…$/.test(t)) {
+    problems.push("title ends with a period — a headline, not a sentence");
+  }
+  if (!/\s/.test(t) && t.length >= 3 && TITLE_BARE_IDENTIFIER.test(t)) {
+    problems.push(`title is only a path/identifier ("${t.slice(0, 40)}") — say what the reader observes, then where`);
+  }
+  return problems;
+}
+var INTERNAL_JARGON = [
+  "R3",
+  "R4",
+  "WIP",
+  "dual-read",
+  "cutover",
+  "fail-closed",
+  "merge-repoint",
+  "once-key",
+  "escalate-once",
+  "reconcile",
+  "intake",
+  "precedent",
+  "slice",
+  "fan-out",
+  "harvest",
+  "auto-qa",
+  "feature map"
+];
+var esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function jargonUsePattern(term) {
+  const flags = /^[A-Z0-9]+$/.test(term) ? "g" : "gi";
+  return new RegExp(`(?<![\\w-])${esc(term)}(?![\\w-])(?<gloss>\\s*(?:\\(|—|–|:\\s))?`, flags);
+}
+function lintJargonGloss(body) {
+  const prose = stripNonProse(body);
+  if (!prose.trim())
+    return [];
+  const problems = [];
+  for (const term of INTERNAL_JARGON) {
+    const re = jargonUsePattern(term);
+    let used = false;
+    let glossed = false;
+    for (const m of prose.matchAll(re)) {
+      used = true;
+      if (m.groups?.gloss) {
+        glossed = true;
+        break;
+      }
+    }
+    if (used && !glossed) {
+      problems.push(`internal term "${term}" used without a gloss — add 3–6 words of why on its first use, e.g. \`${term} (…)\` (message-style.md, "Internal shorthand carries a gloss")`);
+    }
+  }
+  return problems;
+}
 var MAX_VISIBLE_BODY_LINES = 50;
 function lintBodyLength(body) {
   const visible = visibleLineCount(body);
@@ -6925,10 +6994,10 @@ ${lines.join(`
 `)}
 ${JUDGE_END}`;
 }
-var esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-var BLOCK_RE = new RegExp(`${esc(JUDGE_OPEN)} state=[^\\n]*-->\\n[\\s\\S]*?${esc(JUDGE_END)}\\n*`);
+var esc2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var BLOCK_RE = new RegExp(`${esc2(JUDGE_OPEN)} state=[^\\n]*-->\\n[\\s\\S]*?${esc2(JUDGE_END)}\\n*`);
 function parseJudgeBlock(body) {
-  const m = new RegExp(`${esc(JUDGE_OPEN)} state=(\\S+) since=(\\S+) -->`).exec(body);
+  const m = new RegExp(`${esc2(JUDGE_OPEN)} state=(\\S+) since=(\\S+) -->`).exec(body);
   if (!m || !isJudgeState(m[1]))
     return null;
   return { state: m[1], since: m[2] };
@@ -7050,7 +7119,7 @@ function duplicatePreflight(repo, title, opts) {
   process.exit(EXIT_DUPLICATE_ISSUE);
 }
 function createIssueGuarded(args, opts, { skipPreflight = false } = {}) {
-  const { repo, title, body, labels, assigneesAuto = false } = args;
+  const { repo, title, body, labels, assigneesAuto = false, lint = [] } = args;
   const requested = args.assignees ?? [];
   if (!skipPreflight)
     duplicatePreflight(repo, title, opts);
@@ -7058,7 +7127,7 @@ function createIssueGuarded(args, opts, { skipPreflight = false } = {}) {
     ghEnsureLabel(repo, l);
   const created = ghIssueCreate(repo, title, body, labels);
   const assignees = attachAssignees(repo, created, requested, assigneesAuto);
-  emit(opts, { number: created.number, url: created.url, labels, assignees }, () => console.log(assignees.length > 0 ? `${created.url} — assigned to ${assignees.map((a) => `@${a}`).join(", ")}` : created.url));
+  emit(opts, { number: created.number, url: created.url, labels, assignees, lint }, () => console.log(assignees.length > 0 ? `${created.url} — assigned to ${assignees.map((a) => `@${a}`).join(", ")}` : created.url));
 }
 function attachAssignees(repo, created, requested, auto) {
   if (requested.length === 0)
@@ -7140,7 +7209,8 @@ function registerIssueCommand(program2) {
     const repo = opts.repo ?? ctx.project.repoFullName;
     const title = opts.title ?? await promptText("Title: ");
     let body = opts.body === "-" ? await readStdin() : opts.body ?? "";
-    for (const p of [...lintMessageBody(body), ...lintBodyLength(body), ...lintIssueOutcome(body)])
+    const lint = [...lintIssueTitle(title), ...lintMessageBody(body), ...lintBodyLength(body), ...lintIssueOutcome(body), ...lintJargonGloss(body)];
+    for (const p of lint)
       console.warn(`⚠️  body lint: ${p}`);
     duplicatePreflight(repo, title, opts);
     const { assignees, auto: assigneesAuto } = resolveCreateAssignees(opts.assignee, opts.assign === false);
@@ -7187,7 +7257,7 @@ function registerIssueCommand(program2) {
 
 ${section}` : section;
     }
-    createIssueGuarded({ repo, title, body, labels: opts.label ?? [], assignees, assigneesAuto }, opts, { skipPreflight: true });
+    createIssueGuarded({ repo, title, body, labels: opts.label ?? [], assignees, assigneesAuto, lint }, opts, { skipPreflight: true });
   }));
   issue.command("work <number>").description("Exclusively claim an issue (lock + dump context); exits 3 when another agent holds it").option("--repo <fullname>", "Override target repo").option("--agent <name>", "Agent label recorded on the claim (default: $SHIPFLOW_AGENT or hostname)").option("--ttl <minutes>", "Claim lifetime in minutes (default 120)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);

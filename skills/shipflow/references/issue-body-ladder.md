@@ -8,6 +8,14 @@ auto-qa issues, Phase-B follow-up sub-issues, feature-relate auto-issues,
 harvest-filed issues, hand-filed `/shipflow-new-issue`. Issue #387 is the
 live demo. Build top-down:
 
+**Title first** — the one line every reader sees in a list (#969; measured
+on renaiss-os-index: 27 of 60 titles ran past 70 chars, 22 opened with a
+`[area]` prefix that duplicated a label). ≤60 chars, the user-visible
+outcome first (`Card page shows USD before the profile currency`), area on
+a label never a `[area]` prefix, no trailing period, never a bare path or
+identifier. `issue create` warns (and returns the list as `lint` under
+`--json`); the loop fixes the text before filing, never after a reader saw it.
+
 | # | Element | When | Shape |
 |---|---|---|---|
 | 1 | **Status header** | always — the first line (the loop's Judge block, when present, sits above it — #969) | one blockquote line: `> <priority emoji> **P<n> · <type> · <area> · effort <S/M/L>** · <wave/source>` |

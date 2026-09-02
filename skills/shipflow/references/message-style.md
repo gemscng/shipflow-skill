@@ -80,7 +80,12 @@ into. These rules exist because each was violated at measurable cost:
 - **Internal shorthand carries a gloss.** A contract/issue reference a
   repo newcomer can't decode gets 3–6 words of why:
   `#431 fail-closed (an empty map is a failed load)` — not bare
-  `#431 fail-closed`.
+  `#431 fail-closed`. The fixed list (`INTERNAL_JARGON` in message-lint.ts:
+  R3/R4, dual-read, cutover, fail-closed, merge-repoint, once-key,
+  escalate-once, reconcile, intake, precedent, slice, WIP, fan-out,
+  harvest, auto-qa, feature map) is linted on `issue create`: a term's
+  first use in visible prose must carry `(…)`, ` — …` or `: …` on the same
+  line (12 of 60 renaiss-os-index bodies used ≥3 unglossed, #969).
 - **Hashes are 12 chars visible.** Full digests belong in hidden markers.
 
 ### Before → after — every change-describing message (#960)
@@ -164,6 +169,14 @@ intake table in a thread is a bug (#962).
 auto-qa issues, Phase-B follow-up sub-issues, feature-relate auto-issues,
 harvest-filed issues, hand-filed `/shipflow-new-issue`. Issue #387 is the
 live demo. Build top-down:
+
+**Title first** — the one line every reader sees in a list (#969; measured
+on renaiss-os-index: 27 of 60 titles ran past 70 chars, 22 opened with a
+`[area]` prefix that duplicated a label). ≤60 chars, the user-visible
+outcome first (`Card page shows USD before the profile currency`), area on
+a label never a `[area]` prefix, no trailing period, never a bare path or
+identifier. `issue create` warns (and returns the list as `lint` under
+`--json`); the loop fixes the text before filing, never after a reader saw it.
 
 | # | Element | When | Shape |
 |---|---|---|---|
