@@ -3097,6 +3097,74 @@ function lintEscalationReason(reason) {
   }
   return problems;
 }
+function parseDecisionReplies(body) {
+  if (!body)
+    return [];
+  const byNumber = new Map;
+  const marker = /(?:^|,)\s*(\d+)\s*:\s*([^]*?)(?=,\s*\d+\s*:|$)/g;
+  for (const line of body.split(`
+`)) {
+    if (!/^\s*\d+\s*:/.test(line))
+      continue;
+    for (const m of line.matchAll(marker)) {
+      const answer = m[2].trim();
+      if (answer)
+        byNumber.set(Number(m[1]), answer);
+    }
+  }
+  return [...byNumber].map(([n, answer]) => ({ n, answer }));
+}
+function parseDecisionRepliesLoose(body) {
+  if (!body)
+    return [];
+  const byNumber = new Map;
+  for (const line of body.split(`
+`)) {
+    if (/^\s*\d+\s*:/.test(line)) {
+      for (const d of parseDecisionReplies(line))
+        byNumber.set(d.n, d.answer);
+      continue;
+    }
+    const m = DECISION_LOOSE_LINE.exec(line);
+    if (!m)
+      continue;
+    const answer = m[2].trim();
+    if (answer)
+      byNumber.set(Number(m[1]), answer);
+  }
+  return [...byNumber].map(([n, answer]) => ({ n, answer }));
+}
+function ackCell(s) {
+  let out = neutralizeInline(s.replace(/`/g, ""));
+  if ([...out].length > 80)
+    out = [...out].slice(0, 79).join("").trimEnd() + "…";
+  return out;
+}
+function renderReplyAck(decisions) {
+  const read = decisions.length ? decisions.map((d) => "`" + `${d.n}: ${ackCell(d.answer)}` + "`").join(" · ") : "a free-text decision";
+  return `✅ **Reply received** — read as ${read}; the loop resumes on its next pass.
+
+${SHIPFLOW_CONTRACT.markers.loop}`;
+}
+function findHumanReplyAfterEscalation(comments) {
+  let banner = -1;
+  comments.forEach((c, i) => {
+    if (c.viewerDidAuthor !== false && isEscalationBanner(c.body))
+      banner = i;
+  });
+  if (banner < 0)
+    return null;
+  for (let i = comments.length - 1;i > banner; i--) {
+    const c = comments[i];
+    if ((c.authorLogin ?? "").endsWith("[bot]"))
+      continue;
+    const typed = stripQuotedLines(c.body).trim();
+    if (!typed || isEscalationBanner(typed) || typed.includes(SHIPFLOW_CONTRACT.markers.markerPrefix))
+      continue;
+    return { index: i, body: typed };
+  }
+  return null;
+}
 function encodePrecedentContext(category, reason) {
   const q = Buffer.from(reason, "utf8").toString("base64");
   return `${SHIPFLOW_CONTRACT.markers.precedentContext} cat=${category} q=${q} -->`;
@@ -3222,13 +3290,13 @@ function formatEscalationBody(reason, opts = {}) {
     why,
     "",
     "---",
-    `<sub>Reply \`1: <answer>\` per numbered item (\`1.\` works too) — the **\`${SHIPFLOW_CONTRACT.labels.names.needsHuman}\`** label clears automatically and the loop resumes.` + (rationale ? ` Why a human — ${opts.category}: ${rationale}` : "") + "</sub>",
+    `<sub>Reply \`1: <answer>\` per numbered item (\`1.\` / \`1)\` work too) — the **\`${SHIPFLOW_CONTRACT.labels.names.needsHuman}\`** label clears automatically, the loop acknowledges and resumes.` + (rationale ? ` Why a human — ${opts.category}: ${rationale}` : "") + "</sub>",
     ...opts.category ? [encodePrecedentContext(opts.category, reason.trim())] : [],
     ...opts.once ? [renderEscalateOnceMarker(opts.once.pr, opts.once.reason)] : []
   ].join(`
 `);
 }
-var ESCALATION_CATEGORIES, ACTION_SECTION_LINE_CAP = 10, ACTION_LINE_WORD_LIMIT, RE_ESCAPE, ESCALATION_BANNER;
+var ESCALATION_CATEGORIES, ACTION_SECTION_LINE_CAP = 10, ACTION_LINE_WORD_LIMIT, DECISION_LOOSE_LINE, RE_ESCAPE, ESCALATION_BANNER;
 var init_escalation_format = __esm(() => {
   init_shipflow_contract_data();
   init_pr_state();
@@ -3241,6 +3309,7 @@ var init_escalation_format = __esm(() => {
     invalid: "The issue looks invalid, duplicate, or out of scope; closing someone's issue is a judgment " + "call the loop leaves to a human."
   };
   ACTION_LINE_WORD_LIMIT = SHIPFLOW_CONTRACT.readability.visibleLineWordCap;
+  DECISION_LOOSE_LINE = /^\s*(\d+)(?:[.)]\s+|\s+[-–]\s+)(\S.*)$/;
   RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
   ESCALATION_BANNER = `${SHIPFLOW_CONTRACT.markers.escalationBannerHeading} — the loop is parked here until you reply.`;
 });
@@ -7538,6 +7607,24 @@ ${section}` : section;
         console.warn(`intake gate: could not label #${i.number} (still gated this tick): ${e.message}`);
       }
     }
+    const healed = [];
+    for (const i of open) {
+      if (!i.labels.some((l) => l.name === NEEDS_HUMAN_LABEL))
+        continue;
+      try {
+        const reply = findHumanReplyAfterEscalation(ghIssueComments(repo, i.number));
+        if (!reply)
+          continue;
+        const decisions = parseDecisionRepliesLoose(reply.body);
+        ghIssueRemoveLabel(repo, i.number, NEEDS_HUMAN_LABEL);
+        i.labels = i.labels.filter((l) => l.name !== NEEDS_HUMAN_LABEL);
+        ghIssueComment(repo, i.number, renderReplyAck(decisions));
+        healed.push({ number: i.number, decisions });
+        console.warn(`\uD83D\uDEA7 #${i.number}: human replied after the escalation — cleared "${NEEDS_HUMAN_LABEL}", acknowledged (${decisions.length ? decisions.map((d) => `${d.n}: ${d.answer}`).join(" · ") : "free text"}), competing this tick.`);
+      } catch (e) {
+        console.warn(`needs-human heal failed for #${i.number} (still parked): ${e.message}`);
+      }
+    }
     for (const i of open) {
       if (!i.labels.some((l) => l.name === WAITING_ON_LABEL) || claimed.has(i.number))
         continue;
@@ -7584,11 +7671,11 @@ ${section}` : section;
       }
       const issueData = ghIssueView(repo, cand.number);
       const t = await loadTriage(ctx, repo, cand.number);
-      printIssueContext(issueData, t.triage, repo, ctx.project, opts, t.unavailable);
+      printIssueContext(issueData, t.triage, repo, ctx.project, opts, t.unavailable, healed.length ? { healed } : {});
       return;
     }
     const reason = raced === candidates.length && raced > 0 ? "all_candidates_raced" : "no_actionable_issues";
-    emit(opts, { issue: null, reason }, () => console.log(reason === "all_candidates_raced" ? `⏳ All ${raced} candidate(s) were claimed by other agents this tick — retry next tick.` : "✅ No actionable issues — every open issue is claimed or filtered out."), { pretty: true });
+    emit(opts, { issue: null, reason, ...healed.length ? { healed } : {} }, () => console.log(reason === "all_candidates_raced" ? `⏳ All ${raced} candidate(s) were claimed by other agents this tick — retry next tick.` : "✅ No actionable issues — every open issue is claimed or filtered out."), { pretty: true });
     process.exit(4);
   }));
   issue.command("done <number>").description("Release an issue (signal only)").option("--reason <reason>", "Why you're releasing it (e.g. blocked, finished)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
@@ -7895,8 +7982,8 @@ ${block}`));
     }
   }));
 }
-function printIssueContext(issueData, triage, repo, project, fmt = {}, triageUnavailable = false) {
-  emit(fmt, { issue: issueData, triage, triageUnavailable, project }, () => printIssueContextHuman(issueData, triage, repo, triageUnavailable), { pretty: true });
+function printIssueContext(issueData, triage, repo, project, fmt = {}, triageUnavailable = false, extra = {}) {
+  emit(fmt, { issue: issueData, triage, triageUnavailable, project, ...extra }, () => printIssueContextHuman(issueData, triage, repo, triageUnavailable), { pretty: true });
 }
 function printIssueContextHuman(issueData, triage, repo, triageUnavailable) {
   console.log(`Issue #${issueData.number} — "${issueData.title}"`);

@@ -296,13 +296,28 @@ human**` / evidence comments):
   / do it") or a structured per-decision reply; question/chatter-only stays
   escalated.
 - **Structured answers** — lines `N: answer` (`1: frankfurter`, `3: me`) or
-  the one-line comma form. Parse with `parseDecisionReplies`
-  (`apps/renaissshipflow-cli/src/escalation-format.ts`); mark answered items
+  the one-line comma form; **`1. answer`, `1) answer` and `1 - answer` are
+  read the same way** (#969 — a human who answers a numbered list with a
+  numbered list is answering; renaiss-os-index #1535's "1. All / 2. OK Me"
+  sat unread for 15 days). Parse with `parseDecisionRepliesLoose`
+  (`apps/renaissshipflow-cli/src/escalation-format.ts`; the strict
+  `parseDecisionReplies` stays the grammar for merge-authorization
+  confirmations only); mark answered items
   resolved by editing the live 🚧 comment in place with the **existing**
   `renaiss-shipflow issue escalate <n> --update` (PR #59 — no new CLI/server
   surface). **Clear `needs-human` only when ALL are answered** — a partial
   reply stays escalated and keeps its claim. Bake answers into the brief as
   **settled**.
+- **Acknowledged within a tick, always** — the human must never wonder
+  whether the reply was read. The server webhook clears `needs-human` and
+  posts one line, `✅ **Reply received** — read as \`1: All\` · \`2: OK Me\`;
+  the loop resumes on its next pass.` (ending in `<!-- shipflow:loop -->`,
+  so it is machinery). Where the webhook never fires (#798), **`issue next`
+  heals it**: any needs-human issue whose latest 🚧 banner has a human
+  comment after it gets the label cleared, the same ack posted, and
+  competes that tick (`healed[]` in `--json`). A reply the loop cannot
+  parse into `N:` items is acknowledged as "a free-text decision" and
+  handled by the Trigger rule above.
 - **Act** — remove `needs-human`; **add the durable marker label
   `loop-proceed`** (the persistent record a fresh-context reviewer reads on
   a later re-pick). Reviewer's prior `reject` = **overruled**. Brief the
