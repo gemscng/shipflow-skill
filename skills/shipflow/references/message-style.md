@@ -135,15 +135,18 @@ the body, edited in place at every state change**, between
 
 | Line | Carries | Rule |
 |---|---|---|
-| header | state · decision count · since | states: ⚪ Queued · 🟢 Loop working · 🔵 PR in review · ⏸ Waiting on you · 🔴 Blocked externally · ✅ Merged. `since` resets only when the state changes (`--since <iso>` to backdate from the label/comment that set it) |
-| **State** | meter `▰▰▰▱▱` (claimed 1 · PR open 3 · approved 4 · merged 5) · `PR #n <standing>` · `blocked: <gate> → #<owner issue>` | empty parts omitted, never blank |
+| header | state · decision count · `unblocks N issues` · since · checked | states: ⚪ Queued · 🟢 Loop working · 🔵 PR in review · ⏸ Waiting on you · 🔴 Blocked externally · ✅ Merged. `since` resets only when the state changes (`--since <iso>` to backdate from the label/comment that set it); `checked` is the heartbeat — refreshed on every upsert, so a stale `since` never reads as abandoned; `unblocks N` (`--fan-out`) is how many ⏳ issues transitively wait on this decision — triage by that number |
+| **State** | meter · `PR #n <standing>` · `blocked: <chain>` | meter = acceptance progress `▰▰▱▱▱ 2/5 accepted` when the ladder has a checklist, else the pipeline stage (claimed 1 · PR open 3 · approved 4 · merged 5); a blocked issue's chain is walked from its ⏳ markers to the root: `#1548 → #1544 → waits on you (1: A → …)` — the root's first reply in parentheses; empty parts omitted, never blank |
 | **Decide** | every reply the human can type, each with its consequence | `waiting` requires ≥1; omitted otherwise |
 | **Impact** | what it costs if nobody acts | hoisted from the ladder's `**Impact**` line unless given |
 
 **Never hand-write it** — `renaiss-shipflow issue judge <n> --state <s> [--pr
-N --pr-status "…"] [--blocker "… → #M"] [--decide "1: done → …"]… [--impact
-"…"]` renders, validates (waiting without a reply, blocked without a blocker,
-a decision without `N: ` or `→` are refused) and upserts it idempotently.
+N --pr-status "…"] [--blocker "… → #M"] [--fan-out] [--decide "1: done → …"]…
+[--impact "…"]` renders, validates (waiting without a reply, blocked with
+neither a `--blocker` nor a ⏳ marker to walk, a decision without `N: ` or `→`
+are refused) and upserts it idempotently. `--state blocked` without
+`--blocker` walks the waiting-on chain itself (one read per hop, ≤4 hops);
+`--fan-out` on a waiting block counts the ⏳ issues that hang on it.
 `--json` reports `linesToAction` — the reviewer's self-verify metric, target
 ≤ 4. The loop runs it at claim (`working`), PR open (`review`), gate blocked
 (`blocked`), escalation (`waiting`, decisions = the escalation's replies) and

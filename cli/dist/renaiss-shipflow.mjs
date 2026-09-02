@@ -6959,7 +6959,7 @@ function validateJudgeSpec(spec) {
     p.push("state=waiting needs at least one --decide `N: reply → consequence` — the reader must know what to type");
   }
   if (spec.state === "blocked" && !spec.blocker?.trim()) {
-    p.push('state=blocked needs --blocker "<gate/dependency> → #<issue>"');
+    p.push('state=blocked needs a blocker — pass --blocker "<gate> → #<issue>", or park the issue with `issue wait --on` so the chain can be walked');
   }
   if (spec.state === "review" && !spec.pr) {
     p.push("state=review needs --pr <n>");
@@ -6977,14 +6977,20 @@ function renderJudgeBlock(spec) {
   const head = [`${emoji} **${label}**`];
   if (spec.decisions.length)
     head.push(`${spec.decisions.length} decision${spec.decisions.length === 1 ? "" : "s"}`);
+  if (spec.unblocks)
+    head.push(`unblocks ${spec.unblocks} issue${spec.unblocks === 1 ? "" : "s"}`);
   head.push(`since ${shortTime(spec.since)}`);
+  head.push(`checked ${shortTime(spec.checked ?? new Date().toISOString())}`);
   const lines = [`> ${head.join(" · ")}`];
   const state = [];
+  const acc = spec.acceptance;
+  const useAcceptance = !!acc && acc.total > 0 && spec.progress == null;
+  const gauge = useAcceptance ? `${meter2(Math.round(acc.done / acc.total * 5))} ${acc.done}/${acc.total} accepted` : meter2(judgeProgress(spec));
   if (spec.pr)
     state.push(`PR #${spec.pr}${spec.prStatus?.trim() ? ` ${judgeCell(spec.prStatus)}` : ""}`);
   if (spec.blocker?.trim())
     state.push(`blocked: ${judgeCell(spec.blocker)}`);
-  lines.push(`> **State** ${meter2(judgeProgress(spec))}${state.length ? ` ${state.join(" · ")}` : ""}`);
+  lines.push(`> **State** ${gauge}${state.length ? `${useAcceptance ? " · " : " "}${state.join(" · ")}` : ""}`);
   if (spec.decisions.length)
     lines.push(`> **Decide** ${spec.decisions.map((d) => "`" + judgeCell(d).replace(/`/g, "") + "`").join(" · ")}`);
   if (spec.impact?.trim())
@@ -7016,6 +7022,20 @@ function extractImpact(body) {
   const m = /^\*\*Impact\*\*\s+(.+?)\s*$/m.exec(rest);
   return m ? m[1].trim() : undefined;
 }
+function extractAcceptance(body) {
+  const rest = body.replace(BLOCK_RE, "");
+  let done = 0;
+  let total = 0;
+  for (const line of rest.split(`
+`)) {
+    if (/^\s*[-*]\s+\[[xX]\]\s/.test(line)) {
+      done++;
+      total++;
+    } else if (/^\s*[-*]\s+\[ \]\s/.test(line))
+      total++;
+  }
+  return { done, total };
+}
 function linesToAction(body) {
   const lines = body.split(`
 `);
@@ -7027,6 +7047,92 @@ function linesToAction(body) {
   }
   const cue = lines.findIndex((l) => /^>\s*\*\*Decide\*\*/.test(l) || /action needed|remedy:|unblock:/i.test(l));
   return cue >= 0 ? cue + 1 : -1;
+}
+
+// src/judge-chain.ts
+function nextHop(issue, repo) {
+  const dep = extractWaitingOnDep(issue.comments);
+  if (!dep)
+    return null;
+  if (dep.repo !== repo)
+    return { crossRepo: `${dep.repo}#${dep.number}` };
+  return { number: dep.number };
+}
+function rootVerdict(issue) {
+  if (issue.state === "closed")
+    return "closed — loop should re-admit";
+  const labels = new Set(issue.labels);
+  if (labels.has(NEEDS_HUMAN_LABEL))
+    return "waits on you";
+  if (labels.has(NEEDS_REPORTER_APPROVAL_LABEL))
+    return "reporter approval";
+  if (labels.has(IN_PROGRESS_LABEL))
+    return "loop working";
+  return "queued";
+}
+function walkWaitingChain(start, repo, fetch2, maxDepth = 4) {
+  const hops = [start];
+  const seen = new Set([start]);
+  let cur = fetch2(start);
+  if (!cur)
+    return { hops, root: "unknown", rootIssue: null };
+  for (let depth = 0;depth < maxDepth; depth++) {
+    const next = nextHop(cur, repo);
+    if (next === null)
+      return { hops, root: rootVerdict(cur), rootIssue: cur };
+    if ("crossRepo" in next)
+      return { hops, root: "cross-repo", rootIssue: cur, crossRepo: next.crossRepo };
+    if (seen.has(next.number)) {
+      hops.push(next.number);
+      return { hops, root: "cycle", rootIssue: null };
+    }
+    seen.add(next.number);
+    hops.push(next.number);
+    const n = fetch2(next.number);
+    if (!n)
+      return { hops, root: "unknown", rootIssue: null };
+    cur = n;
+  }
+  return { hops, root: rootVerdict(cur), rootIssue: cur };
+}
+function firstDecideReply(body) {
+  if (!body)
+    return;
+  const lines = body.split(`
+`);
+  const open = lines.findIndex((l) => l.startsWith(`${JUDGE_OPEN} state=`));
+  if (open < 0)
+    return;
+  const end = lines.findIndex((l, i) => i > open && l.startsWith(JUDGE_END));
+  const decide = lines.find((l, i) => i > open && (end < 0 || i < end) && /^>\s*\*\*Decide\*\*/.test(l));
+  const m = decide ? /`([^`]+)`/.exec(decide) : null;
+  return m ? m[1].trim() : undefined;
+}
+function renderChain(chain, hint) {
+  const parts = chain.hops.map((n) => `#${n}`);
+  if (chain.crossRepo)
+    parts.push(chain.crossRepo);
+  let tail = chain.root;
+  if (chain.root === "cross-repo")
+    tail = "another repo — not tracked here";
+  if (hint && (chain.root === "waits on you" || chain.root === "reporter approval"))
+    tail += ` (${hint})`;
+  return `${parts.join(" → ")} → ${tail}`;
+}
+function fanOut(root, repo, waiting, rootIssue, maxDepth = 4) {
+  const byNumber = new Map(waiting.map((i) => [i.number, i]));
+  if (rootIssue)
+    byNumber.set(root, rootIssue);
+  const fetch2 = (n) => byNumber.get(n) ?? null;
+  let count = 0;
+  for (const issue of waiting) {
+    if (issue.number === root)
+      continue;
+    const chain = walkWaitingChain(issue.number, repo, fetch2, maxDepth);
+    if (chain.hops.slice(1).includes(root))
+      count++;
+  }
+  return count;
 }
 
 // src/intake-note.ts
@@ -7544,7 +7650,7 @@ ${formatPrecedentSuggestion(precedent)}`;
     }, () => console.log(`\uD83D\uDEA7 #${number} escalated${updated ? " (existing \uD83D\uDEA7 comment updated)" : ""} → labelled "${NEEDS_HUMAN_LABEL}"${owner ? `, owner @${owner}` : ""}${surfaced ? ", precedent on file surfaced" : ""}${released ? " and claim released" : " (claim kept — loop skips it this run)"}.`));
   }));
   const collectDecisions = (v, prev) => prev.concat([v]);
-  issue.command("judge <number>").description(`Upsert the Judge block at the TOP of the issue body — ≤4 lines a human reads to decide: state, PR/blocker, the replies to type, impact (issue #969). Idempotent; "since" survives while the state is unchanged. States: ${JUDGE_STATES.join(" | ")}.`).requiredOption("--state <state>", `One of ${JUDGE_STATES.join(", ")}`).option("--pr <number>", "The PR carrying the fix (required for state=review)").option("--pr-status <text>", 'PR standing in ≤8 words: "green (CI 2/2, scan clean)", "approved", "CI red"').option("--blocker <text>", 'What stops it and who owns that: "feature-map gate → #965" (required for state=blocked)').option("--decide <reply>", 'Repeatable. A reply the human can type + its consequence: "1: done → loop re-reviews" (≥1 required for state=waiting)', collectDecisions, []).option("--impact <text>", "What it costs if nobody acts (default: hoisted from the body's **Impact** line)").option("--progress <0-5>", "Override the pipeline meter (default derived: claimed 1 · PR open 3 · approved 4 · merged 5)").option("--since <iso>", "When the current state began (default: kept from the existing block while the state is unchanged, else now)").option("--repo <fullname>", "Override target repo").option("--dry-run", "Render and report without editing the issue").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+  issue.command("judge <number>").description(`Upsert the Judge block at the TOP of the issue body — ≤4 lines a human reads to decide: state, PR/blocker, the replies to type, impact (issue #969). Idempotent; "since" survives while the state is unchanged. States: ${JUDGE_STATES.join(" | ")}.`).requiredOption("--state <state>", `One of ${JUDGE_STATES.join(", ")}`).option("--pr <number>", "The PR carrying the fix (required for state=review)").option("--pr-status <text>", 'PR standing in ≤8 words: "green (CI 2/2, scan clean)", "approved", "CI red"').option("--blocker <text>", 'What stops it and who owns that: "feature-map gate → #965". For state=blocked without it, the ⏳ waiting-on chain is walked and rendered: "#1548 → #1544 → waits on you"').option("--fan-out", 'state=waiting: count the open ⏳ waiting-on issues that transitively wait on this one and show "unblocks N issues" in the header').option("--decide <reply>", 'Repeatable. A reply the human can type + its consequence: "1: done → loop re-reviews" (≥1 required for state=waiting)', collectDecisions, []).option("--impact <text>", "What it costs if nobody acts (default: hoisted from the body's **Impact** line)").option("--progress <0-5>", "Override the pipeline meter (default derived: claimed 1 · PR open 3 · approved 4 · merged 5)").option("--since <iso>", "When the current state began (default: kept from the existing block while the state is unchanged, else now)").option("--repo <fullname>", "Override target repo").option("--dry-run", "Render and report without editing the issue").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     if (!isJudgeState(opts.state))
@@ -7560,15 +7666,46 @@ ${formatPrecedentSuggestion(precedent)}`;
     if (opts.since != null && Number.isNaN(Date.parse(opts.since)))
       throw new UsageError(`--since must be an ISO timestamp (got ${JSON.stringify(opts.since)})`);
     const since = opts.since != null ? new Date(opts.since).toISOString() : existing && existing.state === opts.state ? existing.since : new Date().toISOString();
+    const toChainIssue = (n, view) => ({
+      number: n,
+      title: view.title,
+      state: /closed/i.test(view.state) ? "closed" : "open",
+      labels: view.labels.map((l) => l.name),
+      body: view.body,
+      comments: ghIssueComments(repo, n).map((c) => ({ body: c.body, viewerDidAuthor: !!c.viewerDidAuthor }))
+    });
+    const fetchIssue = (n) => {
+      try {
+        return toChainIssue(n, n === number ? current : ghIssueView(repo, n));
+      } catch {
+        return null;
+      }
+    };
+    let blocker = opts.blocker;
+    let chain = null;
+    if (opts.state === "blocked" && !blocker?.trim()) {
+      const walked = walkWaitingChain(number, repo, fetchIssue);
+      if (walked.hops.length > 1 || walked.crossRepo) {
+        chain = renderChain(walked, firstDecideReply(walked.rootIssue?.body));
+        blocker = chain;
+      }
+    }
+    let unblocks;
+    if (opts.fanOut && opts.state === "waiting") {
+      const waiting = ghIssueList(repo, "open", 100, undefined, WAITING_ON_LABEL).filter((i) => i.number !== number).map((i) => toChainIssue(i.number, i));
+      unblocks = fanOut(number, repo, waiting, toChainIssue(number, current));
+    }
     const spec = {
       state: opts.state,
       since,
       pr,
       prStatus: opts.prStatus,
-      blocker: opts.blocker,
+      blocker,
       decisions: opts.decide,
       impact: opts.impact ?? extractImpact(current.body ?? ""),
-      progress
+      progress,
+      acceptance: extractAcceptance(current.body ?? ""),
+      unblocks
     };
     const problems = validateJudgeSpec(spec);
     if (problems.length)
@@ -7580,7 +7717,7 @@ ${formatPrecedentSuggestion(precedent)}`;
     if (!opts.dryRun)
       ghIssueEditBody(repo, number, body);
     const lines = linesToAction(body);
-    emit(opts, { number, state: spec.state, since, pr: pr ?? null, decisions: spec.decisions.length, linesToAction: lines, updated: existing != null, dryRun: !!opts.dryRun, block }, () => console.log(`${opts.dryRun ? "(dry-run) " : ""}Judge block ${existing ? "updated" : "added"} on #${number}: state=${spec.state}, lines-to-action ${lines < 0 ? "none" : lines}.
+    emit(opts, { number, state: spec.state, since, pr: pr ?? null, decisions: spec.decisions.length, chain, unblocks: unblocks ?? null, acceptance: spec.acceptance, linesToAction: lines, updated: existing != null, dryRun: !!opts.dryRun, block }, () => console.log(`${opts.dryRun ? "(dry-run) " : ""}Judge block ${existing ? "updated" : "added"} on #${number}: state=${spec.state}, lines-to-action ${lines < 0 ? "none" : lines}.
 
 ${block}`));
   }));

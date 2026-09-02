@@ -500,8 +500,9 @@ change, never by hand:
 | admitted, not yet claimed (intake passed) | `issue judge <n> --state queued` — tells the reader nothing is asked of them |
 | claimed (`issue work` / `issue next`) | `issue judge <n> --state working` |
 | PR opened / re-pushed | `issue judge <n> --state review --pr <pr> --pr-status "CI pending"` → later `"green (CI 2/2, scan clean)"` / `"approved"` |
-| gate can't run, dependency open | `issue judge <n> --state blocked --blocker "<gate> → #<owner issue>"` |
-| escalated (right after the escalation posts) | `issue judge <n> --state waiting --pr <pr> --decide "1: done → loop re-reviews" --decide "1: skip → loop parks this"` — one `--decide` per reply the footer accepts |
+| parked on a dependency (`issue wait --on`) | `issue judge <n> --state blocked` — no `--blocker`: the ⏳ chain is walked to its root (`#1548 → #1544 → waits on you (…)`) |
+| gate can't run (no ⏳ marker) | `issue judge <n> --state blocked --blocker "<gate> → #<owner issue>"` |
+| escalated (right after the escalation posts) | `issue judge <n> --state waiting --pr <pr> --fan-out --decide "1: done → loop re-reviews" --decide "1: skip → loop parks this"` — one `--decide` per reply the footer accepts; `--fan-out` shows how many parked issues this decision unblocks |
 | merged (A's automerge) | `issue judge <n> --state merged --pr <pr>` |
 
 `--json` returns `linesToAction`; > 4 means the block is missing or a
