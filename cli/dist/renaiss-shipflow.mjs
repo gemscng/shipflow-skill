@@ -4944,6 +4944,11 @@ function getOrg(cmd) {
 function getFormat(cmd) {
   return resolveFormat(cmd.opts());
 }
+function requireFlagWhenMachine(opts, flag, value) {
+  if ((opts.json || opts.yaml) && value === undefined) {
+    throw new UsageError(`${flag} is required with --json/--yaml`);
+  }
+}
 function resolveMeLogin(context) {
   const me = ghCurrentLogin();
   if (!me) {
@@ -7639,6 +7644,7 @@ function renderReadmitBody(dep) {
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
   issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--assignee <login...>", "Assignee(s) for the new issue (@me = the gh login). Default under pickup-scope=assigned: the current login — assignment is the queueing gesture (#600), so an unassigned filing is invisible to `issue next`").option("--no-assign", "File UNASSIGNED, overriding the pickup-scope=assigned auto-assign default — the per-invocation opt-out for a human filing a backlog item that the loop should NOT pick up. Mutually exclusive with --assignee").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    requireFlagWhenMachine(opts, "--title", opts.title);
     const shots = opts.screenshot ?? [];
     const shotCaptions = opts.screenshotCaption ?? [];
     const shotErr = validateScreenshotSelection(shots, shotCaptions);
@@ -12146,6 +12152,7 @@ init_helpers();
 import { execSync as execSync7 } from "node:child_process";
 function registerReleaseCommand(program2) {
   program2.command("release").description("Trigger a ShipFlow release (patch_notes + regression + downstream workflows)").option("--tag <tag>", "Release tag (e.g. v0.7.3)").option("--base-tag <tag>", "Previous tag (auto-detect if omitted)").option("--env <env>", "Target environment (staging|prod)").option("--wait", "Block and stream status until terminal").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    requireFlagWhenMachine(opts, "--tag", opts.tag);
     const { creds, client, project } = await loadCtx(program2);
     const tag = opts.tag ?? await promptText("Tag (e.g. v0.7.3): ");
     const baseTag = opts.baseTag ?? safeLatestTag();
