@@ -59,6 +59,7 @@ are identical across harnesses.
 | "what should I work on" | `renaiss-shipflow issue next --json` |
 | "what needs follow-up on my PRs" | `renaiss-shipflow inbox --json` |
 | "feature map" / "what features exist" | `renaiss-shipflow features --json` |
+| "regenerate feature map" / empty-map | `renaiss-shipflow features generate --json` |
 | "standing priorities" | `renaiss-shipflow priorities --json` (human-edited `docs/PRIORITIES.md`) |
 | "loop through issues and fix them" / `/shipflow-loop` | Loop mode → `references/loop-mode.md` |
 | "escalate #42 to a human" | `renaiss-shipflow issue escalate 42 --reason "..." --category <cat>` — categories, `--update`, and the `--for-pr`/`--once-reason` once-key: `references/loop-mode.md` |
@@ -140,8 +141,10 @@ Only when the user explicitly asks to loop through and fix issues autonomously
 (or `/shipflow-loop`): read `references/loop-mode.md` and follow it — a thin
 orchestrator dispatching each item to fresh-context subagents, governed by the
 policy knobs in `config list`. Load `loop-setup.md` once per run (tick 0 /
-before the cycle), not every tick. Everything else stays a single command from
-the table above. Companions: `loop-setup.md` (run start), `loop-worker.md` /
+before the cycle), not every tick. Every tick opens with the **usage gate**
+(`bin/shipflow-usage check`, default stop at 90% of the 5-hour or weekly
+Claude limit — loop-mode.md § "Usage gate"). Everything else stays a single
+command from the table above. Companions: `loop-setup.md` (run start), `loop-worker.md` /
 `loop-reviewer.md` (role contracts), `browser-testing.md`, `bug-taxonomy.md`,
 `qa-report.md`, `pr-feedback.md`, `conflict-resolution.md`.
 

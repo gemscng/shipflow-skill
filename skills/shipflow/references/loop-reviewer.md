@@ -16,7 +16,8 @@ features sharing paths/layers (the regression risk).
 **Fail closed on a missing map (issue #431).** A `features --json` result
 that exits non-zero, carries `degraded[]`, or lists **0 features** is a
 **hard error** — not an empty project. Do not review as if the map was
-consulted. Re-run, or `request_changes` naming the un-run feature-map step.
+consulted. Restore with `renaiss-shipflow features generate --json`, then
+re-run; else `request_changes` naming the un-run feature-map step.
 
 ## Mode 1 — issue intake
 

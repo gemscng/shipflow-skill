@@ -21,12 +21,15 @@ file's real section headings (§) — follow them there, never from memory.
 | `watch=<dur>` | override the re-run interval (default `15m`) |
 | `cap=N` | how many PRs to open per pass before pausing; `cap=all` drains the queue |
 | `concurrency=N` | max issues/PRs worked at once (#744); `concurrency=1` = fully serial |
+| `usage-max=N` | do not start a tick once the Claude 5-hour **or** weekly usage is at/above N% (default **90**) |
 | anything else | an `issue next` filter (e.g. `--label bug`) |
 
 **Cap precedence:** a user `cap=N` token → `$SHIPFLOW_LOOP_CAP` → **5**.
 **Concurrency precedence:** a user `concurrency=N` token →
 `$SHIPFLOW_LOOP_CONCURRENCY` → **3**. Not a CLI preference — do not
 `config get` / `config set` a `loop-concurrency` key (unknown key, exit 1).
+**Usage-max precedence:** a user `usage-max=N` token →
+`$SHIPFLOW_LOOP_USAGE_MAX` → **90**. Also invocation-only.
 
 ## The tick — skeleton (each step lives in loop-mode.md at the § named)
 
@@ -41,24 +44,37 @@ file's real section headings (§) — follow them there, never from memory.
    through the three roles — thin orchestrator, mandatory reviewer, worker —
    as fresh subagents: § "Policies — the three knobs (set once, then trust
    them)" · § "Roles — three subagents the orchestrator dispatches".
-3. **Tick 1 only — the Initial Plan (pass ledger)** before ANY dispatch
+3. **Usage gate — EVERY tick, first thing, before the plan and before ANY
+   dispatch.** Run
+   `"$PLUGIN_DIR/bin/shipflow-usage" check --text`
+   (`PLUGIN_DIR=$(ls -d ~/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/null | sort -V | tail -1)`).
+   Pass `--max N` only for an explicit `usage-max=N` token; otherwise the
+   tool reads `$SHIPFLOW_LOOP_USAGE_MAX`, then 90.
+   Exit **3** = at/over the threshold → post
+   `⏸ paused · usage <reason> ≥ N% · next check at the next tick` and **end
+   the tick** — nothing else runs, the cron stays. Exit **2** = cannot tell →
+   continue, say so in the summary line, and on tick 1 run
+   `shipflow-usage install-statusline` (idempotent, never overwrites a
+   foreign statusLine). Exit **0** → continue. § "Usage gate — TICK-START,
+   before everything else".
+4. **Tick 1 only — the Initial Plan (pass ledger)** before ANY dispatch
    (#600); later ticks print only the summary line: § "The cycle — each tick".
-4. CLI drift check: § "0. CLI drift check — POST-MERGE (primary) · TICK-START
+5. CLI drift check: § "0. CLI drift check — POST-MERGE (primary) · TICK-START
    (backstop)".
-5. **A. Reconcile in-flight first** — `renaiss-shipflow inbox --json`, act per
+6. **A. Reconcile in-flight first** — `renaiss-shipflow inbox --json`, act per
    `state` until nothing `needsAttention`: § "A. Reconcile in-flight work —
    dispatch a worker per item" and § "Reconcile playbook (inbox `state` →
    action)".
-6. **B. Admit new work** under the WIP limit, up to `cap` per pass and up to
+7. **B. Admit new work** under the WIP limit, up to `cap` per pass and up to
    `loop-concurrency` (default 3) issues in flight at once — serial Picks,
    parallel fix workers each in its own worktree (#744) —
    `renaiss-shipflow issue next --json` claims only issues **assigned to the
    loop's account** (`pickup-scope` default `assigned`, #600; assign an issue
    to queue it, `config set pickup-scope all` for repo-wide): § "B. Admit new
    work — under the WIP limit, every issue reviewed first".
-7. **C. Bug sweep** when B is empty and A is clean: § "C. Bug sweep — when
+8. **C. Bug sweep** when B is empty and A is clean: § "C. Bug sweep — when
    there's nothing left to fix, hunt for new bugs".
-8. **D. Repeat** A→B→C to the cap or a truly empty queue; the cap counter
+9. **D. Repeat** A→B→C to the cap or a truly empty queue; the cap counter
    resets every tick: § "D. Repeat / stop".
 
 ## Continuous mode (default) — invocation; run-start copy is `loop-setup.md`
@@ -91,6 +107,7 @@ Unless `once` was passed, set the trigger up once, idempotently, at run start:
 | Topic | loop-mode.md § |
 |---|---|
 | Policy knobs, `app-slug`, what "approval" is, continuous `CronCreate` | "Policies — the three knobs (set once, then trust them)" + `loop-setup.md` |
+| Usage gate — `shipflow-usage check` exit 0/2/3, the paused line, statusline sink install | "Usage gate — TICK-START, before everything else" + `loop-setup.md` § "Usage gate sink" |
 | Orchestrator/reviewer/worker contracts, model tiers, `TaskStop`, `/goal` | "Roles — three subagents the orchestrator dispatches" |
 | Per-`state` actions: `ci_failing`, review feedback, merge-order, `approved_ready`/automerge, "behind base", `conflict` + sweep scope, `reporter_corrected`, `awaiting_reporter`/escalate-once, `needs-human` replies | "A. Reconcile in-flight work — dispatch a worker per item" + "Reconcile playbook (inbox `state` → action)" |
 | Intent gate, comment markers, `pr note` / `--rework-from` | "A. Reconcile in-flight work — dispatch a worker per item" + `loop-gate.md` |

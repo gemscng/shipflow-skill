@@ -3814,6 +3814,9 @@ class ShipFlowClient {
   async getFeatureMapping(org, projectId) {
     return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/feature-mapping`);
   }
+  async generateFeatureMapping(org, projectId) {
+    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/feature-mapping/generate`);
+  }
 }
 var ApiError, ClaimConflictError;
 var init_client = __esm(() => {
@@ -11435,47 +11438,266 @@ function verdictForFeatureMapping(fm) {
   return { status: "ok", mapping: fm };
 }
 
+// src/commands/regression.ts
+init_output();
+init_project();
+init_helpers();
+import { execSync as execSync6 } from "node:child_process";
+var REF_RESOLUTION_ERROR = "Failed to resolve git HEAD ref. Ensure you are in a git repository with at least one commit, or pass --ref explicitly.";
+function resolveRef(explicit, runGit = () => execSync6("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim()) {
+  if (explicit)
+    return explicit;
+  let ref = "";
+  try {
+    ref = runGit();
+  } catch {
+    throw new Error(REF_RESOLUTION_ERROR);
+  }
+  if (!ref)
+    throw new Error(REF_RESOLUTION_ERROR);
+  return ref;
+}
+var TERMINAL_STATUSES = ["success", "failure", "skipped"];
+function isTerminalStatus(status) {
+  return TERMINAL_STATUSES.includes(status);
+}
+function exitCodeForStatus(status) {
+  return status === "failure" ? 1 : 0;
+}
+function statusGlyph(status) {
+  return status === "success" ? "✅" : status === "failure" ? "\uD83D\uDD34" : status === "skipped" ? "⏭️" : "⏳";
+}
+function formatResultSummary(res) {
+  const r = res.result ?? {};
+  const status = typeof r.status === "string" ? r.status : "unknown";
+  const lines = [`${statusGlyph(status)} Regression ${res.executionId}: ${status}`];
+  const passed = typeof r.passed_tests === "number" ? r.passed_tests : undefined;
+  const total = typeof r.total_tests === "number" ? r.total_tests : undefined;
+  if (passed !== undefined && total !== undefined && total > 0)
+    lines.push(`  ${meter(passed, total)} passed`);
+  const counts = [];
+  if (typeof r.passed_tests === "number")
+    counts.push(`${r.passed_tests} passed`);
+  if (typeof r.failed_tests === "number")
+    counts.push(`${r.failed_tests} failed`);
+  if (typeof r.skipped_tests === "number" && r.skipped_tests > 0)
+    counts.push(`${r.skipped_tests} skipped`);
+  if (typeof r.total_tests === "number")
+    counts.push(`${r.total_tests} total`);
+  if (counts.length)
+    lines.push(`  ${counts.join(", ")}`);
+  if (typeof r.errorMessage === "string" && r.errorMessage)
+    lines.push(`  ${r.errorMessage}`);
+  return lines.join(`
+`);
+}
+function pendingResult(execId, errorMessage) {
+  return {
+    executionId: execId,
+    workflowType: "test_runner",
+    repo: "",
+    result: { status: "in_progress", ...errorMessage ? { errorMessage } : {} }
+  };
+}
+async function pollUntilTerminal(client, org, execId, opts) {
+  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const now = opts.now ?? (() => Date.now());
+  const deadline = now() + opts.timeoutMs;
+  let lastResult;
+  let lastError;
+  for (;; ) {
+    try {
+      const result = await client.getExecutionResult(org, execId);
+      lastResult = result;
+      lastError = undefined;
+      const status = String(result.result?.status ?? "");
+      if (isTerminalStatus(status))
+        return { result, timedOut: false };
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
+    }
+    if (now() >= deadline) {
+      return { result: lastResult ?? pendingResult(execId, lastError), timedOut: true, lastError };
+    }
+    await sleep(opts.intervalMs);
+  }
+}
+async function fetchAndReport(client, org, execId, opts = {}) {
+  const log = opts.log ?? console.log;
+  const res = await client.getExecutionResult(org, execId);
+  if (opts.json)
+    log(JSON.stringify(res));
+  else if (opts.yaml)
+    log(toYamlString(res));
+  else
+    log(formatResultSummary(res));
+  return exitCodeForStatus(String(res.result?.status ?? ""));
+}
+async function waitAndReport(client, org, execId, opts) {
+  const log = opts.log ?? console.log;
+  const { result, timedOut, lastError } = await pollUntilTerminal(client, org, execId, {
+    timeoutMs: opts.timeoutMs,
+    intervalMs: opts.intervalMs,
+    sleep: opts.sleep,
+    now: opts.now
+  });
+  if (opts.json) {
+    log(JSON.stringify(result));
+  } else if (opts.yaml) {
+    log(toYamlString(result));
+  } else {
+    log(formatResultSummary(result));
+    if (timedOut) {
+      log(`  timed out after ${Math.round(opts.timeoutMs / 1000)}s waiting for a terminal status`);
+      if (lastError)
+        log(`  last error while polling: ${lastError}`);
+    }
+  }
+  if (timedOut)
+    return 1;
+  return exitCodeForStatus(String(result.result?.status ?? ""));
+}
+function registerRegressionCommand(program2) {
+  const regression = program2.command("regression").description("Trigger ShipFlow's server-side regression test_runner. Exercises the project's " + "configured test environment (per-branch testing needs preview deploys — a separate server change).").option("--ref <sha>", "Ref to test (defaults to current HEAD)").option("--preview-url <url>", "Preview-deploy URL to run against (must match the environment previewUrlPatterns allowlist)").option("--wait", "Poll until the run finishes; exit non-zero on failure or timeout").option("--timeout <sec>", "Max seconds to wait with --wait", "600").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    const { creds, client } = loadJwtCtx(program2);
+    let ref;
+    try {
+      ref = resolveRef(opts.ref);
+    } catch (e) {
+      console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(1);
+    }
+    const project = await resolveProject(client, creds);
+    const params = { repo: project.repoFullName, ref };
+    if (opts.previewUrl)
+      params.preview_url = opts.previewUrl;
+    const trigger = await client.triggerWorkflow(creds.org, project.projectId, "test_runner", params);
+    const execId = trigger.executionId;
+    if (!opts.wait) {
+      emit(opts, trigger, () => console.log(`Regression run queued: ${execId}`));
+      return;
+    }
+    const timeoutSec = Number(opts.timeout) > 0 ? Number(opts.timeout) : 600;
+    if (!opts.json && !opts.yaml)
+      console.log(`Regression run queued: ${execId} — waiting up to ${timeoutSec}s...`);
+    const code = await waitAndReport(client, creds.org, execId, {
+      json: opts.json,
+      yaml: opts.yaml,
+      timeoutMs: timeoutSec * 1000,
+      intervalMs: 5000
+    });
+    process.exit(code);
+  }));
+  regression.command("status <executionId>").description("Fetch and print the result of a prior regression run (non-zero exit on failure)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (executionId, opts) => {
+    const { creds, client } = loadJwtCtx(program2);
+    const code = await fetchAndReport(client, creds.org, executionId, { json: opts.json, yaml: opts.yaml });
+    process.exit(code);
+  }));
+}
+
 // src/commands/features.ts
+var GENERATE_DEFAULT_TIMEOUT_SEC = 1200;
+var GENERATE_POLL_INTERVAL_MS = 5000;
+function printFeatureMap(fm, features, keys) {
+  if (!keys.length) {
+    console.log("No feature map for this project yet. Run `renaiss-shipflow features generate`.");
+    return;
+  }
+  const byCat = new Map;
+  for (const k of keys) {
+    const cat = features[k].category || "uncategorized";
+    if (!byCat.has(cat))
+      byCat.set(cat, []);
+    byCat.get(cat).push(k);
+  }
+  console.log(`\uD83D\uDDFA️  Feature map — ${keys.length} feature(s)${fm.lastUpdated ? ` (updated ${fm.lastUpdated})` : ""}`);
+  for (const [cat, ks] of [...byCat].sort((a, b) => a[0].localeCompare(b[0]))) {
+    console.log(`
+${cat}`);
+    const rows = ks.sort().map((k) => {
+      const f = features[k];
+      const paths = f.paths ?? [];
+      const shown = paths.length ? paths.slice(0, 3).join(", ") + (paths.length > 3 ? " …" : "") : "";
+      return [f.name || k, f.test_priority ?? "", shown];
+    });
+    for (const l of renderTable(["Feature", "Priority", "Paths"], rows))
+      console.log(`  ${l}`);
+  }
+}
+function emitMappingOrEmpty(opts, fm) {
+  const verdict = verdictForFeatureMapping(fm);
+  if (verdict.status === "empty") {
+    const envelope = featureMapEmptyEnvelope();
+    emit(opts, envelope, () => {
+      console.error(`Error: ${envelope.error}`);
+    }, { pretty: true });
+    process.exit(UNEXPECTED_EXIT_CODE);
+  }
+  const features = verdict.mapping.features ?? {};
+  const keys = Object.keys(features).filter((k) => !opts.category || (features[k].category ?? "") === opts.category);
+  const jsonOut = opts.category ? { ...verdict.mapping, features: Object.fromEntries(keys.map((k) => [k, features[k]])) } : verdict.mapping;
+  emit(opts, jsonOut, () => printFeatureMap(fm, features, keys), { pretty: true });
+}
+function flagsFrom(opts, cmd) {
+  const g = typeof cmd?.optsWithGlobals === "function" ? cmd.optsWithGlobals() : {};
+  return {
+    json: Boolean(opts.json || g.json),
+    yaml: Boolean(opts.yaml || g.yaml),
+    timeout: opts.timeout || g.timeout
+  };
+}
 function registerFeaturesCommand(program2) {
-  program2.command("features").description("ShipFlow's feature map for this project (features → file paths/test info) — the reviewer's whole-system view").option("--json", "Output the raw feature map").option("--yaml", "Output YAML").option("--category <name>", "Filter to one category").action(runAction(async (opts) => {
+  const features = program2.command("features").description("ShipFlow's feature map for this project (features → file paths/test info) — the reviewer's whole-system view").option("--json", "Output the raw feature map").option("--yaml", "Output YAML").option("--category <name>", "Filter to one category").action(runAction(async (opts) => {
     const { creds, client, project } = await loadCtx(program2);
+    const fm = await client.getFeatureMapping(creds.org, project.projectId);
+    emitMappingOrEmpty(opts, fm);
+  }));
+  features.enablePositionalOptions();
+  features.command("generate").description("Regenerate the feature map (POST + poll) so the loop is not dashboard-bound").option("--json", "Output JSON").option("--yaml", "Output YAML").option("--timeout <sec>", "Max seconds to wait for generation", String(GENERATE_DEFAULT_TIMEOUT_SEC)).action(runAction(async (opts, cmd) => {
+    const flags = flagsFrom(opts, cmd);
+    const { creds, client, project } = await loadCtx(program2);
+    const trigger = await client.generateFeatureMapping(creds.org, project.projectId);
+    const execId = trigger?.executionId;
+    if (!execId)
+      throw new Error("feature map generate returned no executionId");
+    const timeoutSec = Number(flags.timeout) > 0 ? Number(flags.timeout) : GENERATE_DEFAULT_TIMEOUT_SEC;
+    if (!flags.json && !flags.yaml) {
+      console.log(`Feature map generate queued: ${execId} — waiting up to ${timeoutSec}s...`);
+    }
+    const { result, timedOut, lastError } = await pollUntilTerminal(client, creds.org, execId, {
+      timeoutMs: timeoutSec * 1000,
+      intervalMs: GENERATE_POLL_INTERVAL_MS
+    });
+    const status = String(result?.result?.status ?? "");
+    if (timedOut) {
+      const error = lastError ? `timed out after ${timeoutSec}s waiting for feature map generation (${lastError})` : `timed out after ${timeoutSec}s waiting for feature map generation`;
+      emit(flags, { error, executionId: execId, status: status || "in_progress" }, () => {
+        console.error(`Error: ${error}`);
+      }, { pretty: true });
+      process.exit(1);
+    }
+    if (status === "failure") {
+      const error = String(result?.result?.errorMessage ?? "feature map generation failed");
+      emit(flags, { error, executionId: execId, status }, () => {
+        console.error(`Error: ${error}`);
+      }, { pretty: true });
+      process.exit(1);
+    }
     const fm = await client.getFeatureMapping(creds.org, project.projectId);
     const verdict = verdictForFeatureMapping(fm);
     if (verdict.status === "empty") {
-      const envelope = featureMapEmptyEnvelope();
-      emit(opts, envelope, () => {
+      const envelope = { ...featureMapEmptyEnvelope(), executionId: execId, status };
+      emit(flags, envelope, () => {
         console.error(`Error: ${envelope.error}`);
       }, { pretty: true });
       process.exit(UNEXPECTED_EXIT_CODE);
     }
-    const features = verdict.mapping.features ?? {};
-    const keys = Object.keys(features).filter((k) => !opts.category || (features[k].category ?? "") === opts.category);
-    const jsonOut = opts.category ? { ...verdict.mapping, features: Object.fromEntries(keys.map((k) => [k, features[k]])) } : verdict.mapping;
-    emit(opts, jsonOut, () => {
-      if (!keys.length) {
-        console.log("No feature map for this project yet. Generate it from the ShipFlow dashboard.");
-        return;
-      }
-      const byCat = new Map;
-      for (const k of keys) {
-        const cat = features[k].category || "uncategorized";
-        if (!byCat.has(cat))
-          byCat.set(cat, []);
-        byCat.get(cat).push(k);
-      }
-      console.log(`\uD83D\uDDFA️  Feature map — ${keys.length} feature(s)${fm.lastUpdated ? ` (updated ${fm.lastUpdated})` : ""}`);
-      for (const [cat, ks] of [...byCat].sort((a, b) => a[0].localeCompare(b[0]))) {
-        console.log(`
-${cat}`);
-        const rows = ks.sort().map((k) => {
-          const f = features[k];
-          const paths = f.paths ?? [];
-          const shown = paths.length ? paths.slice(0, 3).join(", ") + (paths.length > 3 ? " …" : "") : "";
-          return [f.name || k, f.test_priority ?? "", shown];
-        });
-        for (const l of renderTable(["Feature", "Priority", "Paths"], rows))
-          console.log(`  ${l}`);
-      }
+    const mapping = verdict.mapping;
+    const jsonOut = { executionId: execId, status, ...mapping };
+    const featureRecord2 = mapping.features ?? {};
+    emit(flags, jsonOut, () => {
+      console.log(`Feature map generated (${execId})`);
+      printFeatureMap(mapping, featureRecord2, Object.keys(featureRecord2));
     }, { pretty: true });
   }));
 }
@@ -11910,163 +12132,6 @@ function detectRunner(root) {
   if (existsSync5(join6(root, "pytest.ini")))
     return { cmd: "pytest", args: [], source: "pytest.ini" };
   return null;
-}
-
-// src/commands/regression.ts
-init_output();
-init_project();
-init_helpers();
-import { execSync as execSync6 } from "node:child_process";
-var REF_RESOLUTION_ERROR = "Failed to resolve git HEAD ref. Ensure you are in a git repository with at least one commit, or pass --ref explicitly.";
-function resolveRef(explicit, runGit = () => execSync6("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim()) {
-  if (explicit)
-    return explicit;
-  let ref = "";
-  try {
-    ref = runGit();
-  } catch {
-    throw new Error(REF_RESOLUTION_ERROR);
-  }
-  if (!ref)
-    throw new Error(REF_RESOLUTION_ERROR);
-  return ref;
-}
-var TERMINAL_STATUSES = ["success", "failure", "skipped"];
-function isTerminalStatus(status) {
-  return TERMINAL_STATUSES.includes(status);
-}
-function exitCodeForStatus(status) {
-  return status === "failure" ? 1 : 0;
-}
-function statusGlyph(status) {
-  return status === "success" ? "✅" : status === "failure" ? "\uD83D\uDD34" : status === "skipped" ? "⏭️" : "⏳";
-}
-function formatResultSummary(res) {
-  const r = res.result ?? {};
-  const status = typeof r.status === "string" ? r.status : "unknown";
-  const lines = [`${statusGlyph(status)} Regression ${res.executionId}: ${status}`];
-  const passed = typeof r.passed_tests === "number" ? r.passed_tests : undefined;
-  const total = typeof r.total_tests === "number" ? r.total_tests : undefined;
-  if (passed !== undefined && total !== undefined && total > 0)
-    lines.push(`  ${meter(passed, total)} passed`);
-  const counts = [];
-  if (typeof r.passed_tests === "number")
-    counts.push(`${r.passed_tests} passed`);
-  if (typeof r.failed_tests === "number")
-    counts.push(`${r.failed_tests} failed`);
-  if (typeof r.skipped_tests === "number" && r.skipped_tests > 0)
-    counts.push(`${r.skipped_tests} skipped`);
-  if (typeof r.total_tests === "number")
-    counts.push(`${r.total_tests} total`);
-  if (counts.length)
-    lines.push(`  ${counts.join(", ")}`);
-  if (typeof r.errorMessage === "string" && r.errorMessage)
-    lines.push(`  ${r.errorMessage}`);
-  return lines.join(`
-`);
-}
-function pendingResult(execId, errorMessage) {
-  return {
-    executionId: execId,
-    workflowType: "test_runner",
-    repo: "",
-    result: { status: "in_progress", ...errorMessage ? { errorMessage } : {} }
-  };
-}
-async function pollUntilTerminal(client, org, execId, opts) {
-  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const now = opts.now ?? (() => Date.now());
-  const deadline = now() + opts.timeoutMs;
-  let lastResult;
-  let lastError;
-  for (;; ) {
-    try {
-      const result = await client.getExecutionResult(org, execId);
-      lastResult = result;
-      lastError = undefined;
-      const status = String(result.result?.status ?? "");
-      if (isTerminalStatus(status))
-        return { result, timedOut: false };
-    } catch (e) {
-      lastError = e instanceof Error ? e.message : String(e);
-    }
-    if (now() >= deadline) {
-      return { result: lastResult ?? pendingResult(execId, lastError), timedOut: true, lastError };
-    }
-    await sleep(opts.intervalMs);
-  }
-}
-async function fetchAndReport(client, org, execId, opts = {}) {
-  const log = opts.log ?? console.log;
-  const res = await client.getExecutionResult(org, execId);
-  if (opts.json)
-    log(JSON.stringify(res));
-  else if (opts.yaml)
-    log(toYamlString(res));
-  else
-    log(formatResultSummary(res));
-  return exitCodeForStatus(String(res.result?.status ?? ""));
-}
-async function waitAndReport(client, org, execId, opts) {
-  const log = opts.log ?? console.log;
-  const { result, timedOut, lastError } = await pollUntilTerminal(client, org, execId, {
-    timeoutMs: opts.timeoutMs,
-    intervalMs: opts.intervalMs,
-    sleep: opts.sleep,
-    now: opts.now
-  });
-  if (opts.json) {
-    log(JSON.stringify(result));
-  } else if (opts.yaml) {
-    log(toYamlString(result));
-  } else {
-    log(formatResultSummary(result));
-    if (timedOut) {
-      log(`  timed out after ${Math.round(opts.timeoutMs / 1000)}s waiting for a terminal status`);
-      if (lastError)
-        log(`  last error while polling: ${lastError}`);
-    }
-  }
-  if (timedOut)
-    return 1;
-  return exitCodeForStatus(String(result.result?.status ?? ""));
-}
-function registerRegressionCommand(program2) {
-  const regression = program2.command("regression").description("Trigger ShipFlow's server-side regression test_runner. Exercises the project's " + "configured test environment (per-branch testing needs preview deploys — a separate server change).").option("--ref <sha>", "Ref to test (defaults to current HEAD)").option("--preview-url <url>", "Preview-deploy URL to run against (must match the environment previewUrlPatterns allowlist)").option("--wait", "Poll until the run finishes; exit non-zero on failure or timeout").option("--timeout <sec>", "Max seconds to wait with --wait", "600").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
-    const { creds, client } = loadJwtCtx(program2);
-    let ref;
-    try {
-      ref = resolveRef(opts.ref);
-    } catch (e) {
-      console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
-      process.exit(1);
-    }
-    const project = await resolveProject(client, creds);
-    const params = { repo: project.repoFullName, ref };
-    if (opts.previewUrl)
-      params.preview_url = opts.previewUrl;
-    const trigger = await client.triggerWorkflow(creds.org, project.projectId, "test_runner", params);
-    const execId = trigger.executionId;
-    if (!opts.wait) {
-      emit(opts, trigger, () => console.log(`Regression run queued: ${execId}`));
-      return;
-    }
-    const timeoutSec = Number(opts.timeout) > 0 ? Number(opts.timeout) : 600;
-    if (!opts.json && !opts.yaml)
-      console.log(`Regression run queued: ${execId} — waiting up to ${timeoutSec}s...`);
-    const code = await waitAndReport(client, creds.org, execId, {
-      json: opts.json,
-      yaml: opts.yaml,
-      timeoutMs: timeoutSec * 1000,
-      intervalMs: 5000
-    });
-    process.exit(code);
-  }));
-  regression.command("status <executionId>").description("Fetch and print the result of a prior regression run (non-zero exit on failure)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (executionId, opts) => {
-    const { creds, client } = loadJwtCtx(program2);
-    const code = await fetchAndReport(client, creds.org, executionId, { json: opts.json, yaml: opts.yaml });
-    process.exit(code);
-  }));
 }
 
 // src/commands/release.ts

@@ -18,7 +18,7 @@ Roles.
 1. **Setup** — worktrees (`loop-setup.md`, once per run)
 2. **Policies** — the knobs (`loop-setup.md`, once per run)
 3. **Roles** — orchestrator · reviewer · worker
-4. **The cycle** — 0 CLI drift check · A reconcile · B admit · C bug sweep · D repeat/stop
+4. **The cycle** — usage gate · 0 CLI drift check · A reconcile · B admit · C bug sweep · D repeat/stop
 5. **Reconcile playbook** — inbox `state` → action
 6. **Guardrails** — merge path · dispatch-don't-do · WTF-likelihood
 
@@ -97,6 +97,42 @@ playbook table.
 
 The operator's chance to interrupt a wrong plan before workers spend tokens;
 later ticks print only the one-line summary — never repeat the plan block.
+
+### Usage gate — TICK-START, before everything else
+
+The loop runs on the operator's Claude subscription. Once the account's
+**5-hour or weekly usage is at/above `usage-max`** (default **90%**, token
+`usage-max=N` / `$SHIPFLOW_LOOP_USAGE_MAX`) a tick must not start: a
+dispatched worker that hits the limit mid-fix leaves a half-done branch,
+and the operator loses the rest of the window to the loop. Check **every
+tick, first — before the Initial Plan, the drift probe, `inbox`, any
+dispatch** (operator requirement, 2026-09-04).
+
+```bash
+PLUGIN_DIR=$(ls -d ~/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/null | sort -V | tail -1)
+# threshold: an explicit `usage-max=N` token → `--max N`; otherwise
+# shipflow-usage resolves $SHIPFLOW_LOOP_USAGE_MAX, then 90.
+"$PLUGIN_DIR/bin/shipflow-usage" check --text
+```
+
+| Exit | Means | Do |
+|---|---|---|
+| **3** | 5h or 7d usage ≥ max (the line names the window and its reset time) | post `⏸ paused · usage <line> · rechecks next tick` as this tick's ONLY output and **end the tick**. No plan, no drift probe, no `inbox`, no dispatch. Keep the cron — the next tick re-checks; the window resets on its own. |
+| **2** | cannot tell — no snapshot, unusable `recorded_at`, or a snapshot older than `--max-age` (1h) that was below max | **continue**, and add `usage: unknown (<reason>)` to the summary line. Tick 1: run `"$PLUGIN_DIR/bin/shipflow-usage" install-statusline` (idempotent; exit 4 = a foreign statusLine exists — print its chain hint, never overwrite). The sink starts reporting from the next Claude Code session. |
+| **1** | bad `usage-max` / `--max` / `--max-age` (not a number, or out of range) — stderr says so | **continue**, and add `usage: gate misconfigured (<stderr>)` to the summary line so the operator fixes the token; never treat it as a pass |
+| **0** | below max, or the account reports no limits | continue; nothing to say |
+
+Where the number comes from: Claude Code hands the 5h / 7d percentages only
+to the **statusline command** (`rate_limits.five_hour.used_percentage`,
+`rate_limits.seven_day.used_percentage`, `resets_at` — documented at
+https://code.claude.com/docs/en/statusline; subscribers only, after the
+session's first API response). `shipflow-usage
+record` is that command — it snapshots them to `~/.shipflow/usage.json` on
+every refresh, and `check` reads the snapshot. A stale reading is a lower
+bound (usage only grows until a window resets), so stale-and-over is still
+**3**; stale-and-below is **2**, never a pass. There is no other sanctioned
+source: do not scrape `/usage`, do not call OAuth endpoints with the
+keychain token, do not estimate from token counts.
 
 ### 0. CLI drift check — POST-MERGE (primary) · TICK-START (backstop)
 
@@ -532,8 +568,11 @@ exit 12), cap `bug-hunt-cap`. Filed ≥1 → back to A; nothing new → real sto
 ### D. Repeat / stop
 
 Loop A→B→C. The PASS ends at `cap` PRs-opened-this-pass, **or** empty queue
-AND an empty sweep (or `bug-hunt` off). Continuous mode: next tick = FRESH
-pass, cap counter at zero — the cap never carries across ticks (#451).
+AND an empty sweep (or `bug-hunt` off), **or** the usage gate said stop
+(§ "Usage gate" — that tick's only output is the `⏸ paused · usage …`
+line; no ledger, since nothing was dispatched). Continuous mode: next tick
+= FRESH pass, cap counter at zero — the cap never carries across ticks
+(#451); a usage-paused tick re-checks the gate next tick like any other.
 Report an empty queue as "queue empty", never "at cap". `cap` precedence: a
 user `cap=N` token (`cap=all` drains the queue), else `SHIPFLOW_LOOP_CAP`,
 else **5**. Continuous trigger (`CronCreate` / `CronList` / `CronDelete`)
@@ -625,6 +664,11 @@ governs it.
 - **Orchestrator context discipline:** dispatch, don't do — compact JSON
   and one-line subagent returns only, never source files, diffs, or test
   logs (that's what lets `cap=all` run without bloat).
+- **Usage gate first, every tick.** `shipflow-usage check` exit 3 ends the
+  tick before anything else runs (§ "Usage gate — TICK-START, before
+  everything else"). Never skip it because the queue looks small, never
+  read the percentage from anywhere but the snapshot, and never lower
+  `usage-max` on your own — the operator sets it.
 - **Self-regulate — WTF-likelihood:** start 0%; +15% per revert, +20% fix
   touches files unrelated to its issue, +5% per fix touching >3 files,
   +10% if only `low` severity remains. **Above ~20% → stop and

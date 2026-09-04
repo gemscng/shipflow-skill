@@ -4,6 +4,26 @@ Split from loop-mode.md §Setup + §Policies (#622) and continuous mode
 (#621). The orchestrator loads this card **once per run** (tick 0 /
 before the cycle), not every tick.
 
+## Usage gate sink (once, at run start)
+
+Every tick starts with `shipflow-usage check` (loop-mode.md § "Usage gate
+— TICK-START, before everything else"). It reads `~/.shipflow/usage.json`,
+which only exists if Claude Code's **statusline** runs the sink — Claude
+Code exposes the 5-hour / weekly percentages nowhere else. At run start:
+
+```bash
+PLUGIN_DIR=$(ls -d ~/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/null | sort -V | tail -1)
+"$PLUGIN_DIR/bin/shipflow-usage" install-statusline
+```
+
+Exit 0 = installed (or already there): the snapshot starts filling in the
+**next** Claude Code session, so this run's first ticks may report `usage:
+unknown` and continue — expected, say so once. Exit **4** = the operator
+already has a statusLine: it is **never overwritten**; the command prints
+the one-line chain (`tee` the JSON into `shipflow-usage record`) — surface
+it in the summary and move on. Threshold: `usage-max=N` token →
+`$SHIPFLOW_LOOP_USAGE_MAX` → 90.
+
 ## Setup — run in a worktree (once, before the cycle)
 
 Always in a git worktree, never the user's live checkout.

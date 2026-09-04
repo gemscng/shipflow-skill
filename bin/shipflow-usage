@@ -1,0 +1,369 @@
+#!/usr/bin/env node
+// shipflow-usage — Claude subscription usage gate for the ShipFlow loop.
+//
+// The loop must not start a tick once the account's 5-hour or weekly usage is
+// at or above a threshold (default 90%). Claude Code exposes those numbers to
+// exactly one place a script can reach: the STATUSLINE command, which receives
+// a JSON document on stdin that includes
+//
+//   "rate_limits": { "five_hour": { "used_percentage", "resets_at" },
+//                    "seven_day": { "used_percentage", "resets_at" },
+//                    "spend_limit": { ... } }            // gateway deployments
+//
+// (present for subscribers after the first API response, each window only
+// while its resets_at has not passed). Documented schema:
+// https://code.claude.com/docs/en/statusline — the only official, scriptable
+// source of these numbers. So this script has two halves:
+//
+//   shipflow-usage record                statusline sink: reads that JSON on
+//                                        stdin, writes ~/.shipflow/usage.json,
+//                                        prints a compact "5h 42% · 7d 12%"
+//   shipflow-usage check [--max N]       the gate the loop runs at tick start
+//         [--max-age SECONDS] [--text]   exit 0 = below max (or no limits apply)
+//                                        exit 3 = at/over max → do not start
+//                                        exit 2 = unknown (no/stale snapshot)
+//                                        exit 1 = bad --max / --max-age
+//   shipflow-usage install-statusline    adds the sink to Claude Code's
+//         [--dry-run]                    settings.json when no statusLine is
+//                                        configured (exit 4 when one is — chain
+//                                        it instead, never overwritten)
+//   shipflow-usage show                  print the snapshot
+//
+// Env: SHIPFLOW_STATE_DIR (default ~/.shipflow) · SHIPFLOW_LOOP_USAGE_MAX
+// (default for --max, 90) · SHIPFLOW_USAGE_MAX_AGE (default for --max-age,
+// 3600) · CLAUDE_CONFIG_DIR (default ~/.claude, for install-statusline).
+//
+// No dependencies beyond node (the plugin launcher already requires it).
+"use strict";
+
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const HOME = os.homedir();
+const STATE_DIR = process.env.SHIPFLOW_STATE_DIR || path.join(HOME, ".shipflow");
+const SNAPSHOT = path.join(STATE_DIR, "usage.json");
+const WINDOW_LABEL = { five_hour: "5h", seven_day: "7d", spend_limit: "spend" };
+const WINDOW_ORDER = ["five_hour", "seven_day", "spend_limit"];
+
+function nowSeconds() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function readJSON(file) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    // Arrays/numbers/strings are valid JSON but not a snapshot; treat like
+    // corrupt so `check` is unknown (exit 2), not not-applicable (exit 0).
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    // Missing, unreadable, or corrupt: treat as no snapshot so `check` can
+    // return unknown (exit 2) and `record` can overwrite the file.
+    return null;
+  }
+}
+
+function writeJSONAtomic(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let priorMode = null;
+  try {
+    priorMode = fs.statSync(file).mode & 0o777;
+  } catch {
+    // new file — umask applies
+  }
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n");
+  if (priorMode !== null) fs.chmodSync(tmp, priorMode);
+  fs.renameSync(tmp, file);
+}
+
+function readStdin() {
+  try {
+    return fs.readFileSync(0, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+// Windows whose reset time has not passed. A window that vanished from the
+// statusline because its resets_at passed is a reset, not unknown.
+function liveWindows(windows, now) {
+  const out = {};
+  for (const key of Object.keys(windows || {})) {
+    const w = windows[key];
+    if (!w || typeof w.used_percentage !== "number" || !Number.isFinite(w.used_percentage)) continue;
+    if (typeof w.resets_at === "number" && w.resets_at <= now) continue;
+    out[key] = { used_percentage: w.used_percentage, resets_at: typeof w.resets_at === "number" ? w.resets_at : null };
+  }
+  return out;
+}
+
+function windowLabel(key) {
+  return WINDOW_LABEL[key] || key;
+}
+
+function orderedWindowKeys(windows) {
+  const rank = (k) => {
+    const i = WINDOW_ORDER.indexOf(k);
+    return i === -1 ? WINDOW_ORDER.length : i;
+  };
+  return Object.keys(windows || {}).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+function formatWindows(windows) {
+  const parts = [];
+  for (const key of orderedWindowKeys(windows)) {
+    const w = windows[key];
+    if (!w) continue;
+    parts.push(`${windowLabel(key)} ${Math.round(w.used_percentage)}%`);
+  }
+  return parts.join(" · ");
+}
+
+function envNum(v) {
+  return typeof v === "string" && v.trim() ? v : undefined;
+}
+
+function formatResetsAt(epochSeconds) {
+  if (typeof epochSeconds !== "number") return "";
+  const d = new Date(epochSeconds * 1000);
+  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+function parseArgs(argv) {
+  const opts = { _: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--max" || a === "--max-age") {
+      opts[a.slice(2)] = argv[++i];
+    } else if (a.startsWith("--max=")) {
+      opts.max = a.slice(6);
+    } else if (a.startsWith("--max-age=")) {
+      opts["max-age"] = a.slice(10);
+    } else if (a === "--text" || a === "--json" || a === "--dry-run") {
+      opts[a.slice(2)] = true;
+    } else {
+      opts._.push(a);
+    }
+  }
+  return opts;
+}
+
+// ── record ──────────────────────────────────────────────────────────────────
+
+function cmdRecord() {
+  const raw = readStdin();
+  let input = null;
+  try {
+    input = raw.trim() ? JSON.parse(raw) : null;
+  } catch {
+    input = null;
+  }
+  const now = nowSeconds();
+  const prev = readJSON(SNAPSHOT) || {};
+  // A window with no resets_at can never expire, so never carry it forward.
+  const carried = {};
+  for (const [key, w] of Object.entries(liveWindows(prev.windows, now))) {
+    if (typeof w.resets_at === "number") carried[key] = w;
+  }
+  const fresh = input && input.rate_limits && typeof input.rate_limits === "object" ? liveWindows(input.rate_limits, now) : {};
+  const sawLimits = Object.keys(fresh).length > 0;
+  const windows = Object.assign({}, carried, fresh);
+
+  const snapshot = {
+    // recorded_at = the last time the statusline actually reported limits;
+    // observed_at = the last time the sink ran at all (limits or not).
+    recorded_at: sawLimits ? new Date(now * 1000).toISOString() : prev.recorded_at || null,
+    observed_at: new Date(now * 1000).toISOString(),
+    source: "claude-code-statusline",
+    // Subscribers get rate_limits after the first API response; an account
+    // that never reports any (API key, no limits) stays has_limits=false.
+    has_limits: sawLimits || Boolean(prev.has_limits),
+    windows,
+  };
+  if (input && input.model && typeof input.model === "object" && input.model.display_name) {
+    snapshot.model = input.model.display_name;
+  }
+  writeJSONAtomic(SNAPSHOT, snapshot);
+
+  const line = formatWindows(windows);
+  process.stdout.write(line ? `${line}\n` : "");
+  return 0;
+}
+
+// ── check ───────────────────────────────────────────────────────────────────
+
+function evaluate(snapshot, { max, maxAge, now }) {
+  const result = { max, snapshot: SNAPSHOT, verdict: "unknown", ok: null, reason: "", windows: {}, worst: null, recorded_at: null, age_seconds: null, stale: false };
+  if (!snapshot) {
+    result.reason = "no usage snapshot — install the statusline sink (shipflow-usage install-statusline) and run one turn";
+    return result;
+  }
+  const windows = liveWindows(snapshot.windows, now);
+  for (const key of orderedWindowKeys(windows)) {
+    const w = windows[key];
+    if (!w) continue;
+    result.windows[key] = Object.assign({}, w, {
+      resets_in_minutes: typeof w.resets_at === "number" ? Math.max(0, Math.round((w.resets_at - now) / 60)) : null,
+    });
+    if (!result.worst || w.used_percentage > result.worst.used_percentage) {
+      result.worst = { window: key, label: windowLabel(key), used_percentage: w.used_percentage, resets_at: w.resets_at };
+    }
+  }
+  result.recorded_at = snapshot.recorded_at || null;
+  const rec = snapshot.recorded_at ? Math.floor(Date.parse(snapshot.recorded_at) / 1000) : NaN;
+  if (Number.isFinite(rec)) {
+    result.age_seconds = Math.max(0, now - rec);
+    result.stale = result.age_seconds > maxAge;
+  } else {
+    // Missing or unparseable timestamp: freshness cannot be proven → stale.
+    result.stale = true;
+  }
+
+  if (!result.worst) {
+    if (snapshot.has_limits && result.stale) {
+      // Windows expired, but the sink has not run since — a new window may
+      // already be filling and this snapshot cannot see it.
+      result.verdict = "unknown";
+      result.ok = null;
+      result.reason = Number.isFinite(result.age_seconds)
+        ? `all usage windows have reset, but the snapshot is ${Math.round(result.age_seconds / 60)} min old (max ${Math.round(maxAge / 60)})`
+        : "all usage windows have reset, but the snapshot has no usable recorded_at";
+    } else if (snapshot.has_limits) {
+      // Every window it ever reported has reset; nothing is counting against
+      // the account right now.
+      result.verdict = "ok";
+      result.ok = true;
+      result.reason = "all usage windows have reset";
+    } else {
+      result.verdict = "not-applicable";
+      result.ok = true;
+      result.reason = "this account reports no subscription usage limits";
+    }
+    return result;
+  }
+
+  // Usage only grows until a window resets, so a stale reading is a lower
+  // bound: at/over max stale is still over; below max stale proves nothing.
+  if (result.worst.used_percentage >= max) {
+    result.verdict = "over";
+    result.ok = false;
+    result.reason = `${result.worst.label} usage ${Math.round(result.worst.used_percentage)}% ≥ ${max}%` +
+      (typeof result.worst.resets_at === "number" ? ` (resets ${formatResetsAt(result.worst.resets_at)})` : "");
+    return result;
+  }
+  if (result.stale) {
+    result.verdict = "unknown";
+    result.ok = null;
+    result.reason = Number.isFinite(result.age_seconds)
+      ? `usage snapshot is ${Math.round(result.age_seconds / 60)} min old (max ${Math.round(maxAge / 60)}); last seen ${formatWindows(windows)}`
+      : `usage snapshot has no usable recorded_at; last seen ${formatWindows(windows)}`;
+    return result;
+  }
+  result.verdict = "ok";
+  result.ok = true;
+  result.reason = `${formatWindows(windows)} — below ${max}%`;
+  return result;
+}
+
+function cmdCheck(opts) {
+  const max = Number(opts.max ?? envNum(process.env.SHIPFLOW_LOOP_USAGE_MAX) ?? 90);
+  const rawMaxAge = Number(opts["max-age"] ?? envNum(process.env.SHIPFLOW_USAGE_MAX_AGE) ?? 3600);
+  if (!Number.isFinite(max) || max <= 0 || max > 100) {
+    process.stderr.write(`shipflow-usage: --max must be a percentage in (0, 100], got ${JSON.stringify(opts.max)}\n`);
+    return 1;
+  }
+  if (opts["max-age"] !== undefined && (!Number.isFinite(rawMaxAge) || rawMaxAge <= 0)) {
+    process.stderr.write(`shipflow-usage: --max-age must be a positive number of seconds, got ${JSON.stringify(opts["max-age"])}\n`);
+    return 1;
+  }
+  const maxAge = Number.isFinite(rawMaxAge) && rawMaxAge > 0 ? rawMaxAge : 3600;
+  const result = evaluate(readJSON(SNAPSHOT), { max, maxAge, now: nowSeconds() });
+  if (opts.text) {
+    const status = result.verdict === "over" ? "STOP" : result.verdict === "unknown" ? "UNKNOWN" : "OK";
+    process.stdout.write(`usage ${status}: ${result.reason}\n`);
+  } else {
+    process.stdout.write(JSON.stringify(result) + "\n");
+  }
+  if (result.verdict === "over") return 3;
+  if (result.verdict === "unknown") return 2;
+  return 0;
+}
+
+// ── install-statusline ──────────────────────────────────────────────────────
+
+// The plugin cache path carries the version, so a hard-coded path breaks on
+// the next plugin update. Inside the cache, install a resolver that picks the
+// newest installed plugin at run time; elsewhere (a checkout) use this file.
+function sinkCommand() {
+  const self = fs.realpathSync(__filename);
+  const marker = `${path.sep}.claude${path.sep}plugins${path.sep}cache${path.sep}renaissshipflow${path.sep}shipflow${path.sep}`;
+  if (self.includes(marker)) {
+    return `bash -c 'exec "$(ls -d ~/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/null | sort -V | tail -1)bin/shipflow-usage" record'`;
+  }
+  return `${JSON.stringify(self)} record`;
+}
+
+function cmdInstallStatusline(opts) {
+  const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, ".claude");
+  const settingsPath = path.join(configDir, "settings.json");
+  let settings = {};
+  try {
+    const raw = fs.readFileSync(settingsPath, "utf8");
+    settings = raw.trim() ? JSON.parse(raw) : {};
+  } catch (err) {
+    if (!err || err.code !== "ENOENT") {
+      process.stderr.write(`shipflow-usage: cannot parse ${settingsPath}: ${err && err.message}\n`);
+      return 1;
+    }
+  }
+  if (settings && typeof settings === "object" && settings.statusLine) {
+    const current = typeof settings.statusLine === "object" ? settings.statusLine.command : settings.statusLine;
+    if (typeof current === "string" && current.includes("shipflow-usage")) {
+      process.stdout.write(`statusline sink already installed: ${current}\n`);
+      return 0;
+    }
+    const chained = `input=$(cat); printf '%s' "$input" | ${sinkCommand()} >/dev/null; printf '%s' "$input" | ${String(current)}`;
+    process.stdout.write(
+      `a statusLine is already configured in ${settingsPath}:\n  ${String(current)}\n` +
+        `Not touching it. Chain the sink so both run:\n` +
+        `  "command": ${JSON.stringify(chained)}\n`,
+    );
+    return 4;
+  }
+  const next = Object.assign({}, settings, { statusLine: { type: "command", command: sinkCommand(), padding: 0 } });
+  if (opts["dry-run"]) {
+    process.stdout.write(`would write ${settingsPath}:\n${JSON.stringify(next.statusLine, null, 2)}\n`);
+    return 0;
+  }
+  writeJSONAtomic(settingsPath, next);
+  process.stdout.write(`installed statusline sink in ${settingsPath} (takes effect in the next Claude Code session):\n  ${next.statusLine.command}\n`);
+  return 0;
+}
+
+// ── main ────────────────────────────────────────────────────────────────────
+
+function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  const cmd = opts._[0];
+  switch (cmd) {
+    case "record":
+      return cmdRecord();
+    case "check":
+      return cmdCheck(opts);
+    case "install-statusline":
+      return cmdInstallStatusline(opts);
+    case "show": {
+      const snap = readJSON(SNAPSHOT);
+      process.stdout.write(snap ? JSON.stringify(snap, null, 2) + "\n" : `no snapshot at ${SNAPSHOT}\n`);
+      return snap ? 0 : 2;
+    }
+    default:
+      process.stderr.write(
+        "usage: shipflow-usage record | check [--max N] [--max-age SECONDS] [--text] | install-statusline [--dry-run] | show\n",
+      );
+      return 1;
+  }
+}
+
+process.exitCode = main();

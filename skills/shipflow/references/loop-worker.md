@@ -56,8 +56,9 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    branches.
 2. **Map, then fix** — `renaiss-shipflow features --json` (or `--category
    <area>`): each feature's **file paths**, **test priority**, and
-   **neighbours** sharing those paths. Stay inside your feature's paths; flag
-   any neighbour touch for the reviewer. Investigate (brief +
+   **neighbours** sharing those paths. Empty-map / `degraded:["empty-map"]` →
+   `renaiss-shipflow features generate --json`, then re-run. Stay inside your
+   feature's paths; flag any neighbour touch for the reviewer. Investigate (brief +
    `triage.relatedFiles`) using full git history: `git log -p -- <file>`,
    `git blame`, `triage.relatedCommits`, `git log --since` / bisect for
    regressions. Make the change. Genuinely try to verify — start the dev
