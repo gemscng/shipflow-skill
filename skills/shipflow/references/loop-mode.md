@@ -18,7 +18,8 @@ Roles.
 1. **Setup** — worktrees (`loop-setup.md`, once per run)
 2. **Policies** — the knobs (`loop-setup.md`, once per run)
 3. **Roles** — orchestrator · reviewer · worker
-4. **The cycle** — usage gate · 0 CLI drift check · A reconcile · B admit · C bug sweep · D repeat/stop
+4. **The cycle** — usage gate (+ once-a-week session reset) · 0 CLI drift
+   check · A reconcile · B admit · C bug sweep · D repeat/stop
 5. **Reconcile playbook** — inbox `state` → action
 6. **Guardrails** — merge path · dispatch-don't-do · WTF-likelihood
 
@@ -117,7 +118,7 @@ PLUGIN_DIR=$(ls -d ~/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/nu
 
 | Exit | Means | Do |
 |---|---|---|
-| **3** | 5h or 7d usage ≥ max (the line names the window and its reset time) | post `⏸ paused · usage <line> · rechecks next tick` as this tick's ONLY output and **end the tick**. No plan, no drift probe, no `inbox`, no dispatch. Keep the cron — the next tick re-checks; the window resets on its own. |
+| **3** | 5h or 7d usage ≥ max (the line names the window and its reset time) | try the session reset below **first**. It exits 0 → the 5-hour window cleared, run the tick normally. Anything else → post `⏸ paused · usage <line> · <reset outcome> · rechecks next tick` as this tick's ONLY output and **end the tick**. No plan, no drift probe, no `inbox`, no dispatch. Keep the cron — the next tick re-checks; the window resets on its own. |
 | **2** | cannot tell — no snapshot, unusable `recorded_at`, or a snapshot older than `--max-age` (1h) that was below max | **continue**, and add `usage: unknown (<reason>)` to the summary line. Tick 1: run `"$PLUGIN_DIR/bin/shipflow-usage" install-statusline` (idempotent; exit 4 = a foreign statusLine exists — print its chain hint, never overwrite). The sink starts reporting from the next Claude Code session. |
 | **1** | bad `usage-max` / `--max` / `--max-age` (not a number, or out of range) — stderr says so | **continue**, and add `usage: gate misconfigured (<stderr>)` to the summary line so the operator fixes the token; never treat it as a pass |
 | **0** | below max, or the account reports no limits | continue; nothing to say |
@@ -133,6 +134,44 @@ bound (usage only grows until a window resets), so stale-and-over is still
 **3**; stale-and-below is **2**, never a pass. There is no other sanctioned
 source: do not scrape `/usage`, do not call OAuth endpoints with the
 keychain token, do not estimate from token counts.
+
+#### Exit 3 → spend the once-a-week session reset (5-hour window only)
+
+Claude Code ships an **undocumented** `/limit-reset` slash command that
+clears the **5-hour** ("session") window immediately. It is allowed **once a
+week** and what it frees still counts against the weekly limit, so it is a
+scarce resource — the thing that saves an overnight run, not a knob to lean
+on. `shipflow-usage limit-reset` decides whether spending it is justified
+and then spends it. **Never run `claude -p "/limit-reset"` yourself**, and
+never type it at the operator instead of running the tool.
+
+```bash
+# --max N only when the operator passed an explicit usage-max=N token.
+"$PLUGIN_DIR/bin/shipflow-usage" limit-reset --text
+```
+
+| Exit | Means | Do |
+|---|---|---|
+| **0** | the session window was reset | re-run `check`; on 0 run the tick normally and add `usage: session limit reset (1/week, still counts toward the weekly limit)` to the summary line |
+| **5** | not spent, and the printed reason says why: below max · the **weekly** window is the blocker · both windows over · usage unknown · already used this week · the CLI has no such command · `SHIPFLOW_LOOP_LIMIT_RESET=off` | pause as usual, with that reason in the paused line |
+| **2** | it ran but the outcome is unreadable — a transient "try again in a moment", or output the tool does not recognise | pause as usual; it retries in an hour, not next tick |
+
+The rails are in the tool, not in your judgement: it refuses when the
+**weekly** window is at/above max (a session reset never clears the week),
+refuses when usage is unknown, and holds a week-long cooldown in
+`~/.shipflow/usage.json` so a 15-minute cron cannot burn a second attempt.
+Anything it does not recognise counts as "no reset happened" — the loop
+stays paused rather than dispatching into a limit. Operator opt-out:
+`SHIPFLOW_LOOP_LIMIT_RESET=off` (or the `limit-reset=off` token).
+
+The command is undocumented, so two things are unproven: whether Claude
+Code grants a reset while the window is merely near the threshold (the gate
+stops at 90%, not at 100%), and the exact wording of every refusal. Both
+land in the same place — exit 2 or 5, the loop pauses exactly as it did
+before the reset existed, and the reason is printed for the operator. It
+needs a Claude Code that has the command (absent in 2.1.240, present in
+2.1.252 and 2.1.260); older builds answer "Unknown command" and the tool
+parks the attempt for a week.
 
 ### 0. CLI drift check — POST-MERGE (primary) · TICK-START (backstop)
 
@@ -568,9 +607,9 @@ exit 12), cap `bug-hunt-cap`. Filed ≥1 → back to A; nothing new → real sto
 ### D. Repeat / stop
 
 Loop A→B→C. The PASS ends at `cap` PRs-opened-this-pass, **or** empty queue
-AND an empty sweep (or `bug-hunt` off), **or** the usage gate said stop
-(§ "Usage gate" — that tick's only output is the `⏸ paused · usage …`
-line; no ledger, since nothing was dispatched). Continuous mode: next tick
+AND an empty sweep (or `bug-hunt` off), **or** the usage gate said stop and
+the session reset did not clear it (§ "Usage gate" — that tick's only output
+is the `⏸ paused · usage …` line; no ledger, since nothing was dispatched). Continuous mode: next tick
 = FRESH pass, cap counter at zero — the cap never carries across ticks
 (#451); a usage-paused tick re-checks the gate next tick like any other.
 Report an empty queue as "queue empty", never "at cap". `cap` precedence: a
@@ -668,7 +707,9 @@ governs it.
   tick before anything else runs (§ "Usage gate — TICK-START, before
   everything else"). Never skip it because the queue looks small, never
   read the percentage from anywhere but the snapshot, and never lower
-  `usage-max` on your own — the operator sets it.
+  `usage-max` on your own — the operator sets it. The once-a-week session
+  reset is spent only through `shipflow-usage limit-reset`, never by
+  invoking `/limit-reset` yourself and never to clear a **weekly** limit.
 - **Self-regulate — WTF-likelihood:** start 0%; +15% per revert, +20% fix
   touches files unrelated to its issue, +5% per fix touching >3 files,
   +10% if only `low` severity remains. **Above ~20% → stop and

@@ -143,7 +143,9 @@ orchestrator dispatching each item to fresh-context subagents, governed by the
 policy knobs in `config list`. Load `loop-setup.md` once per run (tick 0 /
 before the cycle), not every tick. Every tick opens with the **usage gate**
 (`bin/shipflow-usage check`, default stop at 90% of the 5-hour or weekly
-Claude limit — loop-mode.md § "Usage gate"). Everything else stays a single
+Claude limit — loop-mode.md § "Usage gate"); when the 5-hour window is the
+blocker it spends Claude Code's once-a-week `/limit-reset` via
+`bin/shipflow-usage limit-reset` before pausing. Everything else stays a single
 command from the table above. Companions: `loop-setup.md` (run start), `loop-worker.md` /
 `loop-reviewer.md` (role contracts), `browser-testing.md`, `bug-taxonomy.md`,
 `qa-report.md`, `pr-feedback.md`, `conflict-resolution.md`.

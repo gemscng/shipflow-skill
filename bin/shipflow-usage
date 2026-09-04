@@ -27,11 +27,17 @@
 //         [--dry-run]                    settings.json when no statusLine is
 //                                        configured (exit 4 when one is — chain
 //                                        it instead, never overwritten)
+//   shipflow-usage limit-reset           spend Claude Code's once-a-week
+//         [--max N] [--dry-run] [--text] "/limit-reset" to clear the 5-hour
+//                                        window so a paused loop can resume
+//                                        (exit 0 = reset, 5 = skipped,
+//                                        2 = attempted, outcome unclear)
 //   shipflow-usage show                  print the snapshot
 //
 // Env: SHIPFLOW_STATE_DIR (default ~/.shipflow) · SHIPFLOW_LOOP_USAGE_MAX
 // (default for --max, 90) · SHIPFLOW_USAGE_MAX_AGE (default for --max-age,
-// 3600) · CLAUDE_CONFIG_DIR (default ~/.claude, for install-statusline).
+// 3600) · CLAUDE_CONFIG_DIR (default ~/.claude, for install-statusline) ·
+// SHIPFLOW_CLAUDE_BIN (default `claude` on PATH, for limit-reset).
 //
 // No dependencies beyond node (the plugin launcher already requires it).
 "use strict";
@@ -39,12 +45,19 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { spawnSync } = require("child_process");
 
 const HOME = os.homedir();
 const STATE_DIR = process.env.SHIPFLOW_STATE_DIR || path.join(HOME, ".shipflow");
 const SNAPSHOT = path.join(STATE_DIR, "usage.json");
 const WINDOW_LABEL = { five_hour: "5h", seven_day: "7d", spend_limit: "spend" };
 const WINDOW_ORDER = ["five_hour", "seven_day", "spend_limit"];
+
+// `/limit-reset` is allowed once a week, so a settled outcome (reset, already
+// spent, unsupported CLI) parks the attempt for a week. A transient failure
+// retries after an hour, not every 15-minute tick.
+const RESET_COOLDOWN_SECONDS = 7 * 24 * 3600;
+const RESET_RETRY_SECONDS = 3600;
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -184,6 +197,11 @@ function cmdRecord() {
   if (input && input.model && typeof input.model === "object" && input.model.display_name) {
     snapshot.model = input.model.display_name;
   }
+  // The sink rewrites the file on every statusline refresh; the limit-reset
+  // ledger has to survive that or the cooldown resets with it.
+  if (prev.limit_reset && typeof prev.limit_reset === "object") {
+    snapshot.limit_reset = prev.limit_reset;
+  }
   writeJSONAtomic(SNAPSHOT, snapshot);
 
   const line = formatWindows(windows);
@@ -290,6 +308,160 @@ function cmdCheck(opts) {
   return 0;
 }
 
+// ── limit-reset ─────────────────────────────────────────────────────────────
+
+// Claude Code 2.1.x ships an undocumented `/limit-reset` slash command that
+// clears the 5-hour ("session") window immediately. It is allowed ONCE A WEEK
+// and what it grants still counts against the weekly limit, so it is a scarce
+// resource: only spend it when the 5-hour window is what stopped the loop and
+// the weekly window still has room. Absent in 2.1.240, present in 2.1.252 and
+// 2.1.260; undocumented, so every outcome that is not a recognized success is
+// treated as "did not reset" and the loop stays paused.
+//
+// Built-in slash commands resolve in `claude -p` (verified: `/cost` and
+// `/usage` print, `/status` answers "isn't available in this environment",
+// an unknown command answers "Unknown command: …"), which is how a loop tick
+// reaches one — the orchestrator cannot type into its own REPL.
+const RESET_PATTERNS = [
+  // Order matters: the refusals are checked before the success line so a
+  // message that names both ("Weekly reset used … Session limit reset …")
+  // is never read as a fresh reset.
+  { outcome: "already-used", exit: 5, re: /weekly reset used|available again/i, settled: true },
+  { outcome: "unavailable", exit: 5, re: /isn't available in this environment|is not available in this environment|unknown command/i, settled: true },
+  { outcome: "error", exit: 2, re: /couldn't reset|could not reset|try again in a moment/i, settled: false },
+  { outcome: "reset", exit: 0, re: /session limit (?:has been |was )?reset|next reset available/i, settled: true },
+];
+
+function classifyResetOutput(text) {
+  const body = String(text || "");
+  for (const p of RESET_PATTERNS) {
+    if (p.re.test(body)) return p;
+  }
+  return { outcome: "unknown", exit: 2, re: null, settled: false };
+}
+
+function firstLine(text) {
+  const line = String(text || "")
+    .split("\n")
+    .map((s) => s.trim())
+    .find((s) => s.length > 0);
+  return line ? line.slice(0, 200) : "";
+}
+
+// Why the loop may not spend the reset right now. null = go ahead.
+function resetSkipReason(result, snapshot, now) {
+  const knob = (process.env.SHIPFLOW_LOOP_LIMIT_RESET || "").trim().toLowerCase();
+  if (["off", "0", "false", "no", "never"].includes(knob)) {
+    return `disabled by SHIPFLOW_LOOP_LIMIT_RESET=${knob}`;
+  }
+  if (result.verdict !== "over") {
+    return result.verdict === "unknown"
+      ? `usage is unknown (${result.reason}) — never spend the weekly reset on a guess`
+      : `usage is below the threshold (${result.reason})`;
+  }
+  if (!result.worst || result.worst.window !== "five_hour") {
+    const label = result.worst ? result.worst.label : "the limit";
+    return `${label} is what is over, and /limit-reset only clears the 5-hour window`;
+  }
+  const weekly = result.windows && result.windows.seven_day;
+  if (weekly && weekly.used_percentage >= result.max) {
+    return `7d usage ${Math.round(weekly.used_percentage)}% ≥ ${result.max}% — the weekly limit survives a session reset`;
+  }
+  const prev = snapshot && snapshot.limit_reset;
+  if (prev && typeof prev.attempted_at === "string") {
+    const at = Math.floor(Date.parse(prev.attempted_at) / 1000);
+    const cooldown = prev.settled ? RESET_COOLDOWN_SECONDS : RESET_RETRY_SECONDS;
+    if (Number.isFinite(at) && now - at < cooldown) {
+      const mins = Math.max(1, Math.round((cooldown - (now - at)) / 60));
+      return `last attempt (${prev.outcome}) was ${Math.round((now - at) / 60)} min ago — next try in ${mins} min`;
+    }
+  }
+  return null;
+}
+
+function cmdLimitReset(opts) {
+  const max = Number(opts.max ?? envNum(process.env.SHIPFLOW_LOOP_USAGE_MAX) ?? 90);
+  if (!Number.isFinite(max) || max <= 0 || max > 100) {
+    process.stderr.write(`shipflow-usage: --max must be a percentage in (0, 100], got ${JSON.stringify(opts.max)}\n`);
+    return 1;
+  }
+  const now = nowSeconds();
+  const snapshot = readJSON(SNAPSHOT);
+  const result = evaluate(snapshot, { max, maxAge: 3600, now });
+  const out = { action: "limit-reset", max, outcome: "skipped", reason: "", detail: "", ran: false };
+
+  const skip = resetSkipReason(result, snapshot, now);
+  if (skip) {
+    out.reason = skip;
+    emitReset(out, opts);
+    return 5;
+  }
+  out.reason = result.reason;
+
+  if (opts["dry-run"]) {
+    out.outcome = "would-run";
+    out.detail = `${claudeBin()} -p /limit-reset`;
+    emitReset(out, opts);
+    return 0;
+  }
+
+  const bin = claudeBin();
+  const proc = spawnSync(bin, ["-p", "/limit-reset"], { encoding: "utf8", timeout: 180000 });
+  out.ran = true;
+  if (proc.error || typeof proc.stdout !== "string") {
+    out.outcome = "error";
+    out.detail = proc.error ? String(proc.error.message).slice(0, 200) : "no output from the claude CLI";
+    recordResetAttempt(out.outcome, out.detail, false, now);
+    emitReset(out, opts);
+    return 2;
+  }
+  const body = `${proc.stdout}\n${proc.stderr || ""}`;
+  const verdict = classifyResetOutput(body);
+  out.outcome = verdict.outcome;
+  out.detail = firstLine(body);
+  recordResetAttempt(verdict.outcome, out.detail, verdict.settled, now);
+  if (verdict.outcome === "reset") clearFiveHourWindow(now);
+  emitReset(out, opts);
+  return verdict.exit;
+}
+
+function claudeBin() {
+  return process.env.SHIPFLOW_CLAUDE_BIN || "claude";
+}
+
+function emitReset(out, opts) {
+  if (opts.text) {
+    const status = out.outcome === "reset" ? "RESET" : out.outcome === "would-run" ? "DRY-RUN" : "NO RESET";
+    process.stdout.write(`limit-reset ${status}: ${out.reason || out.detail || out.outcome}\n`);
+    return;
+  }
+  process.stdout.write(JSON.stringify(out) + "\n");
+}
+
+function recordResetAttempt(outcome, detail, settled, now) {
+  const snapshot = readJSON(SNAPSHOT) || {};
+  snapshot.limit_reset = {
+    attempted_at: new Date(now * 1000).toISOString(),
+    outcome,
+    detail,
+    settled: Boolean(settled),
+  };
+  if (outcome === "reset") snapshot.limit_reset.used_at = snapshot.limit_reset.attempted_at;
+  writeJSONAtomic(SNAPSHOT, snapshot);
+}
+
+// A successful reset restarts the 5-hour window, so the percentage in the
+// snapshot is now wrong and would keep the gate stopped until the statusline
+// next refreshes. Drop the window rather than invent a number for it, and
+// stamp recorded_at because the account state was just observed.
+function clearFiveHourWindow(now) {
+  const snapshot = readJSON(SNAPSHOT);
+  if (!snapshot) return;
+  if (snapshot.windows && typeof snapshot.windows === "object") delete snapshot.windows.five_hour;
+  snapshot.recorded_at = new Date(now * 1000).toISOString();
+  writeJSONAtomic(SNAPSHOT, snapshot);
+}
+
 // ── install-statusline ──────────────────────────────────────────────────────
 
 // The plugin cache path carries the version, so a hard-coded path breaks on
@@ -353,6 +525,8 @@ function main() {
       return cmdCheck(opts);
     case "install-statusline":
       return cmdInstallStatusline(opts);
+    case "limit-reset":
+      return cmdLimitReset(opts);
     case "show": {
       const snap = readJSON(SNAPSHOT);
       process.stdout.write(snap ? JSON.stringify(snap, null, 2) + "\n" : `no snapshot at ${SNAPSHOT}\n`);
@@ -360,7 +534,8 @@ function main() {
     }
     default:
       process.stderr.write(
-        "usage: shipflow-usage record | check [--max N] [--max-age SECONDS] [--text] | install-statusline [--dry-run] | show\n",
+        "usage: shipflow-usage record | check [--max N] [--max-age SECONDS] [--text] | " +
+          "limit-reset [--max N] [--dry-run] [--text] | install-statusline [--dry-run] | show\n",
       );
       return 1;
   }

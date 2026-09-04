@@ -24,6 +24,13 @@ the one-line chain (`tee` the JSON into `shipflow-usage record`) — surface
 it in the summary and move on. Threshold: `usage-max=N` token →
 `$SHIPFLOW_LOOP_USAGE_MAX` → 90.
 
+When the 5-hour window is what stops a tick, the gate spends Claude Code's
+once-a-week `/limit-reset` through `shipflow-usage limit-reset` (5-hour
+window only, never for a weekly limit, one attempt per week — loop-mode.md
+§ "Exit 3 → spend the once-a-week session reset"). A `limit-reset=off`
+token means `export SHIPFLOW_LOOP_LIMIT_RESET=off` for the run, so the tool
+refuses the spend even if a tick asks for it.
+
 ## Setup — run in a worktree (once, before the cycle)
 
 Always in a git worktree, never the user's live checkout.

@@ -22,6 +22,7 @@ file's real section headings (§) — follow them there, never from memory.
 | `cap=N` | how many PRs to open per pass before pausing; `cap=all` drains the queue |
 | `concurrency=N` | max issues/PRs worked at once (#744); `concurrency=1` = fully serial |
 | `usage-max=N` | do not start a tick once the Claude 5-hour **or** weekly usage is at/above N% (default **90**) |
+| `limit-reset=off` | never spend Claude Code's once-a-week `/limit-reset` when the 5-hour window stops a tick (default: spend it, 5-hour window only) |
 | anything else | an `issue next` filter (e.g. `--label bug`) |
 
 **Cap precedence:** a user `cap=N` token → `$SHIPFLOW_LOOP_CAP` → **5**.
@@ -30,6 +31,9 @@ file's real section headings (§) — follow them there, never from memory.
 `config get` / `config set` a `loop-concurrency` key (unknown key, exit 1).
 **Usage-max precedence:** a user `usage-max=N` token →
 `$SHIPFLOW_LOOP_USAGE_MAX` → **90**. Also invocation-only.
+**Session reset:** a `limit-reset=off` token → export
+`SHIPFLOW_LOOP_LIMIT_RESET=off` for the run so the tool refuses the spend
+too; `$SHIPFLOW_LOOP_LIMIT_RESET` → **on**.
 
 ## The tick — skeleton (each step lives in loop-mode.md at the § named)
 
@@ -50,13 +54,17 @@ file's real section headings (§) — follow them there, never from memory.
    (`PLUGIN_DIR=$(ls -d ~/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/null | sort -V | tail -1)`).
    Pass `--max N` only for an explicit `usage-max=N` token; otherwise the
    tool reads `$SHIPFLOW_LOOP_USAGE_MAX`, then 90.
-   Exit **3** = at/over the threshold → post
-   `⏸ paused · usage <reason> ≥ N% · next check at the next tick` and **end
-   the tick** — nothing else runs, the cron stays. Exit **2** = cannot tell →
-   continue, say so in the summary line, and on tick 1 run
-   `shipflow-usage install-statusline` (idempotent, never overwrites a
-   foreign statusLine). Exit **0** → continue. § "Usage gate — TICK-START,
-   before everything else".
+   Exit **3** = at/over the threshold → try the once-a-week session reset
+   first: `"$PLUGIN_DIR/bin/shipflow-usage" limit-reset --text`. It exits
+   **0** → the 5-hour window cleared, re-run `check` and run the tick
+   normally. Exit **5** (not worth spending / already used / disabled) or
+   **2** (outcome unreadable) → post
+   `⏸ paused · usage <reason> ≥ N% · <reset outcome> · next check at the
+   next tick` and **end the tick** — nothing else runs, the cron stays.
+   Exit **2** from `check` = cannot tell → continue, say so in the summary
+   line, and on tick 1 run `shipflow-usage install-statusline` (idempotent,
+   never overwrites a foreign statusLine). Exit **0** → continue. § "Usage
+   gate — TICK-START, before everything else".
 4. **Tick 1 only — the Initial Plan (pass ledger)** before ANY dispatch
    (#600); later ticks print only the summary line: § "The cycle — each tick".
 5. CLI drift check: § "0. CLI drift check — POST-MERGE (primary) · TICK-START
@@ -107,7 +115,7 @@ Unless `once` was passed, set the trigger up once, idempotently, at run start:
 | Topic | loop-mode.md § |
 |---|---|
 | Policy knobs, `app-slug`, what "approval" is, continuous `CronCreate` | "Policies — the three knobs (set once, then trust them)" + `loop-setup.md` |
-| Usage gate — `shipflow-usage check` exit 0/2/3, the paused line, statusline sink install | "Usage gate — TICK-START, before everything else" + `loop-setup.md` § "Usage gate sink" |
+| Usage gate — `shipflow-usage check` exit 0/2/3, the once-a-week `limit-reset` spend and its rails, the paused line, statusline sink install | "Usage gate — TICK-START, before everything else" + `loop-setup.md` § "Usage gate sink" |
 | Orchestrator/reviewer/worker contracts, model tiers, `TaskStop`, `/goal` | "Roles — three subagents the orchestrator dispatches" |
 | Per-`state` actions: `ci_failing`, review feedback, merge-order, `approved_ready`/automerge, "behind base", `conflict` + sweep scope, `reporter_corrected`, `awaiting_reporter`/escalate-once, `needs-human` replies | "A. Reconcile in-flight work — dispatch a worker per item" + "Reconcile playbook (inbox `state` → action)" |
 | Intent gate, comment markers, `pr note` / `--rework-from` | "A. Reconcile in-flight work — dispatch a worker per item" + `loop-gate.md` |
