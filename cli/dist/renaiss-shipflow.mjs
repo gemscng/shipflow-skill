@@ -11635,8 +11635,14 @@ function emitMappingOrEmpty(opts, fm) {
   }
   const features = verdict.mapping.features ?? {};
   const keys = Object.keys(features).filter((k) => !opts.category || (features[k].category ?? "") === opts.category);
-  const jsonOut = opts.category ? { ...verdict.mapping, features: Object.fromEntries(keys.map((k) => [k, features[k]])) } : verdict.mapping;
-  emit(opts, jsonOut, () => printFeatureMap(fm, features, keys), { pretty: true });
+  const jsonOut = opts.category ? { ...verdict.mapping, features: Object.fromEntries(keys.map((k) => [k, features[k]])), category: opts.category } : verdict.mapping;
+  emit(opts, jsonOut, () => {
+    if (opts.category && !keys.length) {
+      console.log(`No features in category "${opts.category}".`);
+      return;
+    }
+    printFeatureMap(fm, features, keys);
+  }, { pretty: true });
 }
 function flagsFrom(opts, cmd) {
   const g = typeof cmd?.optsWithGlobals === "function" ? cmd.optsWithGlobals() : {};
