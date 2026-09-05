@@ -8132,7 +8132,11 @@ ${block}`));
   }));
   issue.command("wait <number>").description("Park an issue on a dependency: label ⏳ waiting-on + comment. Unlike escalate, no human is needed — issue next skips it while the dependency is open and re-admits it automatically when the dependency merges/closes.").option("--on <ref>", "The blocking issue/PR: #123, 123, owner/repo#123, or a GitHub issue/PR URL").option("--reason <reason>", "One line on why this waits", "").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for ⏳ waiting-on)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     if (!opts.on?.trim()) {
-      console.error("--on <ref> is required — the dependency this issue waits for (#123, owner/repo#123, or a GitHub URL).");
+      const msg = "--on <ref> is required — the dependency this issue waits for (#123, owner/repo#123, or a GitHub URL).";
+      if (opts.json)
+        console.log(JSON.stringify({ error: msg }));
+      else
+        console.error(msg);
       process.exit(1);
     }
     const ctx = await loadCtx(program2);
