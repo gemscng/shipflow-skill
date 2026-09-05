@@ -5361,7 +5361,7 @@ function buildStageRows(stats) {
   ]);
 }
 function registerStatsCommand(program2) {
-  program2.command("stats").description("Show usage statistics for the current billing period").option("--tokens", "Show per-stage AI token usage (from ai_logs) instead of execution counts").option("--days <n>", "Lookback window in days for --tokens (default 30)", "30").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (opts, cmd) => {
+  program2.command("stats").description("Show usage statistics for the current billing period").option("--tokens", "Show per-stage AI token usage (from ai_logs) instead of execution counts").option("--days <n>", "Lookback window in days for --tokens", "30").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (opts, cmd) => {
     const { client, org, format } = getApiCtx(cmd);
     if (opts.tokens) {
       const days = Number.parseInt(String(opts.days), 10);
