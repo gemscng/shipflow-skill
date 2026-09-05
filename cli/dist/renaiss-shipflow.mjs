@@ -12253,7 +12253,7 @@ function registerProfilesCommand(program2) {
 // src/index.ts
 var pkg = createRequire3(import.meta.url)("../package.json");
 var program2 = new Command;
-program2.name("renaiss-shipflow").description("CLI for RenaissShipFlow - AI-powered project management automation").version(pkg.version).option("--api-url <url>", "RenaissShipFlow API base URL").option("--org <org>", 'Organization slug (default: "default")', "default").option("--profile <name>", "Config profile — isolated credentials per tenant (also SHIPFLOW_PROFILE)");
+program2.name("renaiss-shipflow").description("CLI for RenaissShipFlow - AI-powered project management automation").version(pkg.version).option("--api-url <url>", "RenaissShipFlow API base URL").option("--org <org>", "Organization slug", "default").option("--profile <name>", "Config profile — isolated credentials per tenant (also SHIPFLOW_PROFILE)");
 program2.hook("preAction", () => {
   const p = program2.opts().profile;
   if (p)
