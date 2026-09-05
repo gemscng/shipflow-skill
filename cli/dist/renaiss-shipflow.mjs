@@ -5257,14 +5257,21 @@ function collectKeyValue(value, prev) {
 }
 
 // src/commands/activity.ts
+init_config();
 init_helpers();
 init_output();
+function parseLast(raw) {
+  try {
+    return parseIntStrict("--last", raw);
+  } catch (e) {
+    throw new UsageError(e instanceof Error ? e.message : String(e));
+  }
+}
 function registerActivityCommand(program2) {
   program2.command("activity").description("View recent workflow activity").option("--last <n>", "Number of recent events to show", "10").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (opts, cmd) => {
+    const last = parseLast(opts.last);
     const { client, org, format } = getApiCtx(cmd);
-    const limit = parseInt(opts.last, 10) || 10;
-    const result = await client.listActivity(org, { limit });
-    const events = result.data;
+    const events = last === 0 ? [] : (await client.listActivity(org, { limit: last })).data;
     formatOutput(format, events, () => {
       if (events.length === 0) {
         console.log("No recent activity.");
