@@ -2063,6 +2063,293 @@ var require_commander = __commonJS((exports) => {
   exports.InvalidOptionArgumentError = InvalidArgumentError;
 });
 
+// src/client.ts
+function envelopeMessage(body) {
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed && typeof parsed.error === "object" && parsed.error && typeof parsed.error.message === "string") {
+      const msg = parsed.error.message.trim();
+      return msg || null;
+    }
+  } catch {}
+  return null;
+}
+function backoffMs(attempt) {
+  return 300 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
+}
+
+class ShipFlowClient {
+  baseUrl;
+  apiKey;
+  refreshToken;
+  onRefreshed;
+  fetchImpl;
+  sleep;
+  constructor(opts) {
+    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
+    this.apiKey = opts.jwt || opts.apiKey;
+    this.refreshToken = opts.refreshToken;
+    this.onRefreshed = opts.onRefreshed;
+    this.fetchImpl = opts.fetch ?? fetch;
+    this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  }
+  static REQUEST_TIMEOUT_MS = 60000;
+  static UPLOAD_TIMEOUT_MS = 180000;
+  authedFetch(method, path, body) {
+    const headers = { "Content-Type": "application/json" };
+    if (this.apiKey)
+      headers["Authorization"] = `Bearer ${this.apiKey}`;
+    return this.fetchImpl(`${this.baseUrl}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(ShipFlowClient.REQUEST_TIMEOUT_MS)
+    });
+  }
+  async fetchWithRefresh(url, init) {
+    const withAuth = () => {
+      const headers = new Headers(init.headers);
+      if (this.apiKey)
+        headers.set("Authorization", `Bearer ${this.apiKey}`);
+      return { signal: AbortSignal.timeout(ShipFlowClient.UPLOAD_TIMEOUT_MS), ...init, headers };
+    };
+    let res = await this.fetchImpl(url, withAuth());
+    if (res.status === 401 && this.refreshToken && await this.tryRefresh()) {
+      res = await this.fetchImpl(url, withAuth());
+    }
+    return res;
+  }
+  async toResult(res) {
+    if (!res.ok) {
+      const text2 = await res.text().catch(() => res.statusText);
+      throw new ApiError(res.status, text2);
+    }
+    const text = await res.text();
+    if (!text)
+      return;
+    return JSON.parse(text);
+  }
+  async request(method, path, body) {
+    const retriable = method.toUpperCase() === "GET";
+    const maxAttempts = retriable ? 3 : 1;
+    let lastErr;
+    for (let attempt = 0;attempt < maxAttempts; attempt++) {
+      try {
+        let res = await this.authedFetch(method, path, body);
+        if (res.status === 401 && this.refreshToken && await this.tryRefresh()) {
+          res = await this.authedFetch(method, path, body);
+        }
+        if (retriable && res.status >= 500 && attempt < maxAttempts - 1) {
+          await this.sleep(backoffMs(attempt));
+          continue;
+        }
+        return this.toResult(res);
+      } catch (e) {
+        lastErr = e;
+        if (retriable && attempt < maxAttempts - 1) {
+          await this.sleep(backoffMs(attempt));
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw lastErr ?? new Error("request failed");
+  }
+  async tryRefresh() {
+    const rt = this.refreshToken;
+    if (!rt)
+      return false;
+    this.refreshToken = undefined;
+    try {
+      const res = await this.fetchImpl(`${this.baseUrl}/api/v1/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: rt })
+      });
+      if (!res.ok)
+        return false;
+      const data = JSON.parse(await res.text());
+      this.apiKey = data.token;
+      this.refreshToken = data.refreshToken;
+      const expiresAt = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
+      this.onRefreshed?.({ token: data.token, refreshToken: data.refreshToken, expiresAt });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  async listRepos(org) {
+    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/repos`);
+  }
+  async getRepo(org, repo) {
+    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/repos/${encodeURIComponent(repo)}`);
+  }
+  async updateWorkflow(org, repo, workflowType, body) {
+    return this.request("PUT", `/api/v1/orgs/${encodeURIComponent(org)}/repos/${repo}/workflows/${encodeURIComponent(workflowType)}`, body);
+  }
+  async listActivity(org, params) {
+    const qs = new URLSearchParams;
+    if (params?.cursor)
+      qs.set("cursor", params.cursor);
+    if (params?.limit)
+      qs.set("limit", String(params.limit));
+    const query = qs.toString();
+    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/activity${query ? `?${query}` : ""}`);
+  }
+  async getStats(org) {
+    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/stats`);
+  }
+  async getTokenStats(org, days = 30) {
+    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/stats/tokens?days=${encodeURIComponent(String(days))}`);
+  }
+  async getOrg(org) {
+    return this.request("GET", `/api/v1/orgs/${org}`);
+  }
+  async listChannels(org) {
+    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/channels`);
+  }
+  async addChannel(org, body) {
+    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/channels`, body);
+  }
+  async exchangeGhToken(ghToken) {
+    return this.request("POST", `/api/v1/auth/token`, { access_token: ghToken });
+  }
+  async connectWithToken(ghToken, org) {
+    return this.request("POST", `/api/v1/auth/token-connect`, { github_token: ghToken, org });
+  }
+  async refreshJWT(refreshToken) {
+    return this.request("POST", `/api/v1/auth/refresh`, { refreshToken });
+  }
+  async getRepoByFullName(org, owner, repo) {
+    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/repos/by-fullname/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+  }
+  async transferRepo(org, owner, repo, newFullName) {
+    return this.request("PATCH", `/api/v1/orgs/${encodeURIComponent(org)}/repos/by-fullname/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { newFullName });
+  }
+  async getTriage(org, projectId, repo, issueNumber) {
+    const qs = new URLSearchParams({ repo, issue: String(issueNumber) });
+    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/triage?${qs}`);
+  }
+  async matchPrecedent(org, projectId, body) {
+    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/precedents/match`, body);
+  }
+  async signal(org, projectId, refKind, number, action, body) {
+    await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/${refKind}/${number}/${action}`, body);
+  }
+  async attachEvidence(org, projectId, number, opts) {
+    const form = new FormData;
+    form.set("repo", opts.repo);
+    if (opts.pr)
+      form.set("pr", String(opts.pr));
+    if (opts.previewUrl)
+      form.set("previewUrl", opts.previewUrl);
+    if (opts.caption)
+      form.set("caption", opts.caption);
+    for (const l of opts.labels ?? [])
+      form.append("pairLabel", l);
+    for (const c of opts.beforeCaptions ?? [])
+      form.append("beforeCaption", c);
+    for (const c of opts.afterCaptions ?? [])
+      form.append("afterCaption", c);
+    for (const c of opts.actualCaptions ?? [])
+      form.append("actualCaption", c);
+    for (const c of opts.imageCaptions ?? [])
+      form.append("imageCaption", c);
+    for (const tf of opts.touched ?? [])
+      form.append("touched", tf);
+    const appendAll = (field, imgs) => {
+      for (const img of imgs ?? [])
+        form.append(field, new Blob([img.data]), img.filename);
+    };
+    appendAll("before", opts.before);
+    appendAll("after", opts.after);
+    appendAll("actual", opts.actual);
+    appendAll("images", opts.images);
+    const res = await this.fetchWithRefresh(`${this.baseUrl}/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/issues/${number}/evidence`, { method: "POST", body: form });
+    if (!res.ok) {
+      throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    }
+    return res.json();
+  }
+  async uploadMedia(org, projectId, files) {
+    const form = new FormData;
+    for (const f of files)
+      form.append("files", new Blob([f.data]), f.filename);
+    const res = await this.fetchWithRefresh(`${this.baseUrl}/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/media`, { method: "POST", body: form });
+    if (!res.ok) {
+      throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    }
+    return res.json();
+  }
+  async claimIssue(org, projectId, number, body) {
+    try {
+      const res = await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/issues/${number}/claim`, body);
+      return res?.claim ?? null;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        let holder;
+        try {
+          holder = JSON.parse(e.body).holder;
+        } catch {}
+        throw new ClaimConflictError(holder);
+      }
+      throw e;
+    }
+  }
+  async listClaims(org, projectId) {
+    const res = await this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/claims`);
+    return res?.claims ?? [];
+  }
+  async createCapabilityRequest(org, projectId, body) {
+    const res = await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/capability-requests`, body);
+    return res.capabilityRequest;
+  }
+  async listCapabilityRequests(org, projectId, status) {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+    const res = await this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/capability-requests${qs}`);
+    return res?.capabilityRequests ?? [];
+  }
+  async triggerRelease(org, projectId, body) {
+    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/release`, body);
+  }
+  async triggerWorkflow(org, projectId, workflowType, inputs) {
+    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowType)}/trigger`, inputs);
+  }
+  async getExecutionResult(org, execId) {
+    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/executions/${encodeURIComponent(execId)}/result`);
+  }
+  async getProjectStatus(org, projectId) {
+    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/status`);
+  }
+  async getFeatureMapping(org, projectId) {
+    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/feature-mapping`);
+  }
+  async generateFeatureMapping(org, projectId) {
+    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/feature-mapping/generate`);
+  }
+}
+var ApiError, ClaimConflictError;
+var init_client = __esm(() => {
+  ApiError = class ApiError extends Error {
+    status;
+    body;
+    constructor(status, body) {
+      super(`API error ${status}: ${envelopeMessage(body) ?? body}`);
+      this.status = status;
+      this.body = body;
+      this.name = "ApiError";
+    }
+  };
+  ClaimConflictError = class ClaimConflictError extends Error {
+    holder;
+    constructor(holder) {
+      super(holder ? `issue claimed by ${holder.actor}${holder.agent ? ` (${holder.agent})` : ""} until ${holder.expiresAt}` : "issue already claimed");
+      this.holder = holder;
+      this.name = "ClaimConflictError";
+    }
+  };
+});
+
 // src/shipflow-contract-data.ts
 var SHIPFLOW_CONTRACT;
 var init_shipflow_contract_data = __esm(() => {
@@ -3553,293 +3840,6 @@ var init_config = __esm(() => {
   APP_SLUG_RE = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/;
 });
 
-// src/client.ts
-function envelopeMessage(body) {
-  try {
-    const parsed = JSON.parse(body);
-    if (parsed && typeof parsed.error === "object" && parsed.error && typeof parsed.error.message === "string") {
-      const msg = parsed.error.message.trim();
-      return msg || null;
-    }
-  } catch {}
-  return null;
-}
-function backoffMs(attempt) {
-  return 300 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
-}
-
-class ShipFlowClient {
-  baseUrl;
-  apiKey;
-  refreshToken;
-  onRefreshed;
-  fetchImpl;
-  sleep;
-  constructor(opts) {
-    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
-    this.apiKey = opts.jwt || opts.apiKey;
-    this.refreshToken = opts.refreshToken;
-    this.onRefreshed = opts.onRefreshed;
-    this.fetchImpl = opts.fetch ?? fetch;
-    this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  }
-  static REQUEST_TIMEOUT_MS = 60000;
-  static UPLOAD_TIMEOUT_MS = 180000;
-  authedFetch(method, path, body) {
-    const headers = { "Content-Type": "application/json" };
-    if (this.apiKey)
-      headers["Authorization"] = `Bearer ${this.apiKey}`;
-    return this.fetchImpl(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(ShipFlowClient.REQUEST_TIMEOUT_MS)
-    });
-  }
-  async fetchWithRefresh(url, init) {
-    const withAuth = () => {
-      const headers = new Headers(init.headers);
-      if (this.apiKey)
-        headers.set("Authorization", `Bearer ${this.apiKey}`);
-      return { signal: AbortSignal.timeout(ShipFlowClient.UPLOAD_TIMEOUT_MS), ...init, headers };
-    };
-    let res = await this.fetchImpl(url, withAuth());
-    if (res.status === 401 && this.refreshToken && await this.tryRefresh()) {
-      res = await this.fetchImpl(url, withAuth());
-    }
-    return res;
-  }
-  async toResult(res) {
-    if (!res.ok) {
-      const text2 = await res.text().catch(() => res.statusText);
-      throw new ApiError(res.status, text2);
-    }
-    const text = await res.text();
-    if (!text)
-      return;
-    return JSON.parse(text);
-  }
-  async request(method, path, body) {
-    const retriable = method.toUpperCase() === "GET";
-    const maxAttempts = retriable ? 3 : 1;
-    let lastErr;
-    for (let attempt = 0;attempt < maxAttempts; attempt++) {
-      try {
-        let res = await this.authedFetch(method, path, body);
-        if (res.status === 401 && this.refreshToken && await this.tryRefresh()) {
-          res = await this.authedFetch(method, path, body);
-        }
-        if (retriable && res.status >= 500 && attempt < maxAttempts - 1) {
-          await this.sleep(backoffMs(attempt));
-          continue;
-        }
-        return this.toResult(res);
-      } catch (e) {
-        lastErr = e;
-        if (retriable && attempt < maxAttempts - 1) {
-          await this.sleep(backoffMs(attempt));
-          continue;
-        }
-        throw e;
-      }
-    }
-    throw lastErr ?? new Error("request failed");
-  }
-  async tryRefresh() {
-    const rt = this.refreshToken;
-    if (!rt)
-      return false;
-    this.refreshToken = undefined;
-    try {
-      const res = await this.fetchImpl(`${this.baseUrl}/api/v1/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken: rt })
-      });
-      if (!res.ok)
-        return false;
-      const data = JSON.parse(await res.text());
-      this.apiKey = data.token;
-      this.refreshToken = data.refreshToken;
-      const expiresAt = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
-      this.onRefreshed?.({ token: data.token, refreshToken: data.refreshToken, expiresAt });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  async listRepos(org) {
-    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/repos`);
-  }
-  async getRepo(org, repo) {
-    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/repos/${encodeURIComponent(repo)}`);
-  }
-  async updateWorkflow(org, repo, workflowType, body) {
-    return this.request("PUT", `/api/v1/orgs/${encodeURIComponent(org)}/repos/${repo}/workflows/${encodeURIComponent(workflowType)}`, body);
-  }
-  async listActivity(org, params) {
-    const qs = new URLSearchParams;
-    if (params?.cursor)
-      qs.set("cursor", params.cursor);
-    if (params?.limit)
-      qs.set("limit", String(params.limit));
-    const query = qs.toString();
-    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/activity${query ? `?${query}` : ""}`);
-  }
-  async getStats(org) {
-    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/stats`);
-  }
-  async getTokenStats(org, days = 30) {
-    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/stats/tokens?days=${encodeURIComponent(String(days))}`);
-  }
-  async getOrg(org) {
-    return this.request("GET", `/api/v1/orgs/${org}`);
-  }
-  async listChannels(org) {
-    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/channels`);
-  }
-  async addChannel(org, body) {
-    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/channels`, body);
-  }
-  async exchangeGhToken(ghToken) {
-    return this.request("POST", `/api/v1/auth/token`, { access_token: ghToken });
-  }
-  async connectWithToken(ghToken, org) {
-    return this.request("POST", `/api/v1/auth/token-connect`, { github_token: ghToken, org });
-  }
-  async refreshJWT(refreshToken) {
-    return this.request("POST", `/api/v1/auth/refresh`, { refreshToken });
-  }
-  async getRepoByFullName(org, owner, repo) {
-    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/repos/by-fullname/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
-  }
-  async transferRepo(org, owner, repo, newFullName) {
-    return this.request("PATCH", `/api/v1/orgs/${encodeURIComponent(org)}/repos/by-fullname/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { newFullName });
-  }
-  async getTriage(org, projectId, repo, issueNumber) {
-    const qs = new URLSearchParams({ repo, issue: String(issueNumber) });
-    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/triage?${qs}`);
-  }
-  async matchPrecedent(org, projectId, body) {
-    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/precedents/match`, body);
-  }
-  async signal(org, projectId, refKind, number, action, body) {
-    await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/${refKind}/${number}/${action}`, body);
-  }
-  async attachEvidence(org, projectId, number, opts) {
-    const form = new FormData;
-    form.set("repo", opts.repo);
-    if (opts.pr)
-      form.set("pr", String(opts.pr));
-    if (opts.previewUrl)
-      form.set("previewUrl", opts.previewUrl);
-    if (opts.caption)
-      form.set("caption", opts.caption);
-    for (const l of opts.labels ?? [])
-      form.append("pairLabel", l);
-    for (const c of opts.beforeCaptions ?? [])
-      form.append("beforeCaption", c);
-    for (const c of opts.afterCaptions ?? [])
-      form.append("afterCaption", c);
-    for (const c of opts.actualCaptions ?? [])
-      form.append("actualCaption", c);
-    for (const c of opts.imageCaptions ?? [])
-      form.append("imageCaption", c);
-    for (const tf of opts.touched ?? [])
-      form.append("touched", tf);
-    const appendAll = (field, imgs) => {
-      for (const img of imgs ?? [])
-        form.append(field, new Blob([img.data]), img.filename);
-    };
-    appendAll("before", opts.before);
-    appendAll("after", opts.after);
-    appendAll("actual", opts.actual);
-    appendAll("images", opts.images);
-    const res = await this.fetchWithRefresh(`${this.baseUrl}/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/issues/${number}/evidence`, { method: "POST", body: form });
-    if (!res.ok) {
-      throw new ApiError(res.status, await res.text().catch(() => res.statusText));
-    }
-    return res.json();
-  }
-  async uploadMedia(org, projectId, files) {
-    const form = new FormData;
-    for (const f of files)
-      form.append("files", new Blob([f.data]), f.filename);
-    const res = await this.fetchWithRefresh(`${this.baseUrl}/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/media`, { method: "POST", body: form });
-    if (!res.ok) {
-      throw new ApiError(res.status, await res.text().catch(() => res.statusText));
-    }
-    return res.json();
-  }
-  async claimIssue(org, projectId, number, body) {
-    try {
-      const res = await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/issues/${number}/claim`, body);
-      return res?.claim ?? null;
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        let holder;
-        try {
-          holder = JSON.parse(e.body).holder;
-        } catch {}
-        throw new ClaimConflictError(holder);
-      }
-      throw e;
-    }
-  }
-  async listClaims(org, projectId) {
-    const res = await this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/claims`);
-    return res?.claims ?? [];
-  }
-  async createCapabilityRequest(org, projectId, body) {
-    const res = await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/capability-requests`, body);
-    return res.capabilityRequest;
-  }
-  async listCapabilityRequests(org, projectId, status) {
-    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-    const res = await this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/capability-requests${qs}`);
-    return res?.capabilityRequests ?? [];
-  }
-  async triggerRelease(org, projectId, body) {
-    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/release`, body);
-  }
-  async triggerWorkflow(org, projectId, workflowType, inputs) {
-    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowType)}/trigger`, inputs);
-  }
-  async getExecutionResult(org, execId) {
-    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/executions/${encodeURIComponent(execId)}/result`);
-  }
-  async getProjectStatus(org, projectId) {
-    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/status`);
-  }
-  async getFeatureMapping(org, projectId) {
-    return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/feature-mapping`);
-  }
-  async generateFeatureMapping(org, projectId) {
-    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/feature-mapping/generate`);
-  }
-}
-var ApiError, ClaimConflictError;
-var init_client = __esm(() => {
-  ApiError = class ApiError extends Error {
-    status;
-    body;
-    constructor(status, body) {
-      super(`API error ${status}: ${envelopeMessage(body) ?? body}`);
-      this.status = status;
-      this.body = body;
-      this.name = "ApiError";
-    }
-  };
-  ClaimConflictError = class ClaimConflictError extends Error {
-    holder;
-    constructor(holder) {
-      super(holder ? `issue claimed by ${holder.actor}${holder.agent ? ` (${holder.agent})` : ""} until ${holder.expiresAt}` : "issue already claimed");
-      this.holder = holder;
-      this.name = "ClaimConflictError";
-    }
-  };
-});
-
 // src/prompts.ts
 var exports_prompts = {};
 __export(exports_prompts, {
@@ -4949,6 +4949,25 @@ function requireFlagWhenMachine(opts, flag, value) {
     throw new UsageError(`${flag} is required with --json/--yaml`);
   }
 }
+function installJsonUsageOverride(program2) {
+  const jsonRequested = () => process.argv.includes("--json");
+  program2.configureOutput({
+    outputError: (str, write) => {
+      if (!jsonRequested())
+        write(str);
+    }
+  });
+  program2.exitOverride((err) => {
+    if (COMMANDER_PASSTHROUGH.has(err.code))
+      process.exit(err.exitCode);
+    if (jsonRequested()) {
+      const message = err.message.replace(/^error:\s*/i, "");
+      console.log(JSON.stringify({ error: message }));
+      process.exit(1);
+    }
+    process.exit(err.exitCode);
+  });
+}
 function resolveMeLogin(context) {
   const me = ghCurrentLogin();
   if (!me) {
@@ -4972,7 +4991,7 @@ function runAction(fn) {
     }
   };
 }
-var UNEXPECTED_EXIT_CODE = 10, UsageError;
+var UNEXPECTED_EXIT_CODE = 10, UsageError, COMMANDER_PASSTHROUGH;
 var init_helpers = __esm(() => {
   init_client();
   init_config();
@@ -4982,6 +5001,11 @@ var init_helpers = __esm(() => {
   init_output();
   UsageError = class UsageError extends Error {
   };
+  COMMANDER_PASSTHROUGH = new Set([
+    "commander.help",
+    "commander.helpDisplayed",
+    "commander.version"
+  ]);
 });
 
 // src/index.ts
@@ -5002,6 +5026,9 @@ var {
   Option,
   Help
 } = import__.default;
+
+// src/index.ts
+init_helpers();
 
 // src/commands/auth.ts
 init_config();
@@ -12232,6 +12259,7 @@ program2.hook("preAction", () => {
   if (p)
     process.env.SHIPFLOW_PROFILE = p;
 });
+installJsonUsageOverride(program2);
 registerAuthCommands(program2);
 registerRepoCommands(program2);
 registerWorkflowCommands(program2);
