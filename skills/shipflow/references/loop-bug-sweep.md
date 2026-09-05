@@ -96,9 +96,30 @@ refills the queue:
    | Scan window came back FULL | 0 | Filed, with a loud `window is FULL` warning — the older issues were never scanned; check by hand |
    | Open-issue fetch failed | 0 | Warned + filed anyway — a GitHub outage never blocks a filing; dedupe by hand |
 3. **Feed the loop**: filed ≥1 new issue → **back to A**. Nothing new
-   (clean, or only dupes) → *that's* the real stop.
+   (clean, or only dupes) → **refill** (step 4) if it is on, else *that's*
+   the real stop.
 
-Bound it: at most `bug-hunt-cap` new issues per run (default 5); the PR
-`cap` still applies to fixes. `config set bug-hunt false` (or
-`SHIPFLOW_BUG_HUNT=false`) → an empty queue just stops.
+4. **Refill — beyond bugs, OFF by default.** The sweep only files what a
+   browser can reproduce, so a healthy site ends the run with the agent
+   idle until the next tick. `refill=on` (token) / `SHIPFLOW_LOOP_REFILL=on`
+   lets the loop file work from sources it already reads — same dedupe
+   (exit 12), same intake review, same `bug-hunt-cap`, labelled
+   `--label auto-refill` so the operator can filter or turn it off:
+
+   | Source | Files an issue when | Body must carry |
+   | --- | --- | --- |
+   | `renaiss-shipflow priorities --json` | a greenlit class has no open issue and the doc names a concrete deliverable for it | the class rank + the doc line quoted — never an invented scope |
+   | `renaiss-shipflow features --json` | a `test_priority: high` feature has no regression coverage the sweep could run | the feature name + which surface is uncovered |
+   | this pass's test output | a test was skipped/flaky (`.skip`, retried, timed out) in a run the loop executed | the test id + the run it happened in |
+
+   Refill never invents product work: no doc line, no feature gap, no
+   observed flake → nothing to file. Per run at most `bug-hunt-cap` refill
+   issues **in total** with the sweep's, and refill runs only after the
+   sweep came back empty. Off (the default) → an empty sweep is the real
+   stop, as before. Turn it on for a week, read what it filed, then decide.
+
+Bound it: at most `bug-hunt-cap` new issues per run (default 5), sweep and
+refill together; the PR `cap` still applies to fixes. `config set bug-hunt
+false` (or `SHIPFLOW_BUG_HUNT=false`) → an empty queue just stops, refill
+included.
 

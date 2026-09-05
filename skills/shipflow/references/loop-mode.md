@@ -283,6 +283,27 @@ loop-authored PR goes through `renaiss-shipflow pr note <n> --body …
 [--rework-from <id>]` (#603); bare `gh pr comment` is banned (measured,
 #477). Gated-PR / `needs-human` comment protocol → `loop-gate.md`.
 
+- **Escalations you own — re-probe before you re-park (every tick, serial,
+  no dispatch).** `renaiss-shipflow issues list --label needs-human
+  --assignee @me --json`. Escalated issues otherwise sit until a human
+  answers; measured 2026-09-05 (renaiss-os-index): 20 open, the oldest 5
+  weeks, and several asked the human a question the loop could answer
+  itself. For each, read the 🚧 category and:
+  - `missing-secret` / `external-dependency` → re-run the probe that
+    justified it (the env var or config key now present? the blocking
+    issue/PR merged? the vendor endpoint answering?). Blocker gone →
+    `issue escalate <n> --update --reason "resolved: <probe → output>"`,
+    then remove `needs-human` yourself (`gh issue edit <n> --remove-label
+    needs-human`) and let B re-pick it. This is the ONE case the loop clears
+    its own escalation: the fact is objective and the probe is in the
+    comment. Never for `money-write`, `prod-config`, `security`, `invalid`,
+    or a priority sign-off — those wait for the human.
+  - a decision row the loop can now answer from evidence (a #-cited comment
+    says prod moved; the measurement is stale; the duplicate it named was
+    closed) → `--update` the banner to shrink the ask to what only a human
+    can decide. A four-row table the human has to research is why it sits.
+  - nothing changed → leave it; it appears in the pass-end decisions table
+    (§ D) with its age.
 - `ci_failing` → worker fixes failing checks (`gh pr checks <n>`), pushes.
   Track attempts across ticks; `max-fix-attempts` still red →
   `renaiss-shipflow issue escalate <issue> --category <cat> --reason "CI red after N attempts: …"`.
@@ -495,8 +516,9 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
 2. **Reviewer — intake** (mandatory; `require-review`). Dispatch with issue
    + triage. It pulls `features --json`, consults `renaiss-shipflow
    priorities --json` → `docs/PRIORITIES.md` (greenlit class + normal slice
-   proceeds; deploy-blast-radius always per-item sign-off; off-doc
-   escalates — `loop-reviewer-intake.md` step 1b), validates, maps to
+   proceeds; deploy-blast-radius always per-item sign-off; off-doc with a
+   doc present escalates; **no doc + assigned issue proceeds** — the
+   assignment is the sign-off, `loop-reviewer-intake.md` step 1b), validates, maps to
    features, returns an **acceptance brief** (what "done" means + features
    to regression-check). Reject (invalid/duplicate/needs a human) →
    `issue escalate <n> --category <cat> --reason "..."`, pick next. Escalate may return
@@ -602,7 +624,11 @@ change, never by hand:
 
 B exit 4 + A clean + `bug-hunt` on → load `loop-bug-sweep.md` and follow it:
 test + regression + browser QA, file only REPRODUCED bugs (dedupe enforced,
-exit 12), cap `bug-hunt-cap`. Filed ≥1 → back to A; nothing new → real stop.
+exit 12), cap `bug-hunt-cap`. Filed ≥1 → back to A; nothing new → **refill**
+(`loop-bug-sweep.md` step 4 — `refill=on` / `SHIPFLOW_LOOP_REFILL=on`,
+default off: file work from `priorities`, uncovered high-priority features,
+and flakes the pass observed, never invented scope) → filed ≥1 → back to A;
+still nothing → real stop.
 
 ### D. Repeat / stop
 
@@ -627,7 +653,24 @@ Tokens the orchestrator itself spent go in the totals line when the harness
 reports them. No ledger = the pass is not done.
 Include `tokensReadPerTick` in the totals row — the doc/context TOKENS this
 tick loaded (spine + cards + contracts; ≈ bytes/4), so corpus creep stays
-measurable (#611).
+measurable (#611). Also sum every worker return's `intakeCorrections`
+(`loop-worker.md` § Return) into the totals row as `intake corrections: N`
+— the count of brief claims the workers had to disprove this pass. It is
+the only signal that intake is asserting facts it did not probe
+(`loop-reviewer-intake.md` §5b); a pass with fixes and zero corrections is
+the target, a run that keeps printing ≥1 means intake needs the probe rule
+enforced, not the workers.
+
+**Open decisions table (every pass end, after the ledger).** The human
+bottleneck is not this pass's escalations, it is every escalation still
+open — the operator sees them one issue at a time and answers none. Print
+ONE table of every `needs-human` issue the loop owns
+(`renaiss-shipflow issues list --label needs-human --assignee @me --json`):
+`#issue · category · age (days) · the loop's recommendation in ≤8 words ·
+reply`, oldest first, and put `🚧 N open decisions (oldest Nd)` in the
+summary line in place of a bare count. Same rows every tick until they
+clear — repetition is the point; a decision nobody sees is a decision
+nobody makes. Under 3 open → skip the table, keep the count.
 
 **At the cap or an empty queue:** summarize — PRs opened, merged,
 parked-awaiting-review, escalated (with reasons) — then ask whether to

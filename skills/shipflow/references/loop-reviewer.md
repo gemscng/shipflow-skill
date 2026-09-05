@@ -195,7 +195,17 @@ mean "irrelevant", they stop meaning anything.
 1. **Deviations first.** Per entry in the packet's *Deviations from brief*
    section: conservative option? sound reason? spec still holds? An
    undocumented deviation you detect in the diff is itself a finding — the
-   contract requires logging them.
+   contract requires logging them. A row opening `intake correction:`
+   (`loop-worker.md` §5b) claims the brief stated a repo fact wrongly:
+   **re-run its probe yourself** — same command, on the PR head — and judge
+   on your output, not the worker's. Reproduced → the brief was wrong, say
+   so in the verdict line (`brief corrected ×N`) so the intake reviewer's
+   record shows it. Not reproduced → `request_changes` naming the row; a
+   worker that "corrects" a true claim has misread the repo, and the
+   acceptance criterion built on that claim still binds. Also check the
+   Verified line for `proxy:` (`loop-worker.md` §4): a proxy while the
+   brief's `runners:` line lists an e2e runner is `request_changes` —
+   the criterion is lockable and was not locked.
 1b. **Reconcile CLAIMED behavior against the issue's ASK — reject
    reinterpretations toward escalation, never approve-with-a-note.** PR
    claims (title, description, deviations, interpretation note/marker) vs the

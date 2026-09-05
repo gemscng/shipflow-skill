@@ -93,6 +93,21 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    test files), assert the *correct behavior* — not "it renders". Run just
    that file; commit it with the fix. Skip only for pure-CSS changes or no
    test framework (note it in the return).
+   **Lock the criterion at the level it is stated.** The brief's `runners:`
+   line (`loop-reviewer-intake.md` §5b) says what is available. A criterion
+   stated per page or per route ("exactly one `<main>` on `/item`", "the
+   redirect lands on `/verify`") is locked with the e2e runner when the
+   brief lists one — a unit render of the child proves a proxy ("the child
+   contributes zero"), not the criterion. A proxy is allowed only when no
+   e2e runner exists or the e2e environment genuinely cannot run here, and
+   then the Verified line says so: `proxy: jsdom render — no e2e runner`.
+   Never claim the criterion is locked when the test locks the proxy (#2165
+   in renaiss-os-index shipped a jsdom count while `@playwright/test` sat in
+   `devDependencies`, because the intake said there was none).
+   **Committed comments cite symbols, not line numbers.** `globals.css:488`
+   in a test comment is wrong the week after it merges; `.shell in
+   globals.css` is not. Line numbers belong in GitHub writes, which are
+   dated (`message-style.md`).
 5. **PR** — commit via Skill tool → **`shipflow:smart-commit`**
    (plugin-qualified — a bare name can resolve to another plugin's copy,
    #544; message-style.md § "Commit messages": no AI-attribution trailer, skip
@@ -122,6 +137,15 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    `pr automerge`/`pr ready` refuse + apply `needs-reporter-review` — silence
    is not consent; clears on one reporter reply (or maintainer label
    removal). Genuine *reinterpretation* → 5d.
+   **A brief claim you found false is an `intake correction:` row, never a
+   silent fix.** When the brief asserts a repo fact and the repo disagrees
+   (the brief said no `<main` under `app/api`, `grep` finds one; the brief
+   said no e2e runner, `package.json` has one), add a row in the same table
+   whose Deviation cell opens `intake correction:` and whose Why cell is the
+   probe that disproved it: `grep -rn "<main" app/api → route.ts:62`. The
+   reviewer re-runs every such probe (`loop-reviewer.md` §1); a correction
+   that only lives in your head lets the same wrong claim reach the next
+   worker. Count them in the return (`intakeCorrections`).
 5c. **UI work: mock first.** For `category:ui` issues (or any change whose
    acceptance depends on how it LOOKS), slice 1 is a static mock — HTML page
    or screenshot with fake data — attached as evidence for reaction before
@@ -268,12 +292,16 @@ A `verified: true` you can't defend is worse than an honest `blocked`.
 { "issue": 42, "pr": 87, "verified": true, "blocked": false,
   "regressionTest": "tests/foo.regression.test.ts" ,
   "healthDelta": "+4",
+  "intakeCorrections": 0,
   "summary": "one line: what changed + how it was verified",
   "reason": "" }
 ```
 `blocked: true` + `reason` when no PR was opened. `regressionTest`: the path
-(or `"skipped: <why>"`); `healthDelta`: score change (or `"n/a"` for backend).
-Keep `summary` to one line — no diffs or logs.
+(or `"skipped: <why>"`, or `"proxy: <level> — <why>"` when it locks a proxy,
+§4); `healthDelta`: score change (or `"n/a"` for backend);
+`intakeCorrections`: how many `intake correction:` rows the PR body carries
+(§5b) — the orchestrator sums it into the pass ledger so a brief that is
+often wrong becomes visible. Keep `summary` to one line — no diffs or logs.
 
 ## Message style — everything you write on GitHub
 

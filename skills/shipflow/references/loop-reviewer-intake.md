@@ -60,10 +60,28 @@ Input: issue + `triage`. Produce an **acceptance brief**:
      `priorities: class <rank> — <name>` in the brief.
    - Deploy-blast-radius (reverts, releases, deployment/config paths) →
      per-item human sign-off ALWAYS, even when greenlit.
-   - Off-doc (no class match, `found: false`, or a parse `warning`) →
-     escalate for sign-off as before.
+   - Off-doc with a doc present (the doc exists and names classes, and this
+     issue matches none) → escalate for sign-off as before: the owner wrote
+     a greenlist and this is not on it.
+   - **No doc (`found: false`) → proceed; do NOT escalate.** Under
+     `pickup-scope=assigned` (the default) the loop only ever sees issues
+     the operator assigned to it, and the assignment IS the product
+     decision — asking them to sign off on it again is asking the human to
+     approve their own queue. Record `priorities: no doc — assignment is
+     the sign-off` in the brief. Measured 2026-09-05 (renaiss-os-index, no
+     `docs/PRIORITIES.md`): #1970 and #1976, both operator-filed and
+     operator-assigned, sat 4 days under `needs-human` on a banner whose
+     own recommendation was "Yes, greenlight". Under `pickup-scope=all` the
+     assignment signal is absent, so a missing doc there still escalates.
+     A parse `warning` (doc present but unreadable) escalates — a broken
+     greenlist is a greenlist the owner meant to apply.
    The doc settles product priority only — other step-1 hard blockers still
-   escalate. WIP share steers the admit mix, not a per-issue gate.
+   escalate. WIP share steers the admit mix, not a per-issue gate. A sign-off
+   escalation is a **product-priority** call: its Action-needed line must
+   say so ("worth doing now?"), never read as a validity or duplicate
+   question — `invalid` is the closest category the CLI has, and its stock
+   rationale ("closing someone's issue is a judgment call") misleads the
+   reader unless your first line corrects it.
 2. **Too big or ambiguous? — scope down, don't refuse.** Large / open-ended /
    ambiguous / contradictory is NOT grounds to escalate. Carve the smallest
    bounded, value-adding slice you can confidently accept; brief that slice.
@@ -94,6 +112,25 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    fresh assumptions comment must open `Supersedes the <date> intake
    comment.` so the reader knows exactly one is live (issue #921 collected
    two competing assumption sets with no ordering cue).
+5b. **A repo-fact claim carries its probe — never assert what you did not
+   run.** Any Unknown/Assumption row or acceptance criterion that states a
+   fact about the repo (a file has or lacks X · a tool is or is not
+   installed · only N files match · a route exists) must show the command
+   and the first line of its output: `grep -rn "<main" app | wc -l → 3`,
+   `jq .devDependencies package.json | grep -c playwright → 1`. No probe →
+   the row is a guess, and a guess in the brief steers the worker: the
+   #2165 intake (renaiss-os-index) asserted "no `<main` under `app/api`" and
+   "no Playwright in this repo" without running either; both were false,
+   the acceptance criterion built on the first could not be met literally
+   (a deviation row, a reporter gate, 18 minutes of operator time), and the
+   second steered the worker to a jsdom proxy when an e2e lock was
+   available. Acceptance criteria cite only probed facts.
+   **Mandatory probe — the test runners present.** Read `package.json`
+   `scripts` + `devDependencies` (and `go.mod` / `Cargo.toml` / `pyproject`
+   for other stacks) and list them in the brief as one line —
+   `runners: vitest (unit, jsdom) · playwright (e2e, test:e2e) · go test` —
+   so the worker locks the criterion at the level it is stated
+   (`loop-worker.md` §4) instead of at whichever level it found first.
 6. **Uncertainty first, references over descriptions.** Lead with the most
    likely wrong (data-model changes, new type interfaces, user-facing
    behavior); routine refactoring last. When target behavior exists in code

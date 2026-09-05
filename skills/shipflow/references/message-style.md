@@ -26,7 +26,11 @@ never the default:
 Rules that hold for every format:
 
 - Lead with the outcome: verdict / fixed / blocked — then the visuals.
-- `path:line`, numbers, and short quotes beat descriptions.
+- `path:line`, numbers, and short quotes beat descriptions — in GitHub
+  writes, which carry a date. In anything **committed** (code comments,
+  test names, docs) cite the symbol or selector (`.shell in globals.css`,
+  `safeNext()`), never the line: a line number is wrong after the next
+  edit to that file and nobody re-checks a comment.
 - Asking a human to choose? Render a **decision table** —
   `| # | Decision | Recommendation | If chosen |` — whose `#` matches the
   `N: answer` reply protocol. Every option row carries the loop's

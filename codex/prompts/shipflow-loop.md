@@ -23,6 +23,7 @@ file's real section headings (§) — follow them there, never from memory.
 | `concurrency=N` | max issues/PRs worked at once (#744); `concurrency=1` = fully serial |
 | `usage-max=N` | do not start a tick once the Claude 5-hour **or** weekly usage is at/above N% (default **90**) |
 | `limit-reset=off` | never spend Claude Code's once-a-week `/limit-reset` when the 5-hour window stops a tick (default: spend it, 5-hour window only) |
+| `refill=on` | after an empty bug sweep, also file work from `priorities`, uncovered `test_priority: high` features, and flaky tests (`auto-refill`; default **off** — `loop-bug-sweep.md` step 4) |
 | anything else | an `issue next` filter (e.g. `--label bug`) |
 
 **Cap precedence:** a user `cap=N` token → `$SHIPFLOW_LOOP_CAP` → **5**.
@@ -34,6 +35,9 @@ file's real section headings (§) — follow them there, never from memory.
 **Session reset:** a `limit-reset=off` token → export
 `SHIPFLOW_LOOP_LIMIT_RESET=off` for the run so the tool refuses the spend
 too; `$SHIPFLOW_LOOP_LIMIT_RESET` → **on**.
+**Refill:** a `refill=on` token → `$SHIPFLOW_LOOP_REFILL` → **off**. Also
+invocation-only; the sweep's `bug-hunt` / `bug-hunt-cap` config knobs still
+bound it.
 
 ## The tick — skeleton (each step lives in loop-mode.md at the § named)
 
@@ -126,7 +130,7 @@ Unless `once` was passed, set the trigger up once, idempotently, at run start:
 | GitHub comment/PR/issue formats, issue-body ladder, commit messages | `references/message-style.md` |
 
 **End of every pass (mandatory):** post the ONE emoji-coded summary line — `✅ N
-merged · 🔀 N opened · ⏸ N parked (reason) · 🚧 N escalated (reason)` — rules
+merged · 🔀 N opened · ⏸ N parked (reason) · 🚧 N open decisions (oldest Nd)` — rules
 (incl. what a `once` run may ask, and gated-row wording) in § "D. Repeat /
 stop".
 **Tick 1's Initial Plan block (pass ledger) is mandatory** before any dispatch —
