@@ -3951,8 +3951,9 @@ async function resolveProjectDegradable(client, creds) {
   const repoFullName = `${remote.owner}/${remote.repo}`;
   const cacheKey = projectCacheKeyForRepoPath(resolve(root));
   const cache = loadProjectCache();
-  if (cache[cacheKey]) {
-    return { repoFullName, project: { ...cache[cacheKey], repoFullName }, degraded: [], warning: null };
+  const cached = cache[cacheKey];
+  if (cached && cached.tenantId === creds.tenantId && cached.org === creds.org) {
+    return { repoFullName, project: { ...cached, repoFullName }, degraded: [], warning: null };
   }
   let lookup;
   try {
