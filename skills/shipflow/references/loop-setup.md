@@ -132,6 +132,8 @@ then worktree cleanup (§ Setup). The trigger fires only while Claude Code
 runs/idles, may be session-scoped (cmux, ~7-day expiry); for always-on,
 an external scheduler (cron / launchd / GitHub Actions) drives
 `/shipflow:shipflow-loop once`. Codex CLI and Cursor have no CronCreate —
-external scheduler only; subagent dispatch degrades to inline roles
+loop in-session instead (sleep the interval in ≤300 s chunks, then the
+next pass; never stop after one pass) or run `shipflow-codex-loop` for
+always-on; subagent dispatch degrades to inline roles
 (`references/codex.md`, `references/cursor.md`). Invocation tokens
 (`once`, `stop`, `watch=`) live on `/shipflow:shipflow-loop`.

@@ -17,7 +17,7 @@ file's real section headings (§) — follow them there, never from memory.
 | Token | Meaning |
 |---|---|
 | `once` | run a single pass and stop, no trigger (the old one-shot behavior) |
-| `stop` | stop continuous mode (delete the trigger) |
+| `stop` | stop continuous mode (delete the trigger; an in-session loop ends after the current pass) |
 | `watch=<dur>` | override the re-run interval (default `15m`) |
 | `cap=N` | how many PRs to open per pass before pausing; `cap=all` drains the queue |
 | `concurrency=N` | max issues/PRs worked at once (#744); `concurrency=1` = fully serial |
@@ -101,6 +101,14 @@ Unless `once` was passed, set the trigger up once, idempotently, at run start:
   /shipflow-loop`); always use the exact `<plugin>:<command>` form you were invoked
   as. Then run the first pass now. Re-entry is **idempotent** — a tick sees the
   existing job via `CronList` and skips re-creating it, so crons never stack.
+- **No `CronCreate` in this harness** (Codex CLI, Cursor, any harness without an
+  in-session scheduler): do NOT stop after one pass, and do NOT report "no
+  scheduler configured". Loop in-session: run the pass, post the summary line,
+  then `sleep` the interval in chunks of at most 300 s (raise the shell tool's
+  timeout above each chunk), then run the next pass — repeat until the user says
+  `stop` or interrupts. `once` is still one pass. Always-on (survives the
+  session): `shipflow-codex-loop` runs one `codex exec … once` per tick —
+  `references/codex.md` § "Continuous mode".
 - Each tick is one ordinary pass — it ends with the summary line and **does not
   pause to ask**; an empty queue is fine. Reuse the one loop worktree across
   ticks (don't tear it down between passes).

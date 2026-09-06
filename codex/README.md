@@ -37,6 +37,26 @@ copies the skills instead of linking; `CODEX_HOME` and `SHIPFLOW_BIN_DIR`
 override the install locations. Do not combine A and B: Codex would list each
 skill twice.
 
+## Looping (continuous mode)
+
+Codex has no in-session scheduler, so `/shipflow-loop` loops by itself:
+after each pass it sleeps the interval (`watch=15m` default) with a shell
+`sleep` and runs the next pass until you interrupt it (Esc) or say `stop`;
+`/shipflow-loop once` is a single pass. For an always-on loop that survives
+the session, run the supervisor the installer put on PATH:
+
+    shipflow-codex-loop            # one `codex exec … once` pass per tick, every 15m
+    shipflow-codex-loop watch=30m cap=1
+    shipflow-codex-loop stop       # ends a running supervisor after its current tick
+
+The loop needs network (gh, git push, npm, the ShipFlow API): start
+interactive Codex with `codex --sandbox danger-full-access` (or set
+`[sandbox_workspace_write] network_access = true` in `~/.codex/config.toml`);
+the supervisor passes `--sandbox danger-full-access` itself
+(`SHIPFLOW_CODEX_SANDBOX` overrides). The bug-sweep browser pass needs gstack
+`browse` on PATH; without it the sweep runs tests only and files nothing
+from the browser.
+
 Either way, type `$shipflow` (or `$smart-commit`) in Codex, or just mention
 ShipFlow — Codex picks the skill from its description. Harness differences
 (no Task tool / CronCreate / AskUserQuestion) are mapped in

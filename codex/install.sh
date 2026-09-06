@@ -43,6 +43,14 @@ mkdir -p "$BIN_DIR"
 ln -sfn "$ROOT/bin/renaiss-shipflow" "$BIN_DIR/renaiss-shipflow"
 echo "cli:     $BIN_DIR/renaiss-shipflow -> $ROOT/bin/renaiss-shipflow"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "         note: $BIN_DIR is not on PATH — add it to your shell profile" ;; esac
+# The always-on loop supervisor (Codex has no CronCreate). Linked from every
+# install route, including the plugin cache — it drives `codex exec`, so it is
+# useful wherever the prompts are.
+if [ -f "$ROOT/codex/loop.sh" ]; then
+  chmod +x "$ROOT/codex/loop.sh"
+  ln -sfn "$ROOT/codex/loop.sh" "$BIN_DIR/shipflow-codex-loop"
+  echo "loop:    $BIN_DIR/shipflow-codex-loop -> $ROOT/codex/loop.sh"
+fi
 
 # 2. Custom prompts (/shipflow-*)
 mkdir -p "$CODEX_HOME/prompts"
@@ -91,5 +99,6 @@ cat <<MSG
 ShipFlow is installed for Codex. Next:
   renaiss-shipflow login          # once per machine (rides on gh auth)
   codex                           # then type: \$shipflow  (or /shipflow-status, /shipflow-loop, ...)
+  shipflow-codex-loop             # always-on loop: one codex exec pass per tick (watch=15m); 'once' / 'stop' / --dry-run
 Update: git -C "$ROOT" pull --ff-only   # skills refresh with the checkout; re-run this script for new prompts
 MSG

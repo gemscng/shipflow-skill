@@ -641,7 +641,8 @@ is the `⏸ paused · usage …` line; no ledger, since nothing was dispatched).
 Report an empty queue as "queue empty", never "at cap". `cap` precedence: a
 user `cap=N` token (`cap=all` drains the queue), else `SHIPFLOW_LOOP_CAP`,
 else **5**. Continuous trigger (`CronCreate` / `CronList` / `CronDelete`)
-→ `loop-setup.md` (run start). Blocked/escalated issues keep their claim
+(no scheduler in the harness → the in-session sleep loop, `loop-setup.md`
+§ Continuous mode) → `loop-setup.md` (run start). Blocked/escalated issues keep their claim
 and `needs-human`, so `issue next` advances past them. B null **and** A
 clean → C; the run ends only when C is also empty.
 
