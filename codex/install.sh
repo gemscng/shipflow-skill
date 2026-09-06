@@ -4,6 +4,7 @@
 #   1. the bundled `renaiss-shipflow` CLI on PATH      → $SHIPFLOW_BIN_DIR/renaiss-shipflow
 #   2. the /shipflow-* custom prompts                  → $CODEX_HOME/prompts/shipflow-*.md
 #   3. the `shipflow` + `smart-commit` skills          → $CODEX_HOME/skills/<name>
+#      (skipped when run from an installed Codex plugin, which serves them itself)
 #
 # After this, `$shipflow` (and `$smart-commit`) invoke the skills in Codex, and
 # Codex also auto-selects `shipflow` from its description when you mention
@@ -53,7 +54,16 @@ for f in "$ROOT"/codex/prompts/shipflow-*.md; do
 done
 echo "prompts: $n /shipflow-* prompt(s) -> $CODEX_HOME/prompts"
 
-# 3. Skills ($shipflow, $smart-commit)
+# 3. Skills ($shipflow, $smart-commit). When this checkout IS the installed
+# Codex plugin (codex plugin add shipflow@shipflow copies the repo under
+# $CODEX_HOME/plugins/cache/), the plugin already serves both skills — linking
+# them again would make Codex list each skill twice.
+case "$ROOT" in
+  "$CODEX_HOME"/plugins/*)
+    echo "skills:  served by the installed Codex plugin ($ROOT) — not linked into $CODEX_HOME/skills"
+    SKILLS=""
+    ;;
+esac
 mkdir -p "$CODEX_HOME/skills"
 for s in $SKILLS; do
   src="$ROOT/skills/$s"

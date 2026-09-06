@@ -1,0 +1,28 @@
+{
+  "name": "shipflow",
+  "version": "0.77.1",
+  "description": "Drive ShipFlow from Codex: project status, issues, PRs, releases and loop mode via the bundled renaiss-shipflow CLI.",
+  "author": {
+    "name": "Renaiss Protocol",
+    "url": "https://github.com/gemscng/shipflow-skill"
+  },
+  "homepage": "https://renaiss-shipflow.zeabur.app/tools/ai-cli",
+  "repository": "https://github.com/gemscng/shipflow-skill",
+  "license": "MIT",
+  "keywords": ["shipflow", "github", "issues", "pull-requests", "release", "loop"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "ShipFlow",
+    "shortDescription": "Issues, PRs and loop mode via renaiss-shipflow",
+    "longDescription": "Adds the shipflow and smart-commit skills so Codex can check ShipFlow status, pick and claim issues, attach evidence, open and merge PRs, cut releases and run the autonomous issue-to-PR loop. Bundles the renaiss-shipflow CLI.",
+    "developerName": "Renaiss Protocol",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://renaiss-shipflow.zeabur.app/tools/ai-cli",
+    "defaultPrompt": [
+      "Use $shipflow to show my ShipFlow status",
+      "Use $shipflow to pick the next issue to work on",
+      "Use $smart-commit to commit my changes"
+    ]
+  }
+}
