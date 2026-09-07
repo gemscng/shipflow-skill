@@ -11130,6 +11130,7 @@ function collectInboxPrRows(repo, me, opts) {
       }
     } catch {}
   }
+  const collections = { mergedPrs: "available" };
   try {
     for (const pr of selectMergedUnreviewed(ghPRListMineMerged(repo), { staleHours })) {
       const cl = classifyMergedUnreviewed(pr);
@@ -11143,8 +11144,15 @@ function collectInboxPrRows(repo, me, opts) {
         })
       });
     }
-  } catch {}
-  return scanned;
+  } catch {
+    collections.mergedPrs = "unavailable";
+  }
+  const degradedInputs = [
+    ...scanned.some(({ row }) => row.threadsDegraded) ? ["github-graphql"] : [],
+    ...scanned.some(({ row }) => row.escalateOnceUnknown) ? ["escalate-once-markers"] : [],
+    ...collections.mergedPrs === "unavailable" ? ["github-merged-prs"] : []
+  ];
+  return { scanned, collections, degradedInputs };
 }
 function registerInboxCommand(program2) {
   program2.command("inbox").description("Reconciler view: open PRs (by state: conflict / ci_failing / changes_requested / approved_ready / stale …) plus recently-merged @me PRs that bypassed the review gate (`merged_unreviewed`), and in-progress issues with new comments. With the OPT-IN repo-wide conflict sweep (`config set conflict-sweep true`, or --conflict-sweep) it also lists conflicted PRs by other authors — trusted same-repo heads only (issue #393)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Force the repo-wide foreign-PR conflict sweep on for this run (default: the `conflict-sweep` config key, which is off)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
@@ -11170,7 +11178,8 @@ function registerInboxCommand(program2) {
     if (gc.lookupsSkipped > 0) {
       console.warn(`⏱ merged-branch GC: ${gc.lookupsSkipped} candidate lookup(s) deferred to the next tick (time budget).`);
     }
-    const prs = collectInboxPrRows(repo, me, { sweepEnabled, staleHours, maxReworks }).map((s) => s.row);
+    const { scanned, collections, degradedInputs } = collectInboxPrRows(repo, me, { sweepEnabled, staleHours, maxReworks });
+    const prs = scanned.map((s) => s.row);
     const issues = ghIssueListByLabel(repo, IN_PROGRESS_LABEL).map((i) => {
       const reply = issueNeedsReply(i.comments ?? [], me);
       return {
@@ -11184,10 +11193,6 @@ function registerInboxCommand(program2) {
     const count = (s) => prs.filter((p) => p.state === s).length;
     const degraded = prs.filter((p) => p.degraded).length;
     const threadsDegraded = prs.filter((p) => p.threadsDegraded).length;
-    const degradedInputs = [
-      ...threadsDegraded ? ["github-graphql"] : [],
-      ...prs.some((p) => p.escalateOnceUnknown) ? ["escalate-once-markers"] : []
-    ];
     const summary = {
       prsNeedingAttention: prs.filter((p) => p.needsAttention).length,
       issuesNeedingAttention: issues.filter((i) => i.needsAttention).length,
@@ -11204,14 +11209,17 @@ function registerInboxCommand(program2) {
       conflictSweep: sweepEnabled,
       humanOnlyConflicts: prs.filter((p) => p.humanOnly).length,
       wipActionable: actionableWip(prs),
-      mergedUnreviewed: count("merged_unreviewed"),
+      mergedUnreviewed: collections.mergedPrs === "unavailable" ? null : count("merged_unreviewed"),
       gcCleaned: gc.cleaned.length,
       gcUnpushedKept: gc.unpushed.length + gc.dirty.length,
       gcFailed: gc.failed.length
     };
-    emit(opts, withProvenance({ repo, prs, issues, summary, gc }), () => {
+    emit(opts, withProvenance({ repo, prs, issues, summary, gc, collections }), () => {
       console.log(`\uD83D\uDCE5 Inbox for ${repo}`);
       console.log(`Needs action: ${meter(summary.prsNeedingAttention, prs.length)} PRs · ${meter(summary.issuesNeedingAttention, issues.length)} issues · ✅ ${summary.readyToMerge} ready to merge`);
+      if (collections.mergedPrs === "unavailable") {
+        console.log("⚠️  Merged PR scan unavailable (github-merged-prs) — this inbox is INCOMPLETE; re-read before concluding there is no work.");
+      }
       if (threadsDegraded)
         console.log(`⚠️  ${threadsDegraded} PR(s) with partial review-thread data (fetch blipped) — marked "degraded".`);
       if (summary.escalateOnceUnknown) {
@@ -11442,7 +11450,7 @@ function registerLoopCommand(program2) {
       pickupScope,
       intentGate: resolveIntentGateMode()
     };
-    const scanned = collectInboxPrRows(repo, me, { sweepEnabled, staleHours, maxReworks });
+    const { scanned, collections, degradedInputs } = collectInboxPrRows(repo, me, { sweepEnabled, staleHours, maxReworks });
     const prs = scanned.map(({ pr, row }) => {
       let extra = {};
       if (row.state === "approved_ready") {
@@ -11489,8 +11497,15 @@ function registerLoopCommand(program2) {
       assignee,
       sliceMergedParents
     });
-    emit(opts, withProvenance({ policies, reconcile, admit, deferred }), () => {
+    emit(opts, withProvenance({ policies, reconcile, admit, deferred, collections, degradedInputs }), () => {
       console.log(`\uD83D\uDCCB Loop plan for ${repo}`);
+      if (collections.mergedPrs === "unavailable") {
+        console.log("⚠️  Merged PR scan unavailable (github-merged-prs) — this plan is INCOMPLETE; re-read before concluding there is no work.");
+      }
+      const otherDegraded = degradedInputs.filter((input) => input !== "github-merged-prs");
+      if (otherDegraded.length) {
+        console.log(`⚠️  Degraded input(s): ${otherDegraded.join(", ")} — this plan is INCOMPLETE; re-read before concluding there is no work.`);
+      }
       console.log(`Policies: merge-policy=${policies.mergePolicy} · require-ci=${policies.requireCi} · cap=${policies.cap} · wip-limit=${policies.wipLimit} · pickup-scope=${policies.pickupScope} · intent-gate=${policies.intentGate}`);
       if (reconcile.length) {
         console.log("");

@@ -384,6 +384,15 @@ carries `escalate-once-markers`; `summary.escalateOnceUnknown` counts
 rows). In a **`once`** pass, re-read the inbox before concluding or the
 owed escalation is never filed (#482).
 
+**`collections.mergedPrs: "unavailable"` = merged audit INCOMPLETE (#1092).**
+Both inbox and loop plan carry this status even when their PR arrays are
+empty. `github-merged-prs` appears in inbox `summary.degradedInputs` and
+plan `degradedInputs`; inbox `summary.mergedUnreviewed` is `null`, not a
+measured zero. Keep known open-PR actions, but re-read before concluding the
+audit or queue is clear. Successful scans report `"available"` and a numeric
+inbox total. `summary.degraded` still counts degraded rows; collection
+status does not certify other inputs or change review/escalation policy.
+
 A PR becomes `approved_ready` **only** via reviewer approval — never
 hand-add `shipflow-approved`. Per in-progress issue with a `newComment`, a
 worker reads + acts. **A human reply on a `needs-human` issue unblocks it**
