@@ -3732,71 +3732,55 @@ function parseIntStrict(key, v) {
   }
   return Number(s);
 }
-function resolveRequireCi() {
-  const env = process.env.SHIPFLOW_REQUIRE_CI;
+function resolveBoolKnob(envKey, configured, dflt) {
+  const env = process.env[envKey];
   if (env != null && env !== "")
     return parseBool(env);
-  const c = loadConfig().requireCi;
-  return c === undefined ? true : c;
+  return configured === undefined ? dflt : configured;
+}
+function resolveIntKnob(envKey, configured, dflt) {
+  const env = process.env[envKey];
+  if (env != null && env !== "")
+    return parseIntOr(env, dflt);
+  return parseIntOr(configured, dflt);
+}
+function resolveEnumKnob(envKey, configured, allowed, dflt) {
+  const env = process.env[envKey];
+  const raw = env != null && env.trim() !== "" ? env.trim() : configured ?? dflt;
+  return allowed.includes(raw) ? raw : dflt;
+}
+function resolveRequireCi() {
+  return resolveBoolKnob("SHIPFLOW_REQUIRE_CI", loadConfig().requireCi, true);
 }
 function resolveMergePolicy() {
-  const env = process.env.SHIPFLOW_MERGE_POLICY;
-  const raw = env != null && env !== "" ? env : loadConfig().mergePolicy;
-  return raw && MERGE_POLICIES.includes(raw) ? raw : "manual";
+  return resolveEnumKnob("SHIPFLOW_MERGE_POLICY", loadConfig().mergePolicy, MERGE_POLICIES, "manual");
 }
 function resolveMaxFixAttempts() {
-  const env = process.env.SHIPFLOW_MAX_FIX_ATTEMPTS;
-  if (env != null && env !== "")
-    return parseIntOr(env, 3);
-  return parseIntOr(loadConfig().maxFixAttempts, 3);
+  return resolveIntKnob("SHIPFLOW_MAX_FIX_ATTEMPTS", loadConfig().maxFixAttempts, 3);
 }
 function resolveWipLimit() {
-  const env = process.env.SHIPFLOW_WIP_LIMIT;
-  if (env != null && env !== "")
-    return parseIntOr(env, 10);
-  return parseIntOr(loadConfig().wipLimit, 10);
+  return resolveIntKnob("SHIPFLOW_WIP_LIMIT", loadConfig().wipLimit, 10);
 }
 function resolveStalePrHours() {
-  const env = process.env.SHIPFLOW_STALE_PR_HOURS;
-  if (env != null && env !== "")
-    return parseIntOr(env, 48);
-  return parseIntOr(loadConfig().stalePrHours, 48);
+  return resolveIntKnob("SHIPFLOW_STALE_PR_HOURS", loadConfig().stalePrHours, 48);
 }
 function resolveBugHunt() {
-  const env = process.env.SHIPFLOW_BUG_HUNT;
-  if (env != null && env !== "")
-    return parseBool(env);
-  const c = loadConfig().bugHunt;
-  return c === undefined ? true : c;
+  return resolveBoolKnob("SHIPFLOW_BUG_HUNT", loadConfig().bugHunt, true);
 }
 function resolveBugHuntCap() {
-  const env = process.env.SHIPFLOW_BUG_HUNT_CAP;
-  if (env != null && env !== "")
-    return parseIntOr(env, 5);
-  return parseIntOr(loadConfig().bugHuntCap, 5);
+  return resolveIntKnob("SHIPFLOW_BUG_HUNT_CAP", loadConfig().bugHuntCap, 5);
 }
 function resolveRequireReview() {
-  const env = process.env.SHIPFLOW_REQUIRE_REVIEW;
-  if (env != null && env !== "")
-    return parseBool(env);
-  const c = loadConfig().requireReview;
-  return c === undefined ? true : c;
+  return resolveBoolKnob("SHIPFLOW_REQUIRE_REVIEW", loadConfig().requireReview, true);
 }
 function resolvePickupScope() {
-  const env = process.env.SHIPFLOW_PICKUP_SCOPE;
-  const raw = env != null && env.trim() !== "" ? env.trim() : loadConfig().pickupScope ?? "assigned";
-  return PICKUP_SCOPES.includes(raw) ? raw : "assigned";
+  return resolveEnumKnob("SHIPFLOW_PICKUP_SCOPE", loadConfig().pickupScope, PICKUP_SCOPES, "assigned");
 }
 function resolveIntentGateMode() {
-  const env = process.env.SHIPFLOW_INTENT_GATE;
-  const raw = env != null && env.trim() !== "" ? env.trim() : loadConfig().intentGate ?? "strict";
-  return INTENT_GATE_MODES.includes(raw) ? raw : "strict";
+  return resolveEnumKnob("SHIPFLOW_INTENT_GATE", loadConfig().intentGate, INTENT_GATE_MODES, "strict");
 }
 function resolveConflictSweep() {
-  const env = process.env.SHIPFLOW_CONFLICT_SWEEP;
-  if (env != null && env !== "")
-    return parseBool(env);
-  return loadConfig().conflictSweep === true;
+  return resolveBoolKnob("SHIPFLOW_CONFLICT_SWEEP", loadConfig().conflictSweep, false);
 }
 function resolveIntakeApproval() {
   const raw = (process.env.SHIPFLOW_INTAKE_APPROVAL ?? loadConfig().intakeApproval ?? "code-org").trim().toLowerCase();
@@ -4438,6 +4422,15 @@ function ghPRListMineMerged(repo, limit = 100) {
   const out = _exec(`gh pr list --repo ${shellQuote(repo)} --author @me --state merged --limit ${limit} --json ${PR_FIELDS}`).toString();
   return JSON.parse(out);
 }
+function ghGraphQL(repo, query, n, cursor) {
+  const [owner, name] = repo.split("/");
+  const cmd = `gh api graphql -f query=${shellQuote(query)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${n}` + (cursor ? ` -f c=${shellQuote(cursor)}` : "");
+  const payload = JSON.parse(_exec(cmd).toString());
+  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
+  }
+  return payload?.data;
+}
 function issueConnectionFilterBy(assignee, label) {
   const parts = [];
   if (assignee)
@@ -4447,7 +4440,6 @@ function issueConnectionFilterBy(assignee, label) {
   return parts.length ? `,filterBy:{${parts.join(",")}}` : "";
 }
 function ghAuthorAssociations(repo, connection, limit, filters) {
-  const [owner, name] = repo.split("/");
   const assoc = new Map;
   let remaining = Math.max(0, Math.trunc(limit));
   let after;
@@ -4455,12 +4447,8 @@ function ghAuthorAssociations(repo, connection, limit, filters) {
   while (remaining > 0) {
     const page = Math.min(remaining, GH_GRAPHQL_PAGE_MAX);
     const q = "query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){" + `${connection}(states:OPEN,first:$n,after:$c,orderBy:{field:CREATED_AT,direction:DESC}${filterBy})` + "{pageInfo{hasNextPage endCursor}nodes{number authorAssociation}}}}";
-    const cmd = `gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${page}` + (after ? ` -f c=${shellQuote(after)}` : "");
-    const payload = JSON.parse(_exec(cmd).toString());
-    if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-      throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
-    }
-    const conn = payload?.data?.repository?.[connection];
+    const data = ghGraphQL(repo, q, page, after);
+    const conn = data?.repository?.[connection];
     if (!conn)
       throw new Error(`GraphQL returned no ${connection} connection for ${repo} (repository null or unreadable)`);
     const nodes = conn.nodes ?? [];
@@ -4484,13 +4472,9 @@ function ghIssueAuthorAssociations(repo, limit = 200, assignee, label) {
   return ghAuthorAssociations(repo, "issues", limit, { assignee, label });
 }
 function ghIssueAuthorAssociation(repo, number) {
-  const [owner, name] = repo.split("/");
   const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){authorAssociation}}}";
-  const payload = JSON.parse(_exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString());
-  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
-  }
-  const issue = payload?.data?.repository?.issue;
+  const data = ghGraphQL(repo, q, number);
+  const issue = data?.repository?.issue;
   if (!issue)
     throw new Error(`GraphQL returned no issue ${repo}#${number} (repository null or unreadable)`);
   return String(issue.authorAssociation ?? "");
@@ -4628,13 +4612,9 @@ ${err.message ?? ""}`;
   }
 }
 function ghPRLastHeadAt(repo, number) {
-  const [owner, name] = repo.split("/");
   const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){" + "commits(last:1){nodes{commit{committedDate}}}}}}";
-  const payload = JSON.parse(_exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString());
-  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
-  }
-  const date = payload?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.committedDate;
+  const data = ghGraphQL(repo, q, number);
+  const date = data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.committedDate;
   if (typeof date !== "string" || date.trim() === "" || Number.isNaN(Date.parse(date))) {
     throw new Error(`GraphQL returned no last-head committedDate for ${repo}#${number}`);
   }
@@ -4730,13 +4710,9 @@ function ghIntentGateAuditCandidates(repo, number) {
   }
 }
 function ghIssueLastEditedAt(repo, number) {
-  const [owner, name] = repo.split("/");
   const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){lastEditedAt}}}";
-  const payload = JSON.parse(_exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString());
-  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
-  }
-  const issue = payload?.data?.repository?.issue;
+  const data = ghGraphQL(repo, q, number);
+  const issue = data?.repository?.issue;
   if (!issue)
     throw new Error(`GraphQL returned no issue ${repo}#${number} (repository null or unreadable)`);
   return issue.lastEditedAt ? String(issue.lastEditedAt) : null;
@@ -4822,13 +4798,9 @@ function ghCreateReview(repo, number, payload) {
   _exec(`gh api repos/${shellQuote(owner)}/${shellQuote(name)}/pulls/${number}/reviews --method POST --input -`, { input: JSON.stringify(stamped), stdio: ["pipe", "ignore", "pipe"] });
 }
 function ghReviewThreads(repo, number) {
-  const [owner, name] = repo.split("/");
   const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){" + "reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{path line author{login} body createdAt}}}}}}}";
-  const payload = JSON.parse(_exec(`gh api graphql -f query=${shellQuote(q)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} -F n=${number}`).toString());
-  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
-  }
-  const pr = payload?.data?.repository?.pullRequest;
+  const data = ghGraphQL(repo, q, number);
+  const pr = data?.repository?.pullRequest;
   if (!pr)
     throw new Error(`GraphQL returned no pull request ${repo}#${number} (repository null or unreadable)`);
   const nodes = pr.reviewThreads?.nodes ?? [];
@@ -5026,6 +4998,12 @@ function runAction(fn) {
       process.exit(err instanceof UsageError ? 1 : UNEXPECTED_EXIT_CODE);
     }
   };
+}
+async function readStdin() {
+  const chunks = [];
+  for await (const c of process.stdin)
+    chunks.push(c);
+  return Buffer.concat(chunks).toString("utf8");
 }
 var UNEXPECTED_EXIT_CODE = 10, UsageError, COMMANDER_PASSTHROUGH;
 var init_helpers = __esm(() => {
@@ -6023,6 +6001,7 @@ import { homedir as homedir3 } from "node:os";
 init_client();
 
 // src/cli-drift.ts
+init_sh();
 import { execSync as execSync4 } from "node:child_process";
 import { createRequire as createRequire2 } from "node:module";
 import { existsSync as existsSync2, readdirSync as readdirSync2, realpathSync as realpathSync2 } from "node:fs";
@@ -6158,9 +6137,6 @@ function safeVersionSpec(v) {
   const t = v.trim();
   return SAFE_VERSION_SPEC.test(t) ? t : null;
 }
-function shellQuote2(s) {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
 function displayVersion(v) {
   return safeVersionSpec(v) ?? JSON.stringify(v.length > 40 ? `${v.slice(0, 40)}…` : v);
 }
@@ -6170,7 +6146,7 @@ function remediationCommand(channel, target, updaterPath = null) {
   if (channel === "plugin-launcher")
     return "claude plugin update shipflow@renaissshipflow";
   if (channel === "launcher-cache")
-    return updaterPath ? `${shellQuote2(updaterPath)} --force` : null;
+    return updaterPath ? `${shellQuote(updaterPath)} --force` : null;
   if (channel !== "npm-global")
     return null;
   const version = safeVersionSpec(target);
@@ -6838,6 +6814,11 @@ import { hostname as hostname2 } from "node:os";
 import { readFileSync as readFileSync3, statSync } from "node:fs";
 import { basename as basename2 } from "node:path";
 
+// src/regex.ts
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // src/message-lint.ts
 var TABLE_ROW = /^\s*\|.+\|\s*$/m;
 var CHECKLIST_ITEM = /^\s*[-*+]\s+\[[ xX]\]\s/m;
@@ -6949,10 +6930,9 @@ var INTERNAL_JARGON = [
   "auto-qa",
   "feature map"
 ];
-var esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function jargonUsePattern(term) {
   const flags = /^[A-Z0-9]+$/.test(term) ? "g" : "gi";
-  return new RegExp(`(?<![\\w-])${esc(term)}(?![\\w-])(?<gloss>\\s*(?:\\(|—|–|:\\s))?`, flags);
+  return new RegExp(`(?<![\\w-])${escapeRegExp(term)}(?![\\w-])(?<gloss>\\s*(?:\\(|—|–|:\\s))?`, flags);
 }
 function lintJargonGloss(body) {
   const prose = stripNonProse(body);
@@ -7431,10 +7411,9 @@ ${lines.join(`
 `)}
 ${JUDGE_END}`;
 }
-var esc2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-var BLOCK_RE = new RegExp(`${esc2(JUDGE_OPEN)} state=[^\\n]*-->\\n[\\s\\S]*?${esc2(JUDGE_END)}\\n*`);
+var BLOCK_RE = new RegExp(`${escapeRegExp(JUDGE_OPEN)} state=[^\\n]*-->\\n[\\s\\S]*?${escapeRegExp(JUDGE_END)}\\n*`);
 function parseJudgeBlock(body) {
-  const m = new RegExp(`${esc2(JUDGE_OPEN)} state=(\\S+) since=(\\S+) -->`).exec(body);
+  const m = new RegExp(`${escapeRegExp(JUDGE_OPEN)} state=(\\S+) since=(\\S+) -->`).exec(body);
   if (!m || !isJudgeState(m[1]))
     return null;
   return { state: m[1], since: m[2] };
@@ -8330,12 +8309,6 @@ function printIssueContextHuman(issueData, triage, repo, triageUnavailable) {
     console.log(`
 ${TRIAGE_UNAVAILABLE_MARKER}`);
   }
-}
-async function readStdin() {
-  const chunks = [];
-  for await (const c of process.stdin)
-    chunks.push(c);
-  return Buffer.concat(chunks).toString("utf-8");
 }
 
 // src/commands/intake.ts
@@ -10308,7 +10281,7 @@ ${opts.body ?? ""}`;
     if (opts.findings && opts.findings !== "-")
       rawFindings = readFileSync4(opts.findings, "utf8");
     else if (opts.findings === "-")
-      rawFindings = await readStdin2();
+      rawFindings = await readStdin();
     else {
       stdinWatch = watchStdinBytes();
       if (await stdinWatch.within(STDIN_PEEK_MS))
@@ -10540,12 +10513,6 @@ function branchAuthorEmails() {
   } catch {
     return [];
   }
-}
-async function readStdin2() {
-  const chunks = [];
-  for await (const c of process.stdin)
-    chunks.push(c);
-  return Buffer.concat(chunks).toString("utf8");
 }
 function refuseUnflaggedPipe(number) {
   console.error(`⛔ Findings are piped to \`pr post-review ${number}\` but \`--findings -\` was not passed — refusing to post a review that would drop them (issue #427).`);
