@@ -2185,7 +2185,7 @@ class ShipFlowClient {
     return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/repos/${encodeURIComponent(repo)}`);
   }
   async updateWorkflow(org, repo, workflowType, body) {
-    return this.request("PUT", `/api/v1/orgs/${encodeURIComponent(org)}/repos/${repo}/workflows/${encodeURIComponent(workflowType)}`, body);
+    return this.request("PUT", `/api/v1/orgs/${encodeURIComponent(org)}/repos/${encodeURIComponent(repo)}/workflows/${encodeURIComponent(workflowType)}`, body);
   }
   async listActivity(org, params) {
     const qs = new URLSearchParams;
@@ -2328,16 +2328,19 @@ class ShipFlowClient {
     return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/feature-mapping/generate`);
   }
 }
-function resolveTriggerRepo(repos, requested) {
+function resolveWorkflowRepo(repos, requested) {
   const name = requested.trim().toLowerCase();
-  const matches = repos.filter((repo2) => (name.includes("/") ? repo2.fullName : repo2.name).toLowerCase() === name);
+  const matches = repos.filter((repo) => (name.includes("/") ? repo.fullName : repo.name).toLowerCase() === name);
   if (matches.length === 0) {
     throw new WorkflowTriggerError("REPO_NOT_FOUND", `Repository "${requested}" is not tracked in this organization.`);
   }
   if (matches.length > 1) {
-    throw new WorkflowTriggerError("REPO_AMBIGUOUS", `Repository "${requested}" is ambiguous: ${matches.map((repo2) => repo2.fullName).join(", ")}. Use owner/repo.`);
+    throw new WorkflowTriggerError("REPO_AMBIGUOUS", `Repository "${requested}" is ambiguous: ${matches.map((repo) => repo.fullName).join(", ")}. Use owner/repo.`);
   }
-  const repo = matches[0];
+  return matches[0];
+}
+function resolveTriggerRepo(repos, requested) {
+  const repo = resolveWorkflowRepo(repos, requested);
   if (!repo.projectId) {
     throw new WorkflowTriggerError("PROJECT_NOT_MAPPED", `Repository "${repo.fullName}" is not mapped to a project. Link it to a project before triggering a workflow.`);
   }
@@ -5235,13 +5238,15 @@ function registerRepoCommands(program2) {
 }
 
 // src/commands/workflows.ts
+init_client();
 init_helpers();
 init_output();
 function registerWorkflowCommands(program2) {
   const workflows = program2.command("workflows").description("Manage repository workflows");
-  workflows.command("list").description("List workflows for a repository").requiredOption("--repo <repo>", "Repository name").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (opts, cmd) => {
+  workflows.command("list").description("List workflows for a repository").requiredOption("--repo <repo>", "Repository name or owner/repo").option("--json", "Output as JSON").option("--yaml", "Output as YAML").action(runAction(async (opts, cmd) => {
     const { client, org, format } = getApiCtx(cmd);
-    const repo = await client.getRepo(org, opts.repo);
+    const target = resolveWorkflowRepo(await client.listRepos(org), opts.repo);
+    const repo = await client.getRepo(org, target.fullName);
     formatOutput(format, repo.workflowConfigs, () => {
       if (repo.workflowConfigs.length === 0) {
         console.log("No workflows configured for this repository.");
@@ -5255,24 +5260,27 @@ function registerWorkflowCommands(program2) {
       ]));
     });
   }));
-  workflows.command("enable").description("Enable a workflow for a repository").argument("<type>", "Workflow type (e.g. issue_triage, patch_notes)").requiredOption("--repo <repo>", "Repository name").action(runAction(async (type, opts, cmd) => {
+  workflows.command("enable").description("Enable a workflow for a repository").argument("<type>", "Workflow type (e.g. issue_triage, patch_notes)").requiredOption("--repo <repo>", "Repository name or owner/repo").action(runAction(async (type, opts, cmd) => {
     const { client, org } = getApiCtx(cmd);
-    await client.updateWorkflow(org, opts.repo, type, { enabled: true });
+    const repo = resolveWorkflowRepo(await client.listRepos(org), opts.repo);
+    await client.updateWorkflow(org, repo.fullName, type, { enabled: true });
     console.log(`Workflow "${type}" enabled on ${opts.repo}.`);
   }));
-  workflows.command("disable").description("Disable a workflow for a repository").argument("<type>", "Workflow type (e.g. issue_triage, patch_notes)").requiredOption("--repo <repo>", "Repository name").action(runAction(async (type, opts, cmd) => {
+  workflows.command("disable").description("Disable a workflow for a repository").argument("<type>", "Workflow type (e.g. issue_triage, patch_notes)").requiredOption("--repo <repo>", "Repository name or owner/repo").action(runAction(async (type, opts, cmd) => {
     const { client, org } = getApiCtx(cmd);
-    await client.updateWorkflow(org, opts.repo, type, { enabled: false });
+    const repo = resolveWorkflowRepo(await client.listRepos(org), opts.repo);
+    await client.updateWorkflow(org, repo.fullName, type, { enabled: false });
     console.log(`Workflow "${type}" disabled on ${opts.repo}.`);
   }));
-  workflows.command("configure").description("Configure workflow settings").argument("<type>", "Workflow type").requiredOption("--repo <repo>", "Repository name").option("--set <key=value...>", "Set configuration values", collectKeyValue, {}).action(runAction(async (type, opts, cmd) => {
+  workflows.command("configure").description("Configure workflow settings").argument("<type>", "Workflow type").requiredOption("--repo <repo>", "Repository name or owner/repo").option("--set <key=value...>", "Set configuration values", collectKeyValue, {}).action(runAction(async (type, opts, cmd) => {
     const { client, org } = getApiCtx(cmd);
     const settings = opts.set;
     if (Object.keys(settings).length === 0) {
       console.error("Error: At least one --set key=value is required.");
       process.exit(1);
     }
-    await client.updateWorkflow(org, opts.repo, type, { settings });
+    const repo = resolveWorkflowRepo(await client.listRepos(org), opts.repo);
+    await client.updateWorkflow(org, repo.fullName, type, { settings });
     console.log(`Workflow "${type}" configured on ${opts.repo}.`);
     for (const [k, v] of Object.entries(settings)) {
       console.log(`  ${k} = ${v}`);
