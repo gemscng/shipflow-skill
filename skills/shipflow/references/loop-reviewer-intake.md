@@ -30,10 +30,14 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    spec/design doc; a hard dependency on an unmerged issue; a genuine
    duplicate/invalid issue. Otherwise proceed.
 
-   **The escalate `--reason` IS the comment a human reads — act-on-able,
+   **The escalate reason IS the comment a human reads — act-on-able,
    not a wall of text.** Shape is `lintEscalationReason`
    (`apps/renaissshipflow-cli/src/escalation-format.ts`) — fix a rejected
-   reason; `--force` is for humans, not the loop. Process: `--category`
+   reason; `--force` is for humans, not the loop. Use `--reason-file <path>`
+   for multiline UTF-8 text (`-` reads stdin), or inline `--reason`, never both.
+   Source text contains no literal backticks. Structured reasons advertise
+   at least two distinct complete choices, each with its consequence.
+   Process: `--category`
    (`money-write`, `prod-config`, `security`, `missing-secret`,
    `external-dependency`, `invalid`); `--owner <login>` when the issue
    names someone, else the CLI resolves `signoff-owner` → issue author.

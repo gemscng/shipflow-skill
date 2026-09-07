@@ -3375,11 +3375,68 @@ function overlongActionLines(reason) {
   }
   return offenders;
 }
+function hasCompleteReplyChoices(reason) {
+  const choices = new Set;
+  let complete = true;
+  let columns;
+  let seenDecisionTable = false;
+  const text = (value) => value.trim().replace(/^[*_]+|[*_]+$/g, "").trim();
+  const add = (number, answer, consequence) => {
+    answer = text(answer);
+    if (!/^\d+$/.test(number) || !answer || !text(consequence))
+      complete = false;
+    else
+      choices.add(`${Number(number)}:${answer.toLowerCase().replace(/\s+/g, " ")}`);
+  };
+  for (const line of reason.split(`
+`)) {
+    if (line.trim().startsWith("|")) {
+      const cells = line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(text);
+      if (cells[0] === "#") {
+        columns = cells.map((c) => c.toLowerCase());
+        continue;
+      }
+      if (!columns || cells.every((c) => !c || /^:?-+:?$/.test(c)))
+        continue;
+      const answerIndex = columns.findIndex((c) => /^(decision|option|answer|choice)$/.test(c));
+      if (answerIndex < 0 && seenDecisionTable)
+        continue;
+      if (answerIndex >= 0)
+        seenDecisionTable = true;
+      const consequenceIndex = columns.findIndex((c) => /^(if chosen|consequence|outcome|then|result)$/.test(c));
+      const option = cells[answerIndex] ?? "";
+      const arrow = option.indexOf("→");
+      add(cells[0], arrow < 0 ? option : option.slice(0, arrow), cells[consequenceIndex] || (arrow < 0 ? "" : option.slice(arrow + 1)));
+      continue;
+    }
+    columns = undefined;
+    const displayed = line.replace(/[*_]+(?=\d+:)/g, "").replace(/(\d+:)[*_]+(?=[ \t]|$)/g, "$1");
+    const first = /^([ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?)(\d+):(?!\d)[ \t]*/.exec(displayed);
+    if (!first)
+      continue;
+    const alternatives = displayed.slice(first[1].length);
+    const urls = [...alternatives.matchAll(/https?:\/\/[^\s<>]+/gi)];
+    const replies = [...alternatives.matchAll(/(?:^|[·/;,|][ \t]*)(?:[-*+][ \t]+)?(\d+):(?!\d)[ \t]*/g)].filter((reply) => {
+      const numberIndex = reply.index + reply[0].indexOf(reply[1]);
+      return !urls.some((url) => numberIndex >= url.index && numberIndex < url.index + url[0].length);
+    });
+    for (let i = 0;i < replies.length; i++) {
+      const reply = replies[i];
+      const option = alternatives.slice(reply.index + reply[0].length, replies[i + 1]?.index).trim().replace(/[·/;,|]$/, "").trim();
+      const arrow = option.indexOf("→");
+      add(reply[1], arrow < 0 ? option : option.slice(0, arrow), arrow < 0 ? "" : option.slice(arrow + 1));
+    }
+  }
+  return complete && choices.size >= 2;
+}
 function lintEscalationReason(reason) {
   const r = reason.trim();
   const problems = [];
   if (!r)
     return ["no reason given — state the decision or action the human must take"];
+  if (r.includes("`")) {
+    problems.push("contains a literal backtick (U+0060) — remove every backtick from the source reason, including escaped or folded text");
+  }
   if (/\?\s*$/m.test(r) && !/\*\*recommendation:?\*\*/i.test(r)) {
     problems.push(`contains an open question ("?") but no **Recommendation:** line — every question put to a human must carry the loop's recommended answer`);
   }
@@ -3390,13 +3447,6 @@ function lintEscalationReason(reason) {
   const hasDecisionTable = !!tableHeader && /\|\s*recommendation\s*\|/i.test(tableHeader[1]);
   if (hasDecisionTable && /^\s*\*\*recommendation:?\*\*/im.test(r)) {
     problems.push("carries both a decision table with a Recommendation column and a separate **Recommendation:** line — state each recommendation once, in the table row it belongs to");
-  }
-  if (tableHeader && !/if chosen|consequence|outcome|then|result/i.test(tableHeader[1])) {
-    const rows = r.split(`
-`).filter((l) => /^\s*\|\s*\d+\s*\|/.test(l));
-    if (rows.length && !rows.every((l) => l.includes("→"))) {
-      problems.push("decision table has no **If chosen** column — each option must say what happens when picked: `| # | Decision | Recommendation | If chosen |`");
-    }
   }
   const actionLines = actionSectionLineCount(r);
   if (actionLines > ACTION_SECTION_LINE_CAP) {
@@ -3410,10 +3460,9 @@ function lintEscalationReason(reason) {
   for (const line of prodAccessOptionLines(r)) {
     problems.push(`offers the loop production access ("${line.slice(0, 60)}…") — the loop never gets a prod DATABASE_URL/secret; ` + 'make the option "operator runs it" or "reproduce on a local DB first"');
   }
-  const hasReplyOption = /^\s*(?:[-*]\s*)?`?\d+:\s+\S/m.test(r);
   if (r.includes(`
-`) && !tableHeader && !hasReplyOption) {
-    problems.push("no enumerated reply — end with the replies a human can type and what each does, e.g. `1: done → loop re-reviews` / `1: skip → loop parks this`");
+`) && !hasCompleteReplyChoices(r)) {
+    problems.push("needs at least two distinct enumerated reply choices, each with a nonempty answer and consequence — use 1: done → loop re-reviews / 1: skip → loop parks this; tables need an If chosen column (or an arrow in each option)");
   }
   for (const line of overlongActionLines(r)) {
     problems.push(`"Action needed" line over ${ACTION_LINE_WORD_LIMIT} words ("${line.slice(0, 60)}…") — ` + `a step (or table cell) must read in one breath; move the detail to "### Why it's blocked" (it renders folded)`);
@@ -7974,8 +8023,10 @@ ${section}` : section;
     await ctx.client.signal(ctx.creds.org, ctx.project.projectId, "issues", number, "release-claim", { repo, reason });
     emit(opts, { number, released: true, reason }, () => console.log(`Released #${number}.`));
   }));
-  issue.command("escalate <number>").description("Hand an issue to a human: label needs-human + comment why. Keeps the work lock so the loop skips it this run.").option("--reason <reason>", "Why it's blocked / what a human must decide", "").option("--category <key>", `Why this class of work is gated on a human — appends the standard rationale. One of: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`).option("--owner <login>", "Accountable human named on the comment (default: signoff-owner config, else the issue author)").option("--update", "Edit the loop's latest \uD83D\uDEA7 escalation comment in place instead of stacking a new one").option("--force", "Skip the reason lint (open question without recommendation / not self-contained / no action section)").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for needs-human)").option("--release", "Also release the ShipFlow claim (default: keep it so the loop won't re-pick it this run)").option("--for-pr <number>", "The PR whose inbox row owed this escalation — stamps the permanent once-key. Use WITH --once-reason (issue #488)").option("--once-reason <token>", `The escalate-once reason from the inbox row (\`escalateOnceReason\`). One of: ${ESCALATE_ONCE_REASONS.join(", ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
-    const reason = (opts.reason ?? "").trim();
+  issue.command("escalate <number>").description("Hand an issue to a human: label needs-human + comment why. Keeps the work lock so the loop skips it this run.").option("--reason <reason>", "Why it's blocked / what a human must decide; no literal backticks").option("--reason-file <path>", "UTF-8 reason file; '-' reads stdin; mutually exclusive with --reason").option("--category <key>", `Why this class of work is gated on a human — appends the standard rationale. One of: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`).option("--owner <login>", "Accountable human named on the comment (default: signoff-owner config, else the issue author)").option("--update", "Edit the loop's latest \uD83D\uDEA7 escalation comment in place instead of stacking a new one").option("--force", "Skip the reason lint (open question without recommendation / not self-contained / no action section)").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for needs-human)").option("--release", "Also release the ShipFlow claim (default: keep it so the loop won't re-pick it this run)").option("--for-pr <number>", "The PR whose inbox row owed this escalation — stamps the permanent once-key. Use WITH --once-reason (issue #488)").option("--once-reason <token>", `The escalate-once reason from the inbox row (\`escalateOnceReason\`). One of: ${ESCALATE_ONCE_REASONS.join(", ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+    if (opts.reason !== undefined && opts.reasonFile !== undefined) {
+      throw new UsageError("issue escalate: --reason and --reason-file are mutually exclusive — pass one or the other.");
+    }
     if (opts.category && !(opts.category in ESCALATION_CATEGORIES)) {
       console.error(`Unknown escalation category "${opts.category}" — valid: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`);
       process.exit(1);
@@ -7989,6 +8040,7 @@ ${section}` : section;
       console.error("--update cannot carry an escalate-once key: an escalate-once row gets exactly one escalation, ever, and it must arrive as a new comment a human is notified of (issue #488). Drop --update on an `escalateOnce` row.");
       process.exit(1);
     }
+    const reason = (opts.reasonFile !== undefined ? readFileSync3(opts.reasonFile === "-" ? 0 : opts.reasonFile, "utf8") : opts.reason ?? "").trim();
     if (!opts.force) {
       const problems = lintEscalationReason(reason);
       if (problems.length) {

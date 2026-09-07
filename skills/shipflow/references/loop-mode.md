@@ -333,8 +333,8 @@ loop-authored PR goes through `renaiss-shipflow pr note <n> --body …
   CI). `issue escalate <issue> --category external-dependency --reason
   "PR #<n> automerge unsatisfiable: <blocker> can never clear by waiting."`
   ONCE, recommending both remedies (PR-triggered workflow · `config set
-  require-ci false`), then move on. `--reason` is mandatory — empty fails
-  lint, exits 1 *before* `needs-human` lands, reopening the re-poll.
+  require-ci false`), then move on. Supply `--reason` or `--reason-file` —
+  empty fails lint, exits 1 *before* `needs-human` lands, reopening the re-poll.
 - `conflict` → worker resolves agentically: `renaiss-shipflow pr sync <n>
   --keep-conflicts` (exit 6 = rebase mid-flight + conflicted files), then
   `references/conflict-resolution.md` — resolve by intent, stage only

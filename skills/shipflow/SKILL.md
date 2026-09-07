@@ -62,7 +62,7 @@ are identical across harnesses.
 | "regenerate feature map" / empty-map | `renaiss-shipflow features generate --json` |
 | "standing priorities" | `renaiss-shipflow priorities --json` (human-edited `docs/PRIORITIES.md`) |
 | "loop through issues and fix them" / `/shipflow-loop` | Loop mode → `references/loop-mode.md` |
-| "escalate #42 to a human" | `renaiss-shipflow issue escalate 42 --reason "..." --category <cat>` — categories, `--update`, and the `--for-pr`/`--once-reason` once-key: `references/loop-mode.md` |
+| "escalate #42 to a human" | `renaiss-shipflow issue escalate 42 --reason-file reason.md --category <cat>` — categories, `--update`, and the `--for-pr`/`--once-reason` once-key: `references/loop-mode.md` |
 | "set the default sign-off owner" | `renaiss-shipflow config set signoff-owner <github-login>` |
 | "unmatched commit email" | `renaiss-shipflow git-identity --fix` |
 | "I'm done with #42" | `renaiss-shipflow issue done 42` |

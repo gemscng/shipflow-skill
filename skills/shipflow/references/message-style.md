@@ -137,11 +137,40 @@ The comment the escalate command renders is now **≤ 8 visible lines**:
 | 8 | ONE `<details>` holding every other section (`Why it's blocked · Ready once unblocked`) |
 | footer | one `<sub>` line: reply protocol + the category rationale's first sentence |
 
-Rules the lint enforces on `--reason`: Action-needed section present and
-≤ 10 lines; every decision table carries **If chosen** (or `→` in each
-option); a `**Recommendation:**` line never doubles a table column; every
-ask ends in enumerated replies; no option hands the loop production
-access. **One live 🚧 per issue**: a second plain escalation while the
+Pass multiline source text with `issue escalate <n> --reason-file reason.md`;
+`--reason-file -` reads UTF-8 stdin to EOF. Inline `--reason "..."` remains
+available. Supply one source only, including when the inline value is empty.
+The selected text is trimmed once; internal newlines stay intact.
+
+Source reasons must contain **no literal backtick (U+0060)** anywhere:
+escaping, fences, comments and folded sections are not exceptions. Canonical
+footer code spans are generated after lint and remain unchanged. The explicit
+`--force` option bypasses lint for a human; it does not bypass conflicting
+sources, unreadable files, category or once-key checks. The loop fixes its
+reason instead of using that bypass.
+
+For structured reasons, keep Action-needed present and ≤ 10 lines. Advertise
+at least **two distinct complete reply choices**, each with an answer and a
+nonempty consequence; repeating a choice does not count twice, and an extra
+incomplete choice fails. Alternatives may share a decision number. Tables need
+populated options and an **If chosen**, Consequence, Outcome, Then or Result
+column (or an arrow in each option). A header alone is insufficient.
+A `**Recommendation:**` line never doubles a table column; no option hands
+the loop production access. Plain one-line dependency reasons remain valid.
+
+Example contents of reason.md (the Markdown fence is not part of the file):
+
+```text
+### Action needed
+1. Install the GitHub App on the repository.
+1: done → loop rechecks access
+1: skip → loop parks this issue
+
+### Why it's blocked
+The repository check cannot finish without the App installation.
+```
+
+**One live 🚧 per issue**: a second plain escalation while the
 label is on is refused — use `--update` (edits in place) or `--force` to
 stack deliberately; the escalate-once path is exempt.
 
