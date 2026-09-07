@@ -2328,11 +2328,34 @@ class ShipFlowClient {
     return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/feature-mapping/generate`);
   }
 }
-var ApiError, ClaimConflictError;
+function resolveTriggerRepo(repos, requested) {
+  const name = requested.trim().toLowerCase();
+  const matches = repos.filter((repo2) => (name.includes("/") ? repo2.fullName : repo2.name).toLowerCase() === name);
+  if (matches.length === 0) {
+    throw new WorkflowTriggerError("REPO_NOT_FOUND", `Repository "${requested}" is not tracked in this organization.`);
+  }
+  if (matches.length > 1) {
+    throw new WorkflowTriggerError("REPO_AMBIGUOUS", `Repository "${requested}" is ambiguous: ${matches.map((repo2) => repo2.fullName).join(", ")}. Use owner/repo.`);
+  }
+  const repo = matches[0];
+  if (!repo.projectId) {
+    throw new WorkflowTriggerError("PROJECT_NOT_MAPPED", `Repository "${repo.fullName}" is not mapped to a project. Link it to a project before triggering a workflow.`);
+  }
+  return { ...repo, projectId: repo.projectId };
+}
+var ApiError, ClaimConflictError, WorkflowTriggerError;
 var init_client = __esm(() => {
   ApiError = class ApiError extends Error {
     status;
     body;
+    get code() {
+      try {
+        const code = JSON.parse(this.body)?.error?.code;
+        return typeof code === "string" ? code : undefined;
+      } catch {
+        return;
+      }
+    }
     constructor(status, body) {
       super(`API error ${status}: ${envelopeMessage(body) ?? body}`);
       this.status = status;
@@ -2346,6 +2369,14 @@ var init_client = __esm(() => {
       super(holder ? `issue claimed by ${holder.actor}${holder.agent ? ` (${holder.agent})` : ""} until ${holder.expiresAt}` : "issue already claimed");
       this.holder = holder;
       this.name = "ClaimConflictError";
+    }
+  };
+  WorkflowTriggerError = class WorkflowTriggerError extends Error {
+    code;
+    constructor(code, message) {
+      super(message);
+      this.code = code;
+      this.name = "WorkflowTriggerError";
     }
   };
 });
@@ -4984,8 +5015,9 @@ function runAction(fn) {
       const message = err instanceof Error ? err.message : String(err);
       const cmd = args[args.length - 1];
       const opts = typeof cmd?.optsWithGlobals === "function" ? cmd.optsWithGlobals() : typeof cmd?.opts === "function" ? cmd.opts() : {};
+      const code = err instanceof ApiError || err instanceof WorkflowTriggerError ? err.code : undefined;
       if (opts?.json)
-        console.log(JSON.stringify({ error: message }));
+        console.log(JSON.stringify({ error: message, ...code ? { code } : {} }));
       else
         console.error(`Error: ${message}`);
       process.exit(err instanceof UsageError ? 1 : UNEXPECTED_EXIT_CODE);
@@ -5406,14 +5438,30 @@ By Stage:`);
 }
 
 // src/commands/trigger.ts
+init_client();
 init_helpers();
 function registerTriggerCommand(program2) {
-  program2.command("trigger").description("Manually trigger a workflow").argument("<workflow-type>", "Workflow type to trigger (e.g. regression_tests)").requiredOption("--repo <repo>", "Repository name").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (workflowType, opts, cmd) => {
+  program2.command("trigger").description("Manually trigger a workflow").argument("<workflow-type>", "Workflow type to trigger (e.g. regression_tests)").requiredOption("--repo <repo>", "Repository name or owner/repo").option("--issue-number <number>", "Issue number for issue_triage").option("--commit-sha <sha>", "Commit SHA for commit_impact").option("--base-sha <sha>", "Base SHA for commit_impact").option("--tag <tag>", "Release tag for patch_notes, regression_tests, or uat").option("--after-tag <tag>", "Previous release tag for patch_notes").option("--ref <ref>", "Git ref to test").option("--preview-url <url>", "Preview URL to test").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (workflowType, opts, cmd) => {
+    const issueNumber = opts.issueNumber === undefined ? undefined : Number(opts.issueNumber);
+    if (issueNumber !== undefined && (!Number.isSafeInteger(issueNumber) || issueNumber <= 0)) {
+      throw new UsageError("--issue-number must be a positive integer");
+    }
     const { client, org } = getApiCtx(cmd);
-    await client.updateWorkflow(org, opts.repo, workflowType, {
-      settings: { _trigger: true }
+    const repo = resolveTriggerRepo(await client.listRepos(org), opts.repo);
+    const result = await client.triggerWorkflow(org, repo.projectId, workflowType, {
+      repo: repo.fullName,
+      issue_number: issueNumber,
+      commit_sha: opts.commitSha,
+      base_sha: opts.baseSha,
+      tag: opts.tag,
+      after_tag: opts.afterTag,
+      ref: opts.ref,
+      preview_url: opts.previewUrl
     });
-    emit(opts, { workflowType, repo: opts.repo, triggered: true }, () => console.log(`Workflow "${workflowType}" triggered on ${opts.repo}.`));
+    if (!result?.executionId || result.status !== "queued") {
+      throw new WorkflowTriggerError("TRIGGER_NOT_ACCEPTED", "Server did not confirm a queued workflow execution.");
+    }
+    emit(opts, { workflowType, repo: opts.repo, triggered: true, executionId: result.executionId, status: result.status }, () => console.log(`Workflow "${workflowType}" triggered on ${opts.repo}.`));
   }));
 }
 
