@@ -42,6 +42,11 @@ skill_name_of() {
 mkdir -p "$BIN_DIR"
 ln -sfn "$ROOT/bin/renaiss-shipflow" "$BIN_DIR/renaiss-shipflow"
 echo "cli:     $BIN_DIR/renaiss-shipflow -> $ROOT/bin/renaiss-shipflow"
+# The loop's usage gate (reads Codex's live rate limits; spends a reset credit).
+if [ -f "$ROOT/bin/shipflow-usage" ]; then
+  ln -sfn "$ROOT/bin/shipflow-usage" "$BIN_DIR/shipflow-usage"
+  echo "usage:   $BIN_DIR/shipflow-usage -> $ROOT/bin/shipflow-usage"
+fi
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "         note: $BIN_DIR is not on PATH — add it to your shell profile" ;; esac
 # The always-on loop supervisor (Codex has no CronCreate). Linked from every
 # install route, including the plugin cache — it drives `codex exec`, so it is

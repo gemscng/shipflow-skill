@@ -31,6 +31,10 @@ window only, never for a weekly limit, one attempt per week — loop-mode.md
 token means `export SHIPFLOW_LOOP_LIMIT_RESET=off` for the run, so the tool
 refuses the spend even if a tick asks for it.
 
+Codex: no sink to install — `shipflow-usage` reads Codex's live limits
+(`SHIPFLOW_USAGE_SOURCE=codex`) and `limit-reset` spends a rate-limit reset
+credit; `references/codex.md` § "Usage gate".
+
 ## Setup — run in a worktree (once, before the cycle)
 
 Always in a git worktree, never the user's live checkout.

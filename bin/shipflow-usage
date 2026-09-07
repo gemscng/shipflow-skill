@@ -39,17 +39,42 @@
 // 3600) · CLAUDE_CONFIG_DIR (default ~/.claude, for install-statusline) ·
 // SHIPFLOW_CLAUDE_BIN (default `claude` on PATH, for limit-reset).
 //
+// ── OpenAI Codex CLI (`--source codex` / SHIPFLOW_USAGE_SOURCE=codex) ─────────
+// Codex has no statusline, but `codex app-server` answers
+// `account/rateLimits/read` — the numbers its `/usage` screen shows (usedPercent,
+// windowDurationMins, resetsAt per window, plus the account's rate-limit RESET
+// CREDITS) — and `account/rateLimitResetCredit/consume`, the "Full reset" that
+// `/usage` offers. So under Codex:
+//
+//   check          reads the limits LIVE (no sink, never stale) and snapshots
+//                  them to ~/.shipflow/usage-codex.json; same exit codes
+//   limit-reset    spends one reset credit through the app server. A Codex
+//                  reset clears EVERY window, so the 5-hour-only and
+//                  weekly-blocker rails do not apply; what remains: only at/over
+//                  max, only with a credit available, one attempt per cooldown,
+//                  SHIPFLOW_LOOP_LIMIT_RESET=off
+//   install-statusline   not needed — prints so, exit 0
+//
+// Source: --source codex|claude → $SHIPFLOW_USAGE_SOURCE → codex when the shell
+// carries Codex's own env (CODEX_SANDBOX / CODEX_THREAD_ID, set inside `codex
+// exec` and the TUI) → claude. CODEX_BIN (default `codex` on PATH).
+//
 // No dependencies beyond node (the plugin launcher already requires it).
 "use strict";
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
+const crypto = require("crypto");
 
 const HOME = os.homedir();
 const STATE_DIR = process.env.SHIPFLOW_STATE_DIR || path.join(HOME, ".shipflow");
-const SNAPSHOT = path.join(STATE_DIR, "usage.json");
+const CLAUDE_SNAPSHOT = path.join(STATE_DIR, "usage.json");
+const CODEX_SNAPSHOT = path.join(STATE_DIR, "usage-codex.json");
+// The snapshot every command reads/writes; main() points it at the source's
+// file (Claude statusline sink vs. Codex live read) before dispatching.
+let SNAPSHOT = CLAUDE_SNAPSHOT;
 const WINDOW_LABEL = { five_hour: "5h", seven_day: "7d", spend_limit: "spend" };
 const WINDOW_ORDER = ["five_hour", "seven_day", "spend_limit"];
 
@@ -153,6 +178,10 @@ function parseArgs(argv) {
       opts.max = a.slice(6);
     } else if (a.startsWith("--max-age=")) {
       opts["max-age"] = a.slice(10);
+    } else if (a === "--source") {
+      opts.source = argv[++i];
+    } else if (a.startsWith("--source=")) {
+      opts.source = a.slice(9);
     } else if (a === "--text" || a === "--json" || a === "--dry-run") {
       opts[a.slice(2)] = true;
     } else {
@@ -284,19 +313,24 @@ function evaluate(snapshot, { max, maxAge, now }) {
   return result;
 }
 
-function cmdCheck(opts) {
+// --max / --max-age, validated once for every gate command. null = bad input
+// (already reported on stderr → exit 1).
+function gateThresholds(opts) {
   const max = Number(opts.max ?? envNum(process.env.SHIPFLOW_LOOP_USAGE_MAX) ?? 90);
   const rawMaxAge = Number(opts["max-age"] ?? envNum(process.env.SHIPFLOW_USAGE_MAX_AGE) ?? 3600);
   if (!Number.isFinite(max) || max <= 0 || max > 100) {
     process.stderr.write(`shipflow-usage: --max must be a percentage in (0, 100], got ${JSON.stringify(opts.max)}\n`);
-    return 1;
+    return null;
   }
   if (opts["max-age"] !== undefined && (!Number.isFinite(rawMaxAge) || rawMaxAge <= 0)) {
     process.stderr.write(`shipflow-usage: --max-age must be a positive number of seconds, got ${JSON.stringify(opts["max-age"])}\n`);
-    return 1;
+    return null;
   }
   const maxAge = Number.isFinite(rawMaxAge) && rawMaxAge > 0 ? rawMaxAge : 3600;
-  const result = evaluate(readJSON(SNAPSHOT), { max, maxAge, now: nowSeconds() });
+  return { max, maxAge };
+}
+
+function emitCheck(result, opts) {
   if (opts.text) {
     const status = result.verdict === "over" ? "STOP" : result.verdict === "unknown" ? "UNKNOWN" : "OK";
     process.stdout.write(`usage ${status}: ${result.reason}\n`);
@@ -306,6 +340,13 @@ function cmdCheck(opts) {
   if (result.verdict === "over") return 3;
   if (result.verdict === "unknown") return 2;
   return 0;
+}
+
+function cmdCheck(opts) {
+  const t = gateThresholds(opts);
+  if (!t) return 1;
+  const result = evaluate(readJSON(SNAPSHOT), { max: t.max, maxAge: t.maxAge, now: nowSeconds() });
+  return emitCheck(result, opts);
 }
 
 // ── limit-reset ─────────────────────────────────────────────────────────────
@@ -349,11 +390,29 @@ function firstLine(text) {
 }
 
 // Why the loop may not spend the reset right now. null = go ahead.
-function resetSkipReason(result, snapshot, now) {
+function resetKnobOff() {
   const knob = (process.env.SHIPFLOW_LOOP_LIMIT_RESET || "").trim().toLowerCase();
-  if (["off", "0", "false", "no", "never"].includes(knob)) {
-    return `disabled by SHIPFLOW_LOOP_LIMIT_RESET=${knob}`;
+  return ["off", "0", "false", "no", "never"].includes(knob) ? `disabled by SHIPFLOW_LOOP_LIMIT_RESET=${knob}` : null;
+}
+
+// The reason the last attempt still parks this one, or null. A settled
+// outcome holds for a week; a transient one for an hour.
+function resetCooldownReason(snapshot, now) {
+  const prev = snapshot && snapshot.limit_reset;
+  if (prev && typeof prev.attempted_at === "string") {
+    const at = Math.floor(Date.parse(prev.attempted_at) / 1000);
+    const cooldown = prev.settled ? RESET_COOLDOWN_SECONDS : RESET_RETRY_SECONDS;
+    if (Number.isFinite(at) && now - at < cooldown) {
+      const mins = Math.max(1, Math.round((cooldown - (now - at)) / 60));
+      return `last attempt (${prev.outcome}) was ${Math.round((now - at) / 60)} min ago — next try in ${mins} min`;
+    }
   }
+  return null;
+}
+
+function resetSkipReason(result, snapshot, now) {
+  const off = resetKnobOff();
+  if (off) return off;
   if (result.verdict !== "over") {
     return result.verdict === "unknown"
       ? `usage is unknown (${result.reason}) — never spend the weekly reset on a guess`
@@ -367,16 +426,7 @@ function resetSkipReason(result, snapshot, now) {
   if (weekly && weekly.used_percentage >= result.max) {
     return `7d usage ${Math.round(weekly.used_percentage)}% ≥ ${result.max}% — the weekly limit survives a session reset`;
   }
-  const prev = snapshot && snapshot.limit_reset;
-  if (prev && typeof prev.attempted_at === "string") {
-    const at = Math.floor(Date.parse(prev.attempted_at) / 1000);
-    const cooldown = prev.settled ? RESET_COOLDOWN_SECONDS : RESET_RETRY_SECONDS;
-    if (Number.isFinite(at) && now - at < cooldown) {
-      const mins = Math.max(1, Math.round((cooldown - (now - at)) / 60));
-      return `last attempt (${prev.outcome}) was ${Math.round((now - at) / 60)} min ago — next try in ${mins} min`;
-    }
-  }
-  return null;
+  return resetCooldownReason(snapshot, now);
 }
 
 function cmdLimitReset(opts) {
@@ -438,7 +488,7 @@ function emitReset(out, opts) {
   process.stdout.write(JSON.stringify(out) + "\n");
 }
 
-function recordResetAttempt(outcome, detail, settled, now) {
+function recordResetAttempt(outcome, detail, settled, now, idempotencyKey) {
   const snapshot = readJSON(SNAPSHOT) || {};
   snapshot.limit_reset = {
     attempted_at: new Date(now * 1000).toISOString(),
@@ -446,6 +496,7 @@ function recordResetAttempt(outcome, detail, settled, now) {
     detail,
     settled: Boolean(settled),
   };
+  if (idempotencyKey) snapshot.limit_reset.idempotency_key = idempotencyKey;
   if (outcome === "reset") snapshot.limit_reset.used_at = snapshot.limit_reset.attempted_at;
   writeJSONAtomic(SNAPSHOT, snapshot);
 }
@@ -460,6 +511,231 @@ function clearFiveHourWindow(now) {
   if (snapshot.windows && typeof snapshot.windows === "object") delete snapshot.windows.five_hour;
   snapshot.recorded_at = new Date(now * 1000).toISOString();
   writeJSONAtomic(SNAPSHOT, snapshot);
+}
+
+// ── codex ───────────────────────────────────────────────────────────────────
+
+function usageSource(opts) {
+  const raw = String(opts.source || process.env.SHIPFLOW_USAGE_SOURCE || "").trim().toLowerCase();
+  if (raw === "codex" || raw === "claude") return raw;
+  if (raw) return null;
+  if (process.env.CODEX_SANDBOX || process.env.CODEX_THREAD_ID) return "codex";
+  return "claude";
+}
+
+function codexBin() {
+  return process.env.CODEX_BIN || "codex";
+}
+
+// One JSON-RPC exchange with `codex app-server` over stdio: initialize, then
+// the request. The server answers one JSON object per line and keeps running
+// until stdin closes, so stdin stays open until the reply (or the timeout) —
+// closing it first makes the server exit before it answers.
+function codexRpc(method, params, timeoutMs) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(codexBin(), ["app-server"], { stdio: ["pipe", "pipe", "pipe"] });
+    } catch (err) {
+      resolve({ error: `cannot run ${codexBin()} app-server: ${err && err.message}` });
+      return;
+    }
+    let buf = "";
+    let stderr = "";
+    let done = false;
+    let timer = null;
+    const finish = (out) => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
+      resolve(out);
+    };
+    timer = setTimeout(() => finish({ error: `codex app-server did not answer ${method} within ${Math.round(timeoutMs / 1000)}s` }), timeoutMs);
+    child.on("error", (err) => finish({ error: `cannot run ${codexBin()} app-server: ${err.message}` }));
+    child.stderr.on("data", (d) => {
+      stderr += String(d);
+    });
+    child.stdout.on("data", (d) => {
+      buf += String(d);
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let msg;
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (msg && msg.id === 2) {
+          if (msg.error) finish({ error: `${method}: ${(msg.error && msg.error.message) || JSON.stringify(msg.error)}` });
+          else finish({ result: msg.result });
+        }
+      }
+    });
+    child.on("close", (code) =>
+      finish({ error: `codex app-server exited (${code}) before answering ${method}${stderr.trim() ? `: ${firstLine(stderr)}` : ""}` }),
+    );
+    child.stdin.on("error", () => {});
+    const lines = [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { clientInfo: { name: "shipflow-usage", title: "ShipFlow usage gate", version: "1" } } },
+      { jsonrpc: "2.0", method: "initialized" },
+      { jsonrpc: "2.0", id: 2, method, params: params || {} },
+    ];
+    child.stdin.write(lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  });
+}
+
+// The app server names windows by duration, not by kind; map them onto the
+// snapshot shape `evaluate` reads. `rateLimits` is the account's active limit
+// (`primary` = its main window — 5h on most plans, weekly on some — and
+// `secondary` the other); `rateLimitsByLimitId` adds per-model buckets with
+// their own windows (measured: the account limit carried only the weekly
+// window while the model bucket carried the 5-hour one). The gate fails
+// closed, so every bucket counts and the WORST reading per window kind wins.
+function codexWindows(result, now) {
+  const out = {};
+  const buckets = [result && result.rateLimits];
+  const byId = result && result.rateLimitsByLimitId;
+  if (byId && typeof byId === "object") for (const b of Object.values(byId)) buckets.push(b);
+  for (const rl of buckets) {
+    for (const w of [rl && rl.primary, rl && rl.secondary]) {
+      if (!w || typeof w.usedPercent !== "number" || !Number.isFinite(w.usedPercent)) continue;
+      const mins = w.windowDurationMins;
+      const key = mins === 300 ? "five_hour" : mins === 10080 ? "seven_day" : typeof mins === "number" ? `${mins}m` : "window";
+      if (typeof w.resetsAt === "number" && w.resetsAt <= now) continue;
+      if (out[key] && out[key].used_percentage >= w.usedPercent) continue;
+      out[key] = { used_percentage: w.usedPercent, resets_at: typeof w.resetsAt === "number" ? w.resetsAt : null };
+    }
+  }
+  return out;
+}
+
+// Read the limits live and persist them as the Codex snapshot, so `show`, the
+// limit-reset ledger and a later failed read have something to stand on. On a
+// failed read the previous snapshot is returned with the error.
+async function codexRefresh(now) {
+  const prev = readJSON(SNAPSHOT) || {};
+  const rpc = await codexRpc("account/rateLimits/read", {}, 20000);
+  if (rpc.error) return { snapshot: readJSON(SNAPSHOT), error: rpc.error };
+  const rl = rpc.result && rpc.result.rateLimits;
+  const credits = rpc.result && rpc.result.rateLimitResetCredits;
+  const stamp = new Date(now * 1000).toISOString();
+  const windows = codexWindows(rpc.result, now);
+  const snapshot = {
+    recorded_at: stamp,
+    observed_at: stamp,
+    source: "codex-app-server",
+    has_limits: Boolean(rl && (rl.primary || rl.secondary)) || Object.keys(windows).length > 0,
+    windows,
+    plan: rl && typeof rl.planType === "string" ? rl.planType : null,
+    reset_credits: { available: credits && typeof credits.availableCount === "number" ? credits.availableCount : 0 },
+  };
+  if (prev.limit_reset && typeof prev.limit_reset === "object") snapshot.limit_reset = prev.limit_reset;
+  writeJSONAtomic(SNAPSHOT, snapshot);
+  return { snapshot, error: null };
+}
+
+async function cmdCheckCodex(opts) {
+  const t = gateThresholds(opts);
+  if (!t) return 1;
+  const now = nowSeconds();
+  const { snapshot, error } = await codexRefresh(now);
+  const result = evaluate(snapshot, { max: t.max, maxAge: t.maxAge, now });
+  result.source = "codex";
+  if (error) {
+    result.live_read_error = error;
+    // A stale-and-over snapshot is still a lower bound (exit 3); anything
+    // else cannot be known without the live numbers.
+    if (result.verdict !== "over") {
+      result.verdict = "unknown";
+      result.ok = null;
+      result.reason = snapshot ? `cannot read Codex limits (${error}); last seen ${formatWindows(liveWindows(snapshot.windows, now)) || "no windows"}` : `cannot read Codex limits (${error})`;
+    }
+  }
+  return emitCheck(result, opts);
+}
+
+// Why the loop may not spend a Codex reset credit right now. null = go ahead.
+function codexResetSkipReason(result, snapshot, now) {
+  const off = resetKnobOff();
+  if (off) return off;
+  if (result.verdict !== "over") {
+    return result.verdict === "unknown"
+      ? `usage is unknown (${result.reason}) — never spend a reset credit on a guess`
+      : `usage is below the threshold (${result.reason})`;
+  }
+  const available = snapshot && snapshot.reset_credits ? Number(snapshot.reset_credits.available) : 0;
+  if (!(available > 0)) {
+    return "no rate-limit reset credit available — Codex grants them over time (they show under /usage)";
+  }
+  return resetCooldownReason(snapshot, now);
+}
+
+// consume outcomes → exit code + whether the outcome parks further attempts.
+// `alreadyRedeemed` means THIS idempotency key already reset the windows: a
+// retry of a success, so it is a success.
+const CODEX_RESET_OUTCOMES = {
+  reset: { outcome: "reset", exit: 0, settled: true },
+  alreadyRedeemed: { outcome: "reset", exit: 0, settled: true },
+  nothingToReset: { outcome: "nothing-to-reset", exit: 5, settled: false },
+  noCredit: { outcome: "no-credit", exit: 5, settled: false },
+};
+
+async function cmdLimitResetCodex(opts) {
+  const t = gateThresholds(opts);
+  if (!t) return 1;
+  const now = nowSeconds();
+  const { snapshot, error } = await codexRefresh(now);
+  const result = evaluate(snapshot, { max: t.max, maxAge: 3600, now });
+  const out = { action: "limit-reset", source: "codex", max: t.max, outcome: "skipped", reason: "", detail: "", ran: false };
+  if (error && result.verdict !== "over") {
+    out.reason = `usage is unknown (cannot read Codex limits: ${error}) — never spend a reset credit on a guess`;
+    emitReset(out, opts);
+    return 5;
+  }
+  const skip = codexResetSkipReason(result, snapshot, now);
+  if (skip) {
+    out.reason = skip;
+    emitReset(out, opts);
+    return 5;
+  }
+  out.reason = result.reason;
+  // A retry of an unsettled attempt reuses its idempotency key, so a reset that
+  // did land (but whose answer was lost) is never consumed twice.
+  const prev = snapshot && snapshot.limit_reset;
+  const key = prev && !prev.settled && typeof prev.idempotency_key === "string" ? prev.idempotency_key : crypto.randomUUID();
+  if (opts["dry-run"]) {
+    out.outcome = "would-run";
+    out.detail = `${codexBin()} app-server → account/rateLimitResetCredit/consume`;
+    emitReset(out, opts);
+    return 0;
+  }
+  const rpc = await codexRpc("account/rateLimitResetCredit/consume", { idempotencyKey: key }, 30000);
+  out.ran = true;
+  if (rpc.error) {
+    out.outcome = "error";
+    out.detail = rpc.error;
+    recordResetAttempt(out.outcome, out.detail, false, now, key);
+    emitReset(out, opts);
+    return 2;
+  }
+  const raw = rpc.result && rpc.result.outcome;
+  const verdict = CODEX_RESET_OUTCOMES[raw] || { outcome: "unknown", exit: 2, settled: false };
+  out.outcome = verdict.outcome;
+  out.detail = `app server answered ${JSON.stringify(raw)}`;
+  recordResetAttempt(verdict.outcome, out.detail, verdict.settled, now, key);
+  // The windows just changed; re-read so the snapshot (and the caller's next
+  // `check`) reflects the cleared account rather than the number that stopped it.
+  if (verdict.outcome === "reset") await codexRefresh(now);
+  emitReset(out, opts);
+  return verdict.exit;
 }
 
 // ── install-statusline ──────────────────────────────────────────────────────
@@ -515,18 +791,30 @@ function cmdInstallStatusline(opts) {
 
 // ── main ────────────────────────────────────────────────────────────────────
 
-function main() {
+async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const cmd = opts._[0];
+  const source = usageSource(opts);
+  if (source === null) {
+    process.stderr.write(`shipflow-usage: --source must be codex or claude, got ${JSON.stringify(opts.source || process.env.SHIPFLOW_USAGE_SOURCE)}\n`);
+    return 1;
+  }
+  SNAPSHOT = source === "codex" ? CODEX_SNAPSHOT : CLAUDE_SNAPSHOT;
   switch (cmd) {
     case "record":
+      // The statusline sink is Claude Code's, whatever the session's source.
+      SNAPSHOT = CLAUDE_SNAPSHOT;
       return cmdRecord();
     case "check":
-      return cmdCheck(opts);
+      return source === "codex" ? cmdCheckCodex(opts) : cmdCheck(opts);
     case "install-statusline":
+      if (source === "codex") {
+        process.stdout.write("no statusline sink needed on Codex: shipflow-usage reads the limits live from `codex app-server` (what /usage shows)\n");
+        return 0;
+      }
       return cmdInstallStatusline(opts);
     case "limit-reset":
-      return cmdLimitReset(opts);
+      return source === "codex" ? cmdLimitResetCodex(opts) : cmdLimitReset(opts);
     case "show": {
       const snap = readJSON(SNAPSHOT);
       process.stdout.write(snap ? JSON.stringify(snap, null, 2) + "\n" : `no snapshot at ${SNAPSHOT}\n`);
@@ -535,10 +823,13 @@ function main() {
     default:
       process.stderr.write(
         "usage: shipflow-usage record | check [--max N] [--max-age SECONDS] [--text] | " +
-          "limit-reset [--max N] [--dry-run] [--text] | install-statusline [--dry-run] | show\n",
+          "limit-reset [--max N] [--dry-run] [--text] | install-statusline [--dry-run] | show\n" +
+          "       [--source codex|claude]  (default: $SHIPFLOW_USAGE_SOURCE, else codex inside a Codex shell, else claude)\n",
       );
       return 1;
   }
 }
 
-process.exitCode = main();
+main().then((code) => {
+  process.exitCode = code;
+});

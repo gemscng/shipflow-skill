@@ -18,10 +18,19 @@
 # Any other token (`cap=1`, `concurrency=1`, `--label bug`, …) is appended to
 # the prompt as a /shipflow-loop argument.
 #
+# Usage gate: before every tick the supervisor runs `shipflow-usage check`
+# against Codex's live rate limits (what /usage shows). At/over usage-max it
+# tries `shipflow-usage limit-reset` — one of the account's rate-limit reset
+# credits — and skips the tick when that does not clear it, so a paused loop
+# costs nothing. The gate lives next to this script in the plugin (bin/); a
+# missing gate is logged and the tick runs.
+#
 # Env: CODEX_BIN (codex) · CODEX_HOME (~/.codex) · SHIPFLOW_CODEX_SANDBOX
 # (danger-full-access — the loop needs network for gh/git/npm/the API) ·
 # SHIPFLOW_LOOP_WATCH (15m) · SHIPFLOW_CODEX_LOOP_DIR ($PWD, passed as -C) ·
-# SHIPFLOW_STATE_DIR (~/.shipflow — holds codex-loop.log and codex-loop.stop).
+# SHIPFLOW_STATE_DIR (~/.shipflow — holds codex-loop.log and codex-loop.stop) ·
+# SHIPFLOW_USAGE_BIN (bin/shipflow-usage next to this script) ·
+# SHIPFLOW_LOOP_USAGE_MAX (90) — read by shipflow-usage.
 set -euo pipefail
 
 CODEX_BIN="${CODEX_BIN:-codex}"
@@ -33,6 +42,15 @@ STATE_DIR="${SHIPFLOW_STATE_DIR:-$HOME/.shipflow}"
 
 STOP_FILE="$STATE_DIR/codex-loop.stop"
 LOG_FILE="$STATE_DIR/codex-loop.log"
+
+# bin/shipflow-usage sits one level up from codex/ in the plugin (and in the
+# monorepo's scripts/shipflow-plugin/); resolve through the shipflow-codex-loop
+# symlink the installer creates.
+_self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+USAGE_BIN="${SHIPFLOW_USAGE_BIN:-$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd)/bin/shipflow-usage}"
+# Every shipflow-usage call in this supervisor — and inside the tick — reads
+# Codex's limits, never Claude's statusline snapshot.
+export SHIPFLOW_USAGE_SOURCE=codex
 
 ONCE=0
 DRY_RUN=0
@@ -110,8 +128,36 @@ if [ "$DRY_RUN" -eq 1 ]; then
   printf '%s exec --sandbox %s -C %s "$(cat %s)\\n\\n%s"\n' \
     "$CODEX_BIN" "$SANDBOX" "$DIR" "$PROMPT_FILE" "$TAIL"
   printf 'prompt: %s\n' "$PROMPT_FILE"
+  printf 'usage gate: %s check --text (SHIPFLOW_USAGE_SOURCE=codex)\n' "$USAGE_BIN"
   exit 0
 fi
+
+# 0 = run the tick; 1 = usage at/over max and the reset did not clear it → skip.
+usage_gate() {
+  if [ ! -x "$USAGE_BIN" ]; then
+    log "usage gate: $USAGE_BIN not found — tick runs unguarded"
+    return 0
+  fi
+  local line status=0 reset rstatus=0
+  line="$("$USAGE_BIN" check --text 2>&1)" || status=$?
+  case "$status" in
+    0) return 0 ;;
+    3)
+      log "usage gate: $line"
+      reset="$("$USAGE_BIN" limit-reset --text 2>&1)" || rstatus=$?
+      log "usage gate: $reset"
+      if [ "$rstatus" -eq 0 ]; then
+        return 0
+      fi
+      printf '⏸ paused · %s · %s · rechecks next tick\n' "$line" "$reset"
+      return 1
+      ;;
+    *)
+      log "usage gate: $line (exit $status) — tick runs"
+      return 0
+      ;;
+  esac
+}
 
 trap 'log "interrupted"; exit 130' INT TERM
 
@@ -137,8 +183,12 @@ while :; do
   # A failing tick never stops the supervisor — it is logged and the next tick
   # runs. Only `once` propagates the exit code.
   status=0
-  SHIPFLOW_HEADLESS=1 "$CODEX_BIN" exec --sandbox "$SANDBOX" -C "$DIR" "$PROMPT" || status=$?
-  log "tick $tick end exit=$status"
+  if usage_gate; then
+    SHIPFLOW_HEADLESS=1 "$CODEX_BIN" exec --sandbox "$SANDBOX" -C "$DIR" "$PROMPT" || status=$?
+    log "tick $tick end exit=$status"
+  else
+    log "tick $tick skipped (usage gate)"
+  fi
 
   if [ "$ONCE" -eq 1 ]; then
     exit "$status"

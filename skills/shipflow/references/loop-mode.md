@@ -133,7 +133,9 @@ every refresh, and `check` reads the snapshot. A stale reading is a lower
 bound (usage only grows until a window resets), so stale-and-over is still
 **3**; stale-and-below is **2**, never a pass. There is no other sanctioned
 source: do not scrape `/usage`, do not call OAuth endpoints with the
-keychain token, do not estimate from token counts.
+keychain token, do not estimate from token counts. Under Codex the same
+tool reads the limits live and spends a reset credit instead —
+`references/codex.md` § affordance map, "Usage gate".
 
 #### Exit 3 → spend the once-a-week session reset (5-hour window only)
 

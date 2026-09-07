@@ -47,6 +47,7 @@ identical on every harness.
 | `EnterWorktree` | `git worktree add .worktrees/shipflow-loop -b shipflow-loop/base origin/<default>` (the loop-mode fallback path — harness-neutral) |
 | `Read` tool on screenshots (evidence step) | Verify the PNGs exist and are non-empty (`file`, byte size); attach with `renaiss-shipflow issue evidence` exactly as documented. Codex `-i <image>` can view them when visual judgment is needed |
 | `claude-in-chrome` MCP browser | Not needed — `browser-testing.md` drives the gstack `browse` CLI, harness-neutral |
+| Usage gate (`shipflow-usage check` / `limit-reset`, loop-mode.md § "Usage gate") | Same tool, same exit codes, Codex's numbers: with `SHIPFLOW_USAGE_SOURCE=codex` it reads the live rate limits from `codex app-server` (what `/usage` shows — no statusline sink, never stale; `install-statusline` is a no-op). `limit-reset` spends one of the account's **rate-limit reset credits** (the "Full reset" `/usage` lists) — a Codex reset clears every window, so it also applies when the weekly window is the blocker; rails: only at/over max, only with a credit, one attempt per cooldown, `SHIPFLOW_LOOP_LIMIT_RESET=off`. Resolve the tool: `shipflow-usage` on PATH (put there by `codex/install.sh`), else `"$(dirname "$(readlink -f "$SHIPFLOW_CLI")")/shipflow-usage"`. `shipflow-codex-loop` runs this gate itself before every tick and skips the tick when the reset does not clear it |
 | Plugin auto-update hook | Route A: `codex plugin marketplace upgrade shipflow` then `codex plugin add shipflow@shipflow` again (new thread afterwards). Route B: `git -C ~/.shipflow-skill pull --ff-only` at session start — the skills are symlinks into the clone, so they refresh with it; re-run `codex/install.sh` when the prompt set changes |
 
 ## Continuous mode
@@ -70,7 +71,10 @@ shipflow-codex-loop [once|stop] [watch=<dur>] [--dry-run] [loop tokens…]
 
 One `codex exec --sandbox danger-full-access -C <repo> "<prompt> once …"` per
 tick, sleeping `watch` (default `15m`) between ticks; a failing tick is logged,
-not fatal. Log: `~/.shipflow/codex-loop.log`. Run it under nohup/tmux/launchd
+not fatal. Before each tick it runs the usage gate (affordance map above) and
+skips the tick — `⏸ paused · usage …` on stdout, `tick N skipped (usage gate)`
+in the log — when Codex's limits are at/over `usage-max` and no reset credit
+clears them. Log: `~/.shipflow/codex-loop.log`. Run it under nohup/tmux/launchd
 for a reconciler independent of any terminal. Env knobs: `CODEX_BIN`,
 `CODEX_HOME`, `SHIPFLOW_CODEX_SANDBOX`, `SHIPFLOW_LOOP_WATCH`,
 `SHIPFLOW_CODEX_LOOP_DIR`, `SHIPFLOW_STATE_DIR`.

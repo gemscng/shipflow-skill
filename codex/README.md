@@ -57,6 +57,12 @@ the supervisor passes `--sandbox danger-full-access` itself
 `browse` on PATH; without it the sweep runs tests only and files nothing
 from the browser.
 
+Loop usage gate: `shipflow-usage` (on PATH after `codex/install.sh`) reads
+Codex's live rate limits — what `/usage` shows — when `SHIPFLOW_USAGE_SOURCE=codex`,
+and `shipflow-usage limit-reset` spends one of the account's rate-limit reset
+credits when the loop is blocked. `shipflow-codex-loop` runs that gate before
+every tick.
+
 Either way, type `$shipflow` (or `$smart-commit`) in Codex, or just mention
 ShipFlow — Codex picks the skill from its description. Harness differences
 (no Task tool / CronCreate / AskUserQuestion) are mapped in
