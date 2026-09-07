@@ -10868,9 +10868,9 @@ function headClockReadFor(pr, me, read) {
     return null;
   }
 }
-function inboxIntentBlocked(repo, pr) {
+function inboxIntentBlocked(repo, pr, readOnly) {
   const gate = evalIntentGate(repo, pr.number, pr);
-  if (gate.applyLabel) {
+  if (gate.applyLabel && !readOnly) {
     const arm = armIntentGate(repo, pr.number, gate, liveIntentGateWriters);
     if (!arm.armed) {
       console.warn(`⚠️  ${GATE_ARM_BLOCKER} on PR #${pr.number}: ${arm.gateArmError ?? "unknown"}`);
@@ -11045,7 +11045,7 @@ var STATE_ICONS = {
   merged_unreviewed: "\uD83D\uDEA8"
 };
 function collectInboxPrRows(repo, me, opts) {
-  const { sweepEnabled, staleHours, maxReworks } = opts;
+  const { sweepEnabled, staleHours, maxReworks, readOnly = false } = opts;
   let escalatedIssues = null;
   const parentIsEscalated = (issueNumbers) => {
     escalatedIssues ??= new Set(ghIssueListByLabel(repo, NEEDS_HUMAN_LABEL).map((i) => i.number));
@@ -11081,7 +11081,7 @@ function collectInboxPrRows(repo, me, opts) {
   const minePrs = ghPRListMine(repo);
   const scanned = minePrs.map((pr) => {
     const { count: unresolvedThreads, degraded } = safeUnresolvedThreadCount(() => ghReviewThreads(repo, pr.number));
-    const intentBlocked = inboxIntentBlocked(repo, pr);
+    const intentBlocked = inboxIntentBlocked(repo, pr, readOnly);
     const gateClearedAt = gateClearanceReadFor(pr.number, intentBlocked, (n) => ghIntentGateLastClearedAt(repo, n));
     const lastHeadAt = headClockReadFor(pr, me, (n) => ghPRLastHeadAt(repo, n));
     const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks, gateClearedAt, headSha: pr.headRefOid, lastHeadAt });
@@ -11090,7 +11090,7 @@ function collectInboxPrRows(repo, me, opts) {
   if (sweepEnabled) {
     try {
       for (const entry of foreignConflictedPRs(minePrs, ghPRListAll(repo), me, { enabled: true })) {
-        const foreignGated = inboxIntentBlocked(repo, entry.pr);
+        const foreignGated = inboxIntentBlocked(repo, entry.pr, readOnly);
         const gateClearedAt = gateClearanceReadFor(entry.pr.number, foreignGated, (n) => ghIntentGateLastClearedAt(repo, n));
         const cl = classifyPR(entry.pr, me, { staleHours, intentBlocked: foreignGated, maxReworks, gateClearedAt, headSha: entry.pr.headRefOid });
         scanned.push({ pr: entry.pr, row: foreignPrRow(entry, cl) });
@@ -11417,7 +11417,7 @@ function registerLoopCommand(program2) {
       pickupScope,
       intentGate: resolveIntentGateMode()
     };
-    const { scanned, collections, degradedInputs } = collectInboxPrRows(repo, me, { sweepEnabled, staleHours, maxReworks });
+    const { scanned, collections: prCollections, degradedInputs } = collectInboxPrRows(repo, me, { sweepEnabled, staleHours, maxReworks, readOnly: true });
     const prs = scanned.map(({ pr, row }) => {
       let extra = {};
       if (row.state === "approved_ready") {
@@ -11447,12 +11447,16 @@ function registerLoopCommand(program2) {
     }
     const open = ghIssueListWithAssociations(repo, 200, assignee);
     let claimed = new Set;
+    let claimsStatus = "available";
     try {
       const claims = await ctx.client.listClaims(ctx.creds.org, ctx.project.projectId);
       claimed = new Set(claims.filter((c) => c.repo === repo).map((c) => c.issueNumber));
     } catch {
+      claimsStatus = "unavailable";
+      degradedInputs.push("claims-api");
       console.warn("⚠️ claims API unreachable — treating issues as unclaimed for the plan (read-only; nothing claimed).");
     }
+    const collections = { ...prCollections, claims: claimsStatus };
     const sliceMergedParents = ghMergedPartOfParents(repo);
     const { reconcile, admit, deferred } = buildLoopPlan({
       policies,
