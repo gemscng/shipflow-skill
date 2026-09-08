@@ -47,7 +47,7 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    at least two distinct complete choices, each with its consequence.
    Process: `--category`
    (`money-write`, `prod-config`, `security`, `missing-secret`,
-   `external-dependency`, `invalid`); `--owner <login>` when the issue
+   `external-dependency`, `invalid`, `design`); `--owner <login>` when the issue
    names someone, else the CLI resolves `signoff-owner` → issue author.
    Re-escalating: `--update` edits the 🚧 comment in place; shrink to what
    remains open, mark settled "resolved by #N". One live escalation per
@@ -114,6 +114,50 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    blocker: no worker until the audience is pinned — a guessed access boundary
    leaks data (intake counterpart of the automerge interpretation gate,
    `loop-worker.md` §5d). Brief only after confirmation (or `loop-proceed`).
+4c. **Design-bearing issues need an APPROVED DESIGN — don't admit without
+   one.** Design-bearing = the reporter would want to see it before it is
+   built: a new page, screen, dialog, component or empty state; a layout,
+   navigation or visual change; a new user-facing flow or interaction;
+   user-visible copy beyond a fix. NOT design-bearing: restoring existing
+   behaviour, backend/API/data work with no visible surface, tests,
+   refactors, a typo. When in doubt, it is design-bearing.
+   - **Propose, then stop.** Write the design proposal and escalate it —
+     `issue escalate <n> --category design --reason-file <path>` — in the
+     🚧 shape (`message-style.md` § Design proposal). Action-needed
+     (≤ 10 non-blank lines, so no fence) carries the ask, the
+     **structure** as an ASCII wireframe (≤ 4 rows: boxes, labels, order
+     — readable in GitHub, no image required) and the decision table,
+     one row per reply — `approve` (the drawn option, recommended), **one
+     alternative** with its tradeoff, `change` — each with an If chosen
+     cell. A `### Design notes`
+     section (it folds) carries the **states** (empty · loading · error
+     · success), **where it lives** (route, nav entry, trigger) and the
+     style source: the repo's `DESIGN.md` (or design-system doc) binds
+     tokens, type and spacing — cite it; no doc → name the existing
+     screen that sets the style. A rendered mock helps when cheap: write
+     a static HTML page, screenshot it with the ShipFlow browser, attach
+     with `issue evidence <n> --image <shot.png> --image-caption "design
+     proposal A"` — supplementary, never a substitute for the wireframe.
+     Decisions: `1: approve → loop builds A as drawn` · `1: B → loop
+     builds B` · `1: change → reply with what changes; loop re-proposes`.
+     Then `issue judge <n> --state waiting --decide "1: approve → loop
+     builds A" --decide "1: change → loop re-proposes"`.
+   - **Unconfirmed = blocker.** No worker until the reporter picks; the
+     issue parks under `needs-human` like 4b. A `change` reply →
+     re-propose with `--update` (one live proposal; History folds the
+     old). Return `verdict: "reject"` with the escalation, no brief.
+   - **Approved = the spec.** On the re-pick (step 0: answered decisions
+     are settled), the brief carries an **Approved design** section:
+     the wireframe of the chosen option verbatim, the states, the
+     placement, and every `change` the reporter asked for — acceptance
+     criteria, not background. The worker builds exactly that
+     (`loop-worker.md` §5c); the PR reviewer compares the after-shots to
+     it (`loop-reviewer.md` § Design discipline).
+   - `loop-proceed` / "just build it" = approve the **recommended**
+     option; record `design: approved by proceed — option A` in the
+     brief. A design the reporter drew in the issue body (mockup,
+     screenshot, wireframe) is already approved — brief it, don't
+     re-propose.
 5. **Unknowns & assumptions (blind-spot pass) — mandatory section.** Every
    open ambiguity + the assumption chosen; flag those that would change the
    architecture. A listed assumption costs one veto reply; a silent one is

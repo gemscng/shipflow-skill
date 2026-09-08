@@ -170,6 +170,38 @@ Example contents of reason.md (the Markdown fence is not part of the file):
 The repository check cannot finish without the App installation.
 ```
 
+#### Design proposal — the `design` escalation
+
+A design-bearing issue is escalated BEFORE it is built
+(`loop-reviewer-intake.md` 4c). Same 🚧 shape, category `design`;
+Action-needed IS the proposal: the ask, a fenced ASCII wireframe of ≤ 4
+rows, and the decision table (one row per reply: approve · the alternative
+· change) — every non-blank line counts toward the 10-line cap, so no
+fence around the wireframe. States, placement and the style source
+go in a `### Design notes` section, which folds with the rest. Reply
+grammar is the usual `N: answer`:
+
+```text
+### Action needed
+Pick the layout for the collection share card.
+    +-----------------------------------+
+    | [avatar] Name           [Share ▾] |
+    | 12 cards · est. $1,240   (PnL ▢)  |
+    | [card][card][card][card]   +8     |
+| # | Decision | Recommendation | If chosen |
+|---|---|---|---|
+| 1 | approve — A, PnL toggle on the card (drawn) | yes: one tap, visible | loop builds A |
+| 1 | B — PnL toggle inside the Share menu | | loop builds B |
+| 1 | change — say what changes | | loop re-proposes |
+
+### Design notes
+States: empty (no cards → "Add your first card"), loading (skeleton row), error (retry link).
+Lives at /collections/:id, Share button in the header. Tokens and type per DESIGN.md.
+
+### Why it's blocked
+Taste and product fit are the reporter's call; a rebuilt card costs a full rework.
+```
+
 **One live 🚧 per issue**: a second plain escalation while the
 label is on is refused — use `--update` (edits in place) or `--force` to
 stack deliberately; the escalate-once path is exempt.

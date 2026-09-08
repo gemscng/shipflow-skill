@@ -3709,7 +3709,8 @@ var init_escalation_format = __esm(() => {
     security: "This touches a security- or trust-critical surface (authn/authz, secrets, injection-prone " + "parsing) where a mistake is exploitable and autonomous validation can't establish safety.",
     "missing-secret": "The work is blocked on a credential, secret, or account only a human can provision. Nothing " + "is wrong with the code — the loop lacks access it cannot grant itself. Production data access " + "is never the remedy: the loop works against a local DB, and a prod write is the operator's step.",
     "external-dependency": "Blocked on an external system or third party (vendor approval, DNS, a service outside this " + "repo) that the loop cannot drive.",
-    invalid: "The issue looks invalid, duplicate, or out of scope; closing someone's issue is a judgment " + "call the loop leaves to a human."
+    invalid: "The issue looks invalid, duplicate, or out of scope; closing someone's issue is a judgment " + "call the loop leaves to a human.",
+    design: "This changes what people see or how they interact (a new screen, layout, visual, or flow), and " + "taste and product fit are the reporter's call. A design built first and rejected later costs a " + "full rework, so the loop proposes the design here and builds only the option approved."
   };
   ACTION_LINE_WORD_LIMIT = SHIPFLOW_CONTRACT.readability.visibleLineWordCap;
   DECISION_LOOSE_LINE = /^\s*(\d+)(?:[.)]\s+|\s+[-–]\s+)(\S.*)$/;

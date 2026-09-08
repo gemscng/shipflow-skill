@@ -298,7 +298,7 @@ loop-authored PR goes through `renaiss-shipflow pr note <n> --body …
     then remove `needs-human` yourself (`gh issue edit <n> --remove-label
     needs-human`) and let B re-pick it. This is the ONE case the loop clears
     its own escalation: the fact is objective and the probe is in the
-    comment. Never for `money-write`, `prod-config`, `security`, `invalid`,
+    comment. Never for `money-write`, `prod-config`, `security`, `invalid`, `design`,
     or a priority sign-off — those wait for the human.
   - a decision row the loop can now answer from evidence (a #-cited comment
     says prod moved; the measurement is stale; the duplicate it named was
@@ -539,7 +539,11 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    doc present escalates; **no doc + assigned issue proceeds** — the
    assignment is the sign-off, `loop-reviewer-intake.md` step 1b), validates, maps to
    features, returns an **acceptance brief** (what "done" means + features
-   to regression-check). **Close verdict** → follow `loop-close.md`: read the
+   to regression-check). **Design-bearing issue → the reporter approves the
+   design first** (`loop-reviewer-intake.md` 4c): the reviewer posts a
+   wireframe proposal as a `--category design` escalation and returns
+   `reject`; the issue parks until the `N: answer` reply, then re-intakes
+   with the approved option as the brief's spec. **Close verdict** → follow `loop-close.md`: read the
    decision file locally and directly invoke `issue close <n> --decision-file
    <path> --agent <own-claim-agent> --json`. Finish setup writes before its reviewed
    snapshot; skip normal brief publication/Judge edits/claim refresh on this

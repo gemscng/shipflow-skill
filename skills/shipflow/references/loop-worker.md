@@ -146,10 +146,22 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    reviewer re-runs every such probe (`loop-reviewer.md` §1); a correction
    that only lives in your head lets the same wrong claim reach the next
    worker. Count them in the return (`intakeCorrections`).
-5c. **UI work: mock first.** For `category:ui` issues (or any change whose
-   acceptance depends on how it LOOKS), slice 1 is a static mock — HTML page
-   or screenshot with fake data — attached as evidence for reaction before
-   behavior is wired.
+5c. **The approved design is the spec — build it, don't redesign it.** A
+   design-bearing issue reaches you only after the reporter approved a
+   proposal at intake (`loop-reviewer-intake.md` 4c); the brief's
+   **Approved design** section is the acceptance criterion: same
+   structure, states and placement as drawn, tokens per the repo's
+   `DESIGN.md`. Your after-screenshots must match it. The code forces a
+   deviation (a component that cannot do X, a route that already exists)?
+   Take the smallest deviation, log it under **Deviations from brief**
+   (5b) — a design deviation is always a reporter-gate row, never silent.
+   No Approved design in the brief but the change turns out to be
+   design-bearing (a new screen, layout, flow or visual the reporter has
+   not seen)? Stop before building it: `renaiss-shipflow issue escalate <n>
+   --category design --reason-file <proposal.md>` with the wireframe and
+   two choices, return `blocked` — never ship an unapproved design behind
+   `Closes #N`. Static-mock-first still applies inside the approved
+   design: wire the mock, then the behaviour.
 5d. **Access-control ambiguity is a `security` escalation — don't guess, never
    ship a silent reinterpretation.** Unclear WHO SEES WHAT (permissions,
    roles, tenant/visibility scope, auth gating)? Never proceed-with-a-note —
@@ -270,6 +282,9 @@ hit a wall):
 - [ ] Tests pass + E2E browser check genuinely verified the fix (screenshots
       Read) — UI/behaviour changes.
 - [ ] Regression test written, passing, committed (or noted why skipped).
+- [ ] Design-bearing change: after-shots match the brief's **Approved
+      design**, or the deviation is a row in Deviations from brief; no
+      approved design → escalated `--category design`, not built.
 - [ ] Stayed inside the feature's paths (or neighbour touch flagged); no
       neighbour health score dropped.
 - [ ] PR opened — `Closes #N` (full fix) or `--partial` → `Part of #N` (slice)

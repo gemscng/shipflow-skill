@@ -45,6 +45,15 @@ flags (e.g. a truncated file).
 spec. A **"no linked issue/brief found"** warning is itself a finding — flag
 it; never substitute "what the diff seems to intend" for the spec.
 
+**Design discipline:** when the brief carries an **Approved design**
+(`loop-reviewer-intake.md` 4c), the PR's after-screenshots are judged
+against it — structure, states, placement, tokens. A mismatch is
+`request_changes` naming the element that differs; a mismatch logged as a
+Deviations row is a reporter-gate row (5b), not an approval. A
+design-bearing diff (new screen, layout, flow, visual) with NO approved
+design in the brief is `request_changes`: the reporter has not seen it,
+and "looks fine to me" is not their approval.
+
 **Degradation discipline: a gate that could not RUN blocks approve.** The
 packet marks every input it failed to obtain, in its own body:
 
@@ -395,6 +404,8 @@ Never return `approve` unless all hold:
       post-push zero is not settled; wait for the 120s window or a later tick.
 - [ ] Brief met; CI green (or none required); no un-flagged cross-feature
       regression risk.
+- [ ] Approved design (if any) matched by the after-shots; a design-bearing
+      diff without one is `request_changes`.
 - [ ] Health delta not negative (or explained + accepted).
 - [ ] Regression test added for the fixed bug (or skip justified: pure-CSS /
       no test framework).
