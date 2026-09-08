@@ -492,6 +492,14 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
        removal → re-arm (pre-approval edits untouched). `lastEditedAt` =
        body only; a retitle is a `RenamedTitleEvent`, and on a thin-bodied
        issue the title IS the spec (PR #450 round 6).
+     - **Chat reports by a maintainer are not gated:** a Slack/Discord
+       report is filed by the App, so its association reads `NONE`. When
+       the linked reporter holds write/maintain/admin on the repo the
+       server posts an App-authored `shipflow:intake-trusted
+       reporter=<login> permission=<p>` record at filing; `issue next`
+       reads it (anchored, App-authored only) BEFORE arming and skips the
+       gate. It never releases an armed gate. No linked identity or a
+       weaker permission → gated as before.
      - **Trust set wider than approval permission:** `COLLABORATOR`
        includes read-only invitees → their own issues admitted ungated.
        Deliberate (mirrors `pr-state.ts` / `trustedAuthorAssociations`);
