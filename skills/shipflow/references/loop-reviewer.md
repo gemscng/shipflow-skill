@@ -410,9 +410,10 @@ cheap.
 
 ## Return (compact)
 ```json
-{ "target": "issue:42" | "pr:87", "verdict": "approve" | "request_changes" | "reject",
+{ "target": "issue:42" | "pr:87", "verdict": "approve" | "request_changes" | "reject" | "close",
   "featuresImpacted": ["auth", "billing"],
   "brief": "intake mode: acceptance criteria + regression-check features",
+  "decisionFile": "close verdict only: snapshot-bound JSON per loop-close.md",
   "findings": ["one line per required change"] }
 ```
 

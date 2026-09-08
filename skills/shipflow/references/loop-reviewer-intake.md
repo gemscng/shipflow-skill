@@ -30,6 +30,14 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    spec/design doc; a hard dependency on an unmerged issue; a genuine
    duplicate/invalid issue. Otherwise proceed.
 
+   **Zero remaining slice:** before rejecting only as already shipped or a
+   duplicate, consider the guarded `close` verdict in `loop-close.md`. It requires
+   via-shipflow provenance, typed verified citation, complete snapshot-bound
+   scope attestation and no live human/reporter gate. Preserve every extant
+   needs-human gate; invalid category does not establish closure-only purpose.
+   Human-filed targets still escalate. Follow its snapshot-preserving handoff;
+   never publish a normal worker brief between the final snapshot and close.
+
    **The escalate reason IS the comment a human reads — act-on-able,
    not a wall of text.** Shape is `lintEscalationReason`
    (`apps/renaissshipflow-cli/src/escalation-format.ts`) — fix a rejected
@@ -145,7 +153,7 @@ Input: issue + `triage`. Produce an **acceptance brief**:
 
 Intake returns the same compact shape as the PR gate — see `loop-reviewer.md`
 § "Return (compact)" (`target: "issue:<n>"`, `verdict`, `featuresImpacted`,
-`brief`). Triage unavailable (`⚠️ triage unavailable — ShipFlow context and
+`brief`; close additionally returns `decisionFile` per `loop-close.md`). Triage unavailable (`⚠️ triage unavailable — ShipFlow context and
 relatedFiles NOT loaded`) blocks like any un-run gate — rule and marker table
 in `loop-reviewer.md` § "Degradation discipline". Message style for every
 GitHub write: `message-style.md`.

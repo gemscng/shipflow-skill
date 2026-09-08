@@ -2296,6 +2296,19 @@ class ShipFlowClient {
       throw e;
     }
   }
+  async currentClaimActor(org) {
+    const value = await this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/members/me`);
+    if (value?.status !== "active" || typeof value.githubLogin !== "string" || !value.githubLogin.trim()) {
+      throw new Error("Active ShipFlow membership identity is unavailable");
+    }
+    return value.githubLogin;
+  }
+  async closeClaims(org, projectId) {
+    const value = await this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/claims`);
+    if (!Array.isArray(value?.claims))
+      throw new Error("Claim collection is unavailable");
+    return value.claims;
+  }
   async listClaims(org, projectId) {
     const res = await this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/claims`);
     return res?.claims ?? [];
@@ -2467,7 +2480,8 @@ var init_shipflow_contract_data = __esm(() => {
         "severity:low": "c2e0c6",
         "via-shipflow": "0e7490",
         "auto-harvested": "d876e3",
-        "⏳ waiting-on": "fbca04"
+        "⏳ waiting-on": "fbca04",
+        "loop-closed": "6f42c1"
       },
       prefixColors: {
         "category:": "5319e7",
@@ -2483,7 +2497,8 @@ var init_shipflow_contract_data = __esm(() => {
         verifyFailed: "verify-failed",
         viaShipflow: "via-shipflow",
         autoHarvested: "auto-harvested",
-        waitingOn: "⏳ waiting-on"
+        waitingOn: "⏳ waiting-on",
+        loopClosed: "loop-closed"
       }
     },
     markers: {
@@ -2512,7 +2527,9 @@ var init_shipflow_contract_data = __esm(() => {
       judgeEnd: "<!-- shipflow:judge-end -->",
       intake: "<!-- shipflow:intake -->",
       by: "<!-- shipflow:by",
-      provenanceFooter: "\uD83E\uDD16 ShipFlow"
+      provenanceFooter: "\uD83E\uDD16 ShipFlow",
+      loopClose: "<!-- shipflow:loop-close",
+      loopCloseRecord: "<!-- shipflow:loop-close-record"
     },
     intentGate: {
       $comment: "The release rule for the #190 intent gate (`needs-reporter-review`), single-sourced so the server's matcher, the CLI's ping comment and the skill docs cannot drift (issue #411 — the doc promised a rule the code did not implement). POLARITY: the label is a merge blocker held until a human CONFIRMS, so this is an AUTHORIZATION control, not a sentiment classifier. THE RULE: the quote-stripped body must reduce to EXACTLY ONE meaningful line — blank lines and pure-decoration lines (a `---` rule) are scaffolding, but a fenced block and everything in it COUNT as content — and that line, with leading/trailing markdown decoration and punctuation trimmed, must EQUAL one of `confirmationTokens` (case-insensitive, emoji skin-tone/variation modifiers normalised away). Nothing else clears the gate: the token is the WHOLE reply, or it does not confirm. WHY THE WHOLE BODY (PR #441, third review pass): whole-line equality judged `block[0]` and ignored everything after it, so a bare token on line 1 confirmed whatever followed. Measured through the real handler, all of `Confirmed`+`But scope it to the CLI only`, `\uD83D\uDC4D`+`not this implementation though`, `yes`+`Actually no, revert it`, `LGTM`+`hold the merge, this is wrong`, `confirmed`+`- but only the CLI half` CLEARED, and so did the blank-line forms `confirmed`+`Actually no, revert it` and `Yes`+`Actually no, revert it`. Every one is #411's exact harm: a merge on a reading the reporter had just narrowed. A SINGLE newline was enough, and that settles the scoping question — the rule ALREADY refuses extra words on the token's own line (`Confirmed — ship it` is armed), so accepting arbitrary text one newline later is incoherent: the same act, the same ambiguity, the opposite answer. Drawing the boundary at the line or at the paragraph only moves the hole down; this defect has now appeared at three granularities. Requiring the whole body is NOT the denylist the veto list was — it never inspects what follows, it refuses when anything follows. THE PRICE: `confirmed` plus a thank-you parks too. Accepted — commentary goes in a separate comment, costing one extra reply, never a wrong merge. A pasted fenced block counts as content here (unlike in the `N: answer` block parser, which skips fences whole so a fence's inner line can never be promoted to the judged line): `/confirm` over a fenced `no` was measured clearing, and a token with an attachment is not a token alone. WHY AN EXACT TOKEN AND NOT A GRAMMAR (PR #441, second review pass): the previous design matched an affirmative OPENING WORD and then vetoed a list of negations and contrastives found later in the paragraph. That is a denylist of known shapes guarding an unbounded set of free-form natural language — the exact anti-pattern this issue exists to close, re-earned inside its own fix. Negation-after-affirmative has no finite enumeration: `Confirmed the bug still repros`, `Yes, change the copy first` and `ok 1 - test passed` all survived a 27-word veto list, and each one FAILED OPEN — it merged a reading nobody confirmed. An exact token has the correct failure polarity for EVERY input, not merely for the inputs somebody remembered to enumerate: anything that is not the token leaves the gate armed, which one more reply fixes. Tokens must be unambiguous ALONE, as a whole line — that is what excludes `ok`, `sure`, `agreed`, `correct` and every bare imperative (`ship`, `merge`, `approve`, `proceed`), which read as consent or as an instruction depending on the sentence they open. The `N: answer` reply protocol also releases the gate, but it is held to the SAME stands-alone invariant as the token path (PR #441, fourth review pass): the decision block must BE the whole quote-stripped reply (no meaningful line outside it, a pasted fence included), EVERY line of that block must itself be a decision line, EVERY answer must be a `confirmationTokens` entry, and an escalation banner must actually be outstanding on the thread. Both positional checks are load-bearing and neither alone suffices — measured by ablation, the length test alone leaves `1: yes` + NEWLINE + `Actually no, revert it` clearing (same paragraph, so the counts match) and the per-line test alone leaves `1: yes` + BLANK LINE + `revert it` clearing (a later paragraph the block never reached). Reading the answers had fixed WHAT the block said but not WHERE it stopped, so this door stayed fail-OPEN at both granularities after the token path had closed both — and the escalation-outstanding guard does not mitigate it, because answering `N:` is exactly what a reporter does on an escalated thread — a content-agnostic `^\\\\d+:` match let `1: no, redo it` clear the blocker it was rejecting, and a pasted stack-trace line `10: undefined is not a function` do it by accident. FAIL-STUCK IS THE PRICE, and it is paid deliberately in two places, BOTH of which must state that the token is the whole reply or a reporter cannot discover it: `releaseHint` is the exact sentence the CLI puts on the PR when it APPLIES the label, and the server posts a one-time `intentGateHint` nudge naming the tokens whenever a human reply misses — including when the commenter's `author_association` is untrusted, which was the one branch that failed stuck in silence. Both render the token list FROM `confirmationTokens`, never from a hand-written copy, so neither can drift from the matcher — preserve that. Removing the label by hand stays the human override. Do NOT re-add a free-text grammar here to make it friendlier — narrowing the openers is safe, widening them is how this control dies. AUDIT AUTHOR (issue #537): `auditAuthorSlug` is the GitHub App slug that posts the `intentGateCleared` audit comment — the ONE bot identity the CLI's `isIntentGateAuditComment` trusts. It exists because the reader had to move to REST to see botness at all: `gh issue view --json comments` is GraphQL, where a Bot's `login` carries NO `[bot]` suffix and a GitHub App's `authorAssociation` is `NONE`, so the `[bot]`-suffix test the CLI shipped could never fire and the #411 clearance path was dead from the day it landed (measured on PR #489, gh 2.95.0). REST's `user.type == \"Bot\"` restores the signal — but botness ALONE is not identity: `gemini-code-assist[bot]` and `chatgpt-codex-connector[bot]` are also `type: Bot` and comment on these very PRs, so trusting any bot would trade a dead control for a forgeable one. The CLI therefore requires `user.type == \"Bot\"` AND the login, normalised (trailing `[bot]` stripped, case-folded), to EQUAL this slug. It is a ONE-ENTRY ALLOWLIST on purpose: this is an authorization predicate on a merge gate, and the failure mode of a wrong entry must be fail-STUCK (one more reporter reply, or a hand removal of the label — the standing human override), never fail-OPEN. A self-hosted deployment that installs the App under a different slug edits THIS key — never a literal in the CLI, and never by widening the rule to \"any bot\". The `[bot]` suffix is stripped rather than required because the two APIs disagree about it; the suffix is a rendering detail of REST, not an identity. A PAT-backed machine user has `type: \"User\"` and keeps clearing through the OWNER/MEMBER/COLLABORATOR association branch, which this key does not touch.",
@@ -6880,6 +6897,424 @@ function issueRow(i) {
   ];
 }
 
+// src/issue-close.ts
+init_gh();
+init_config();
+init_shipflow_contract_data();
+import { readFileSync as readFileSync3 } from "node:fs";
+
+// src/issue-close-decision.ts
+init_shipflow_contract_data();
+init_pr_state();
+import { createHash as createHash2 } from "node:crypto";
+
+class CloseRefusal extends Error {
+  gate;
+  nextAction;
+  constructor(message, gate, nextAction = "review") {
+    super(message);
+    this.gate = gate;
+    this.nextAction = nextAction;
+  }
+}
+var closeHash = (value) => createHash2("sha256").update(value, "utf8").digest("hex");
+var issueSnapshot = (title, body) => closeHash(JSON.stringify({ title, body }));
+var decisionDigest = (decision) => closeHash(JSON.stringify(decision));
+var citationUrl = (citation) => `https://github.com/${citation.repo}/${citation.kind === "pr" ? "pull" : "issues"}/${citation.number}`;
+var desiredCloseReason = (d) => d.disposition === "shipped" ? "completed" : "not_planned";
+function object(value, keys, name) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new CloseRefusal(`${name} must be an object`, "decision");
+  const record = value;
+  if (Object.keys(record).some((k) => !keys.includes(k)) || keys.some((k) => !(k in record)))
+    throw new CloseRefusal(`${name} has missing or unsupported fields`, "decision");
+  return record;
+}
+function text(value, name) {
+  if (typeof value !== "string" || !value.trim())
+    throw new CloseRefusal(`${name} must be nonempty text`, "decision");
+  return value;
+}
+function validRepo(value) {
+  return typeof value === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value) && !value.split("/").some((p) => p === "." || p === "..");
+}
+function sameCloseRepo(left, right) {
+  return validRepo(left) && validRepo(right) && left.toLowerCase() === right.toLowerCase();
+}
+function matchesCloseUrl(value, repo, resource, number, commentId) {
+  if (typeof value !== "string" || !validRepo(repo) || !validNumber(number) || commentId !== undefined && !validNumber(commentId))
+    return false;
+  const parts = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(\/.*)$/.exec(value);
+  return parts !== null && parts[0] === value && sameCloseRepo(parts[1], repo) && parts[2] === `/${resource}/${number}${commentId === undefined ? "" : `#issuecomment-${commentId}`}`;
+}
+function validNumber(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+function validInstant(value) {
+  return typeof value === "string" && /^\d{4}-\d\d-\d\dT.*Z$/.test(value) && Number.isFinite(Date.parse(value));
+}
+function parseCloseDecision(value) {
+  const d = object(value, ["version", "target", "disposition", "citation", "finding", "slice"], "decision");
+  if (d.version !== 1)
+    throw new CloseRefusal("Unsupported close decision version", "decision");
+  const target = object(d.target, ["repo", "number", "snapshotSha256", "updatedAt"], "target");
+  if (!validRepo(target.repo) || !validNumber(target.number) || typeof target.snapshotSha256 !== "string" || !/^[a-f0-9]{64}$/.test(target.snapshotSha256) || !validInstant(target.updatedAt))
+    throw new CloseRefusal("Invalid target identity or snapshot", "decision");
+  if (typeof d.disposition !== "string" || !["shipped", "duplicate", "superseded"].includes(d.disposition))
+    throw new CloseRefusal("Invalid close disposition", "decision");
+  const citation = object(d.citation, ["kind", "repo", "number"], "citation");
+  if (!validRepo(citation.repo) || !validNumber(citation.number) || (typeof citation.kind !== "string" || !["pr", "issue"].includes(citation.kind)))
+    throw new CloseRefusal("A typed PR or issue citation is required", "citation");
+  if (d.disposition === "shipped" !== (citation.kind === "pr"))
+    throw new CloseRefusal("Disposition and citation kind do not match", "citation");
+  if (citation.repo.toLowerCase() === target.repo.toLowerCase() && citation.number === target.number)
+    throw new CloseRefusal("An issue cannot cite itself as closure evidence", "citation");
+  const slice = object(d.slice, ["remaining", "assessment", "coverage"], "slice");
+  if (!Array.isArray(slice.remaining) || slice.remaining.length !== 0)
+    throw new CloseRefusal("Any remaining slice must proceed to implementation, not close", "slice", "proceed");
+  if (!Array.isArray(slice.coverage) || slice.coverage.length === 0)
+    throw new CloseRefusal("Complete scope coverage is required for the zero-slice attestation", "slice");
+  const coverage = slice.coverage.map((row) => {
+    const item = object(row, ["requirement", "evidence"], "scope coverage");
+    return { requirement: text(item.requirement, "requirement"), evidence: text(item.evidence, "scope evidence") };
+  });
+  return { version: 1, target: { repo: target.repo, number: target.number, snapshotSha256: target.snapshotSha256, updatedAt: target.updatedAt }, disposition: d.disposition, citation: { kind: citation.kind, repo: citation.repo, number: citation.number }, finding: text(d.finding, "finding"), slice: { remaining: [], assessment: text(slice.assessment, "scope assessment"), coverage } };
+}
+function trustedCloseAuthor(c, slug) {
+  return TRUSTED_AUTHOR_ASSOCIATIONS.has(c.authorAssociation.trim().toUpperCase()) || c.authorIsBot === true && normalizeBotLogin(c.authorLogin) !== "" && normalizeBotLogin(c.authorLogin) === normalizeBotLogin(slug);
+}
+var plain = (s) => s.replace(/[\r\n]+/g, " ").replace(/[&<>`*_[\]\\]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] ?? `\\${c}`);
+function renderCloseAudit(record) {
+  const d = record.decision;
+  const reason = desiredCloseReason(d) === "completed" ? "completed" : "not planned";
+  const stages = Object.entries(record.completed).map(([key, done]) => `${key}: ${done ? "verified" : "owed"}`).join(" · ");
+  return [
+    `Closing #${d.target.number} as ${d.disposition}: ${plain(d.finding)}`,
+    `Evidence verified: ${record.citation.url}${record.citation.mergedAt ? ` — merged at ${record.citation.mergedAt}` : " — issue exists"}.`,
+    `Reviewer attestation: no remaining slice. ${plain(d.slice.assessment)}`,
+    ...d.slice.coverage.map((c) => `- ${plain(c.requirement)} — ${plain(c.evidence)}`),
+    `Target snapshot: ${d.target.snapshotSha256}. Reviewed updatedAt: ${d.target.updatedAt}.`,
+    `Executor: @${record.executor}. Agent: ${plain(record.agent)}. Reason: ${reason}.`,
+    `Stages: ${stages}.`,
+    "Reopen the issue to undo closure. This audit remains; the loop will not automatically reclose an open issue carrying it.",
+    `${SHIPFLOW_CONTRACT.markers.loopCloseRecord} data=${Buffer.from(JSON.stringify(record), "utf8").toString("base64url")} -->`,
+    SHIPFLOW_CONTRACT.markers.loop,
+    `${SHIPFLOW_CONTRACT.markers.loopClose} v=1 decision=${decisionDigest(d)} -->`
+  ].join(`
+
+`);
+}
+function parseCloseAudit(comment, slug) {
+  if (!trustedCloseAuthor(comment, slug))
+    return null;
+  const body = comment.body.replace(/\n+$/, "");
+  const last = body.split(`
+`).at(-1) ?? "";
+  const prefix = SHIPFLOW_CONTRACT.markers.loopClose;
+  const match = last.match(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} v=1 decision=([a-f0-9]{64}) -->$`));
+  if (!match)
+    return null;
+  const recordPrefix = `${SHIPFLOW_CONTRACT.markers.loopCloseRecord} data=`;
+  const lines = body.split(`
+`).filter((l) => l.startsWith(recordPrefix) && l.endsWith(" -->"));
+  if (lines.length !== 1)
+    return null;
+  try {
+    const encoded = lines[0].slice(recordPrefix.length, -4);
+    if (!/^[A-Za-z0-9_-]+$/.test(encoded))
+      return null;
+    const bytes = Buffer.from(encoded, "base64url");
+    if (bytes.toString("base64url") !== encoded)
+      return null;
+    const raw = object(JSON.parse(bytes.toString("utf8")), ["version", "decision", "citation", "executor", "agent", "createdAt", "completed"], "audit record");
+    const decision = parseCloseDecision(raw.decision);
+    const completed = object(raw.completed, ["closed", "labels", "claim"], "audit stages");
+    if (raw.version !== 1 || !validInstant(raw.createdAt) || typeof raw.executor !== "string" || raw.executor.toLowerCase() !== comment.authorLogin.toLowerCase() || !raw.executor || typeof raw.agent !== "string" || !raw.agent.trim() || Object.values(completed).some((v) => typeof v !== "boolean") || completed.labels && !completed.closed || completed.claim && !completed.labels)
+      return null;
+    const citation = object(raw.citation, ["kind", "repo", "number", "url", "mergedAt"], "verified citation");
+    if (citation.kind !== decision.citation.kind || !sameCloseRepo(citation.repo, decision.citation.repo) || citation.number !== decision.citation.number || !matchesCloseUrl(citation.url, decision.citation.repo, decision.citation.kind === "pr" ? "pull" : "issues", decision.citation.number) || (citation.kind === "pr" ? !validInstant(citation.mergedAt) : citation.mergedAt !== null))
+      return null;
+    const record = { version: 1, decision, citation, executor: raw.executor, agent: raw.agent, createdAt: raw.createdAt, completed };
+    return decisionDigest(decision) === match[1] && renderCloseAudit(record) === body ? record : null;
+  } catch {
+    return null;
+  }
+}
+
+// src/gh-issue-close.ts
+init_sh();
+init_provenance();
+init_shipflow_contract_data();
+function hasCloseLabel(labels, name) {
+  return labels.some((label) => label.toLowerCase() === name.toLowerCase());
+}
+function api(path, method = "GET", body, paginate = false) {
+  const raw = _exec(`gh api ${shellQuote(path)} --method ${method}${paginate ? " --paginate --slurp" : ""}${body === undefined ? "" : " --input -"}`, body === undefined ? {} : { input: JSON.stringify(body) }).toString();
+  return raw.trim() ? JSON.parse(raw) : null;
+}
+function record(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v))
+    throw new Error("GitHub returned a malformed close response");
+  return v;
+}
+function issueIdentity(v, repo, n) {
+  const row = record(v);
+  if (row.number !== n || !matchesCloseUrl(row.html_url, repo, "issues", n) || "pull_request" in row)
+    throw new Error("GitHub issue identity or kind did not match");
+  return row;
+}
+function readCloseIssue(repo, n) {
+  const row = issueIdentity(api(`repos/${repo}/issues/${n}`), repo, n);
+  if (typeof row.title !== "string" || !row.title.trim() || !(typeof row.body === "string" || row.body === null) || !validInstant(row.updated_at) || (typeof row.state !== "string" || !["open", "closed"].includes(row.state)) || !(row.state_reason === null || typeof row.state_reason === "string") || !Array.isArray(row.labels))
+    throw new Error("GitHub returned incomplete issue state");
+  const labels = row.labels.map((v) => {
+    const l = record(v);
+    if (typeof l.name !== "string" || !l.name)
+      throw new Error("GitHub returned malformed labels");
+    return l.name;
+  });
+  return { number: n, title: row.title, body: row.body ?? "", updatedAt: row.updated_at, state: row.state, stateReason: row.state_reason, labels };
+}
+function readCloseCitation(c) {
+  const row = c.kind === "issue" ? issueIdentity(api(`repos/${c.repo}/issues/${c.number}`), c.repo, c.number) : record(api(`repos/${c.repo}/pulls/${c.number}`));
+  if (row.number !== c.number || !matchesCloseUrl(row.html_url, c.repo, c.kind === "pr" ? "pull" : "issues", c.number) || (typeof row.state !== "string" || !["open", "closed"].includes(row.state)))
+    throw new Error("GitHub citation identity or state did not match");
+  if (c.kind === "pr" && (row.state !== "closed" || !validInstant(row.merged_at)))
+    throw new CloseRefusal("Closure citation must be an actually merged PR", "citation");
+  return { ...c, url: citationUrl(c), mergedAt: c.kind === "pr" ? row.merged_at : null };
+}
+function comment(v, repo, n) {
+  const row = record(v);
+  const user = record(row.user);
+  if (!validNumber(row.id) || !matchesCloseUrl(row.html_url, repo, "issues", n, row.id) || typeof row.body !== "string" || typeof user.login !== "string" || !user.login || (typeof user.type !== "string" || !["User", "Bot", "Organization", "Mannequin"].includes(user.type)) || typeof row.author_association !== "string" || !validInstant(row.created_at))
+    throw new Error("GitHub returned an incomplete audit comment");
+  return { id: row.id, url: row.html_url, body: row.body, authorLogin: user.login, authorIsBot: user.type === "Bot", authorAssociation: row.author_association, createdAt: row.created_at };
+}
+function readCloseComments(repo, n) {
+  const pages = api(`repos/${repo}/issues/${n}/comments?per_page=100`, "GET", undefined, true);
+  if (!Array.isArray(pages) || !pages.length || pages.some((p) => !Array.isArray(p)))
+    throw new Error("GitHub audit comment pages are unavailable");
+  const rows = pages.flat().map((v) => comment(v, repo, n));
+  if (new Set(rows.map((c) => c.id)).size !== rows.length)
+    throw new Error("GitHub audit pagination repeated comments");
+  return rows;
+}
+function publishCloseAudit(repo, n, body, id) {
+  const path = id ? `repos/${repo}/issues/comments/${id}` : `repos/${repo}/issues/${n}/comments`;
+  const sent = comment(api(path, id ? "PATCH" : "POST", { body: stampProvenance(body) }), repo, n);
+  if (id && id !== sent.id)
+    throw new Error("GitHub edited a different audit comment");
+  return comment(api(`repos/${repo}/issues/comments/${sent.id}`), repo, n);
+}
+function closeIssueState(repo, n, reason) {
+  api(`repos/${repo}/issues/${n}`, "PATCH", { state: "closed", state_reason: reason });
+}
+function applyCloseLabels(repo, n, current) {
+  const name = SHIPFLOW_CONTRACT.labels.names.loopClosed;
+  const pages = api(`repos/${repo}/labels?per_page=100`, "GET", undefined, true);
+  if (!Array.isArray(pages) || !pages.length || pages.some((p) => !Array.isArray(p)))
+    throw new Error("GitHub label collection is unavailable");
+  const names = pages.flat().map((v) => {
+    const r = record(v);
+    if (typeof r.name !== "string")
+      throw new Error("Malformed repository label");
+    return r.name;
+  });
+  if (!hasCloseLabel(names, name))
+    api(`repos/${repo}/labels`, "POST", { name, color: SHIPFLOW_CONTRACT.labels.colors[name], description: "Closed by the guarded loop intake path" });
+  if (!hasCloseLabel(current, name))
+    api(`repos/${repo}/issues/${n}/labels`, "POST", { labels: [name] });
+  const inProgress = current.find((label) => label.toLowerCase() === SHIPFLOW_CONTRACT.labels.names.inProgress.toLowerCase());
+  if (inProgress)
+    api(`repos/${repo}/issues/${n}/labels/${encodeURIComponent(inProgress)}`, "DELETE");
+}
+
+// src/issue-close.ts
+async function closeFromDecision(ctx, repo, number, decisionFile, agent) {
+  const result = { number, repo, verdict: "close", status: "refused", closed: null, stateReason: null, gates: {}, citation: null, auditCommentUrl: null, writes: [], nextAction: "review", exitCode: 1 };
+  let observed;
+  const observe = () => {
+    observed = readCloseIssue(repo, number);
+    result.closed = observed.state === "closed";
+    result.stateReason = observed.stateReason;
+    return observed;
+  };
+  try {
+    if (!validRepo(repo) || !validNumber(number) || !agent.trim())
+      throw new CloseRefusal("Invalid close target or agent", "decision");
+    let raw;
+    try {
+      raw = JSON.parse(readFileSync3(decisionFile, "utf8"));
+    } catch {
+      throw new CloseRefusal("Close decision file must contain readable versioned JSON", "decision");
+    }
+    const d = parseCloseDecision(raw);
+    if (!sameCloseRepo(d.target.repo, repo) || d.target.number !== number)
+      throw new CloseRefusal("Decision target does not match this command", "decision");
+    result.citation = d.citation;
+    result.gates.slice = "attested";
+    const executor = ghCurrentLogin();
+    const actor = await ctx.client.currentClaimActor(ctx.creds.org);
+    if (!executor || executor.toLowerCase() !== actor.toLowerCase())
+      throw new CloseRefusal("GitHub and ShipFlow authenticated actors must match", "claim");
+    const slug = resolveIntentGateAuditAuthorSlug().slug;
+    const checkState = (target2, fresh2) => {
+      if (!hasCloseLabel(target2.labels, SHIPFLOW_CONTRACT.labels.names.viaShipflow))
+        throw new CloseRefusal("Target lacks via-shipflow provenance; use the human escalation path", "provenance", "escalate");
+      result.gates.provenance = "verified";
+      if (hasCloseLabel(target2.labels, SHIPFLOW_CONTRACT.labels.names.needsHuman) || target2.labels.some((l) => l.toLowerCase().startsWith("needs-reporter-")) || hasCloseLabel(target2.labels, SHIPFLOW_CONTRACT.labels.names.waitingOn))
+        throw new CloseRefusal("Resolve the existing human/reporter/dependency gate through its normal verified flow first", "human", "escalate");
+      result.gates.human = "clear";
+      if (issueSnapshot(target2.title, target2.body) !== d.target.snapshotSha256 || fresh2 && target2.updatedAt !== d.target.updatedAt)
+        throw new CloseRefusal("Issue snapshot changed; repeat the complete intake assessment and citation review", "freshness");
+      result.gates.freshness = fresh2 ? "verified" : "unchanged-content-resume";
+    };
+    const claim = async (allowAbsent) => {
+      const rows = await ctx.client.closeClaims(ctx.creds.org, ctx.project.projectId);
+      const now = Date.now();
+      for (const c of rows) {
+        if (!c || typeof c.repo !== "string" || !validNumber(c.issueNumber) || typeof c.actor !== "string" || !c.actor || !validInstant(c.claimedAt) || !validInstant(c.expiresAt) || c.agent !== undefined && typeof c.agent !== "string")
+          throw new Error("Claim collection contains malformed ownership evidence");
+      }
+      const active = rows.filter((c) => c.repo.toLowerCase() === repo.toLowerCase() && c.issueNumber === number && Date.parse(c.expiresAt) > now);
+      if (active.length > 1 || active.some((c) => c.actor.toLowerCase() !== actor.toLowerCase() || c.agent !== agent))
+        throw new CloseRefusal("Another actor or agent owns this issue claim; do not release it", "claim");
+      if (!active.length && !allowAbsent)
+        throw new CloseRefusal("A current own claim is required before closure effects", "claim");
+      result.gates.claim = active.length ? "own" : "released";
+      return active.length === 1;
+    };
+    const target = observe();
+    checkState(target, target.state === "open");
+    const verifiedCitation = readCloseCitation(d.citation);
+    result.citation = verifiedCitation;
+    result.gates.citation = "verified";
+    const comments = readCloseComments(repo, number);
+    const audits = comments.flatMap((c) => {
+      const record3 = parseCloseAudit(c, slug);
+      const marked = [SHIPFLOW_CONTRACT.markers.loopClose, SHIPFLOW_CONTRACT.markers.loopCloseRecord].some((marker) => c.body.includes(`${marker} `));
+      if (!record3 && trustedCloseAuthor(c, slug) && marked)
+        throw new CloseRefusal("Ambiguous prior closure audit; reconcile manually", "audit");
+      return record3 && sameCloseRepo(record3.decision.target.repo, repo) && record3.decision.target.number === number ? [{ comment: c, record: record3 }] : [];
+    });
+    if (target.state === "open" && audits.length)
+      throw new CloseRefusal("Prior closure audit on an open issue: honor reopen or reconcile the incomplete attempt manually", "audit");
+    let auditId;
+    let record2;
+    const resume = target.state === "closed";
+    if (resume) {
+      if (audits.length !== 1)
+        throw new CloseRefusal("Closed target needs one matching trustworthy audit ledger", "audit");
+      const a = audits[0];
+      if (decisionDigest(a.record.decision) !== decisionDigest(d) || !a.record.completed.closed || a.record.executor.toLowerCase() !== executor.toLowerCase() || a.record.agent !== agent || (a.record.citation.kind !== verifiedCitation.kind || !sameCloseRepo(a.record.citation.repo, verifiedCitation.repo) || a.record.citation.number !== verifiedCitation.number || a.record.citation.mergedAt !== verifiedCitation.mergedAt) || target.stateReason !== desiredCloseReason(d))
+        throw new CloseRefusal("Closed target has an inconsistent decision, executor, evidence or verified-close ledger", "audit");
+      record2 = a.record;
+      auditId = a.comment.id;
+      result.auditCommentUrl = a.comment.url;
+    } else
+      record2 = { version: 1, decision: d, citation: result.citation, executor, agent, createdAt: new Date().toISOString(), completed: { closed: false, labels: false, claim: false } };
+    await claim(resume);
+    const labelsDone = (t) => hasCloseLabel(t.labels, SHIPFLOW_CONTRACT.labels.names.loopClosed) && !hasCloseLabel(t.labels, SHIPFLOW_CONTRACT.labels.names.inProgress);
+    if (record2.completed.labels && !labelsDone(target))
+      throw new CloseRefusal("Recorded completed labels no longer match; reconcile manually", "audit", "reconcile");
+    if (record2.completed.claim && await claim(true))
+      throw new CloseRefusal("A new claim exists after the recorded release; reconcile manually", "claim");
+    const fresh = observe();
+    checkState(fresh, !resume);
+    if (fresh.state !== target.state || fresh.stateReason !== target.stateReason)
+      throw new CloseRefusal("Issue state changed during preflight", "freshness");
+    if (record2.completed.labels && !labelsDone(fresh))
+      throw new CloseRefusal("Recorded completed labels no longer match; reconcile manually", "audit", "reconcile");
+    if (resume && record2.completed.claim) {
+      result.status = "already-closed";
+      result.exitCode = 0;
+      result.nextAction = null;
+      return result;
+    }
+    const effect = async (stage, fn) => {
+      const receipt = { stage, outcome: "attempted" };
+      result.writes.push(receipt);
+      await fn();
+      receipt.outcome = "verified";
+    };
+    const saveAudit = async () => effect(auditId ? "audit-update" : "audit-create", () => {
+      const body = renderCloseAudit(record2);
+      const c = publishCloseAudit(repo, number, body, auditId);
+      const verified = parseCloseAudit(c, slug);
+      if (c.authorLogin.toLowerCase() !== executor.toLowerCase() || c.body !== body || !verified)
+        throw new Error("Closure audit publication could not be verified");
+      auditId = c.id;
+      result.auditCommentUrl = c.url;
+    });
+    if (!resume) {
+      await saveAudit();
+      const afterAudit = observe();
+      checkState(afterAudit, false);
+      if (afterAudit.state !== "open")
+        throw new Error("Issue changed state after audit publication");
+      await claim(false);
+      await effect("close", () => {
+        closeIssueState(repo, number, desiredCloseReason(d));
+        const t = observe();
+        if (t.state !== "closed" || t.stateReason !== desiredCloseReason(d))
+          throw new Error("Closed state and reason were not verified");
+      });
+      record2.completed.closed = true;
+      await saveAudit();
+    }
+    if (!record2.completed.labels) {
+      const beforeLabels = observe();
+      checkState(beforeLabels, false);
+      if (beforeLabels.state !== "closed" || beforeLabels.stateReason !== desiredCloseReason(d))
+        throw new Error("Issue reopened or changed reason before metadata completion");
+      await claim(resume);
+      await effect("labels", () => {
+        applyCloseLabels(repo, number, beforeLabels.labels);
+        const t = observe();
+        checkState(t, false);
+        if (t.state !== "closed" || !labelsDone(t))
+          throw new Error("Closure labels or state were not verified");
+      });
+      record2.completed.labels = true;
+      await saveAudit();
+    }
+    if (!record2.completed.claim) {
+      const beforeRelease = observe();
+      checkState(beforeRelease, false);
+      if (beforeRelease.state !== "closed" || beforeRelease.stateReason !== desiredCloseReason(d) || !labelsDone(beforeRelease))
+        throw new Error("Closure state changed before claim release");
+      if (await claim(true))
+        await effect("claim-release", async () => {
+          await ctx.client.signal(ctx.creds.org, ctx.project.projectId, "issues", number, "release-claim", { repo, reason: `Closed as ${d.disposition}; audit ${result.auditCommentUrl}` });
+          if (await claim(true))
+            throw new Error("Claim release was not verified");
+        });
+      record2.completed.claim = true;
+      await saveAudit();
+    }
+    result.status = resume ? "already-closed" : "closed";
+    result.exitCode = 0;
+    result.nextAction = null;
+  } catch (e) {
+    const partial = result.writes.length > 0;
+    result.status = partial ? "partial" : "refused";
+    result.exitCode = partial || !(e instanceof CloseRefusal) ? 10 : 1;
+    result.message = e instanceof Error ? e.message : String(e);
+    if (e instanceof CloseRefusal)
+      result.gates[e.gate] = "refused";
+    result.nextAction = partial ? "reconcile" : e instanceof CloseRefusal ? e.nextAction : "retry-read";
+    if (partial) {
+      try {
+        observe();
+      } catch {
+        result.closed = null;
+        result.stateReason = null;
+      }
+    }
+  }
+  return result;
+}
+
 // src/commands/issue.ts
 init_client();
 init_project();
@@ -6887,7 +7322,7 @@ init_gh();
 init_escalation_format();
 init_pr_state();
 import { hostname as hostname2 } from "node:os";
-import { readFileSync as readFileSync3, statSync } from "node:fs";
+import { readFileSync as readFileSync4, statSync } from "node:fs";
 import { basename as basename2 } from "node:path";
 
 // src/regex.ts
@@ -7821,7 +8256,7 @@ function registerIssueCommand(program2) {
           process.exit(1);
         }
       }
-      const files = shots.map((p) => ({ filename: basename2(p), data: new Uint8Array(readFileSync3(p)) }));
+      const files = shots.map((p) => ({ filename: basename2(p), data: new Uint8Array(readFileSync4(p)) }));
       let urls;
       try {
         ({ urls } = await ctx.client.uploadMedia(ctx.creds.org, ctx.project.projectId, files));
@@ -8053,6 +8488,16 @@ ${section}` : section;
     emit(opts, { issue: null, reason, ...healed.length ? { healed } : {} }, () => console.log(reason === "all_candidates_raced" ? `⏳ All ${raced} candidate(s) were claimed by other agents this tick — retry next tick.` : "✅ No actionable issues — every open issue is claimed or filtered out."), { pretty: true });
     process.exit(4);
   }));
+  issue.command("close <number>").description("Close an agent-filed issue only after a fresh, complete zero-slice review").requiredOption("--decision-file <path>", "Versioned review decision and exact target snapshot").option("--repo <fullname>", "Override target repo").option("--agent <name>", "Own claim agent (default: SHIPFLOW_AGENT or hostname)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+    const ctx = await loadCtx(program2);
+    const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    const result = await closeFromDecision(ctx, repo, /^[1-9][0-9]*$/.test(numberStr) ? number : Number.NaN, opts.decisionFile, opts.agent || process.env.SHIPFLOW_AGENT || hostname2());
+    if (result.message)
+      console.error(`Issue close ${result.status}: ${result.message}. Next: ${result.nextAction}.`);
+    emit(opts, result, () => console.log(`#${number}: ${result.status}; state=${result.closed === null ? "unknown" : result.closed ? "closed" : "open"}, reason=${result.stateReason ?? "unknown"}, audit=${result.auditCommentUrl ?? "none"}.`));
+    if (result.exitCode)
+      process.exit(result.exitCode);
+  }));
   issue.command("done <number>").description("Release an issue (signal only)").option("--reason <reason>", "Why you're releasing it (e.g. blocked, finished)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
@@ -8077,7 +8522,7 @@ ${section}` : section;
       console.error("--update cannot carry an escalate-once key: an escalate-once row gets exactly one escalation, ever, and it must arrive as a new comment a human is notified of (issue #488). Drop --update on an `escalateOnce` row.");
       process.exit(1);
     }
-    const reason = (opts.reasonFile !== undefined ? readFileSync3(opts.reasonFile === "-" ? 0 : opts.reasonFile, "utf8") : opts.reason ?? "").trim();
+    const reason = (opts.reasonFile !== undefined ? readFileSync4(opts.reasonFile === "-" ? 0 : opts.reasonFile, "utf8") : opts.reason ?? "").trim();
     if (!opts.force) {
       const problems = lintEscalationReason(reason);
       if (problems.length) {
@@ -8251,7 +8696,7 @@ ${block}`));
   issue.command("brief <number>").description("Post or refresh the ONE live loop comment on an issue (intake brief / 'Unknowns & assumptions'). A second run edits the same comment in place and folds the previous text under History — the thread never grows a second intake table (issue #969).").requiredOption("--body-file <path>", "Markdown body; '-' reads stdin").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
-    const brief = readFileSync3(opts.bodyFile === "-" ? 0 : opts.bodyFile, "utf8").trim();
+    const brief = readFileSync4(opts.bodyFile === "-" ? 0 : opts.bodyFile, "utf8").trim();
     if (!brief)
       throw new UsageError("--body-file is empty");
     const existing = findLatestIntakeComment(ghIssueComments(repo, number));
@@ -8321,7 +8766,7 @@ ${block}`));
     }
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
-    const toImg = (p) => ({ filename: basename2(p), data: new Uint8Array(readFileSync3(p)) });
+    const toImg = (p) => ({ filename: basename2(p), data: new Uint8Array(readFileSync4(p)) });
     const res = await ctx.client.attachEvidence(ctx.creds.org, ctx.project.projectId, number, {
       repo,
       pr: opts.pr ? parseInt(opts.pr, 10) : undefined,
@@ -8487,8 +8932,8 @@ init_helpers();
 init_config();
 init_gh();
 import { execSync as execSync5 } from "node:child_process";
-import { closeSync, existsSync as existsSync3, lstatSync, openSync, readFileSync as readFileSync4, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { createHash as createHash2 } from "node:crypto";
+import { closeSync, existsSync as existsSync3, lstatSync, openSync, readFileSync as readFileSync5, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { createHash as createHash3 } from "node:crypto";
 import { join as join4 } from "node:path";
 import { hostname as hostname3 } from "node:os";
 
@@ -8921,8 +9366,8 @@ function normalizeHeading(s) {
   return s.toLowerCase().replace(/\s+/g, " ").replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "").trim();
 }
 var HEADING_ANNOTATION_SPLIT = /\s+[—–\-/&]\s+|:\s+|\s+and\s+|\s+\(/;
-function isDeviationAliasText(text) {
-  const norm = normalizeHeading(text);
+function isDeviationAliasText(text2) {
+  const norm = normalizeHeading(text2);
   if (DEVIATIONS_HEADING_ALIASES.includes(norm))
     return true;
   const head = normalizeHeading(norm.split(HEADING_ANNOTATION_SPLIT)[0] ?? "");
@@ -8938,8 +9383,8 @@ function boldDeviationsHeadingText(line) {
   const trailing = (m[2] ?? "").trim();
   if (trailing && !BOLD_TRAILING_ANNOTATION.test(trailing))
     return null;
-  const text = trailing ? `${inner} ${trailing}` : inner;
-  return isDeviationAliasText(text) ? text : null;
+  const text2 = trailing ? `${inner} ${trailing}` : inner;
+  return isDeviationAliasText(text2) ? text2 : null;
 }
 function isDeviationsHeading(line) {
   const m = HEADING_TEXT.exec(line);
@@ -9704,12 +10149,12 @@ function evaluateScanAttestation(i) {
   }
   return { ...base, ok: true, verdict: "verified", reason: "" };
 }
-function stripScanLines(text) {
+function stripScanLines(text2) {
   const isScanLine = (l) => {
     const t = l.trim();
     return t.startsWith("\uD83D\uDD0D Security scan:") || t.startsWith("Security scan:") || t.startsWith("⛔ Security scan attestation");
   };
-  return text.split(`
+  return text2.split(`
 `).filter((l) => !isScanLine(l)).join(`
 `).replace(/\n{3,}/g, `
 
@@ -9743,7 +10188,7 @@ function parseScanFiles(raw) {
   return Number.isFinite(n) && n >= 0 && String(n) === String(raw).trim() ? n : null;
 }
 function diffDigest(diff) {
-  return createHash2("sha256").update(diff, "utf8").digest("hex");
+  return createHash3("sha256").update(diff, "utf8").digest("hex");
 }
 function scanReportUsable(path) {
   if (path === undefined)
@@ -10368,7 +10813,7 @@ ${opts.body ?? ""}`;
     let rawFindings;
     let stdinWatch = null;
     if (opts.findings && opts.findings !== "-")
-      rawFindings = readFileSync4(opts.findings, "utf8");
+      rawFindings = readFileSync5(opts.findings, "utf8");
     else if (opts.findings === "-")
       rawFindings = await readStdin();
     else {
@@ -10744,7 +11189,7 @@ function parseConflictMarkerRecords(out) {
     const line = parseInt(out.slice(pathEnd + 1, lineEnd), 10);
     const nl = out.indexOf(`
 `, lineEnd + 1);
-    const text = nl === -1 ? out.slice(lineEnd + 1) : out.slice(lineEnd + 1, nl);
+    const text2 = nl === -1 ? out.slice(lineEnd + 1) : out.slice(lineEnd + 1, nl);
     if (Number.isFinite(line)) {
       let list = byPath.get(path);
       if (!list) {
@@ -10752,7 +11197,7 @@ function parseConflictMarkerRecords(out) {
         byPath.set(path, list);
         paths.push(path);
       }
-      list.push({ path, line, text });
+      list.push({ path, line, text: text2 });
     }
     if (nl === -1)
       break;
@@ -10867,7 +11312,7 @@ function rebaseOnto() {
     return null;
   try {
     const gitDir = execSync5("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
-    const onto = readFileSync4(join4(gitDir, state, "onto"), "utf8").trim();
+    const onto = readFileSync5(join4(gitDir, state, "onto"), "utf8").trim();
     return onto && refExists(onto) ? onto : null;
   } catch {
     return null;
@@ -11889,7 +12334,7 @@ init_helpers();
 
 // src/priorities.ts
 init_sh();
-import { existsSync as existsSync4, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync6 } from "node:fs";
 import { join as join5 } from "node:path";
 var PRIORITIES_DOC_RELPATH = "docs/PRIORITIES.md";
 function tableCells(line) {
@@ -11942,7 +12387,7 @@ function loadPrioritiesDoc(root = repoRoot()) {
   const path = join5(root, PRIORITIES_DOC_RELPATH);
   if (!existsSync4(path))
     return { found: false, path, classes: [] };
-  const classes = parseWorkClasses(readFileSync5(path, "utf8"));
+  const classes = parseWorkClasses(readFileSync6(path, "utf8"));
   if (!classes.length) {
     return {
       found: true,
@@ -12242,7 +12687,7 @@ function registerCapabilityCommand(program2) {
 init_project();
 init_sh();
 init_helpers();
-import { existsSync as existsSync5, readFileSync as readFileSync6 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync7 } from "node:fs";
 import { join as join6 } from "node:path";
 function registerTestCommand(program2) {
   program2.command("test").description("Run the project's local test command (auto-detected)").option("--json", "Emit a machine-readable summary line (runner + exit code); test output still streams").option("--yaml", "Output YAML").allowUnknownOption().action((opts) => {
@@ -12286,7 +12731,7 @@ function runRunner(runner, root) {
 }
 function hasTestScript(root) {
   try {
-    const pkg = JSON.parse(readFileSync6(join6(root, "package.json"), "utf8"));
+    const pkg = JSON.parse(readFileSync7(join6(root, "package.json"), "utf8"));
     return typeof pkg?.scripts?.test === "string" && pkg.scripts.test.trim() !== "";
   } catch {
     return false;

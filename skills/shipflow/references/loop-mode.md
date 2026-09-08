@@ -539,7 +539,18 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    doc present escalates; **no doc + assigned issue proceeds** — the
    assignment is the sign-off, `loop-reviewer-intake.md` step 1b), validates, maps to
    features, returns an **acceptance brief** (what "done" means + features
-   to regression-check). Reject (invalid/duplicate/needs a human) →
+   to regression-check). **Close verdict** → follow `loop-close.md`: read the
+   decision file locally and directly invoke `issue close <n> --decision-file
+   <path> --agent <own-claim-agent> --json`. Finish setup writes before its reviewed
+   snapshot; skip normal brief publication/Judge edits/claim refresh on this
+   branch. Record successful close and continue without a worker PR. Refusal
+   never means closed: handle its nextAction; stale snapshot requires a new
+   complete review, partial effects require ledger-aware reconciliation.
+   No live needs-human/reporter gate can be removed by this path. This is the
+   narrow invalid-park exception for fresh ungated issues with all four closure
+   gates satisfied, not generic invalid precedent reuse. Human-filed close
+   refusal still escalates with the two complete choices in `loop-close.md`.
+   Reject (invalid/duplicate/needs a human) →
    `issue escalate <n> --category <cat> --reason "..."`, pick next. Escalate may return
    `autoResolved: true` (precedent auto-apply): a stored answer to the
    SAME question was reused — disclosure comment on the issue, no
