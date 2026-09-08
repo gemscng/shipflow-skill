@@ -1,6 +1,6 @@
 {
   "name": "shipflow",
-  "version": "0.81.1",
+  "version": "0.81.2",
   "description": "Drive ShipFlow from Codex: project status, issues, PRs, releases and loop mode via the bundled renaiss-shipflow CLI.",
   "author": {
     "name": "Renaiss Protocol",

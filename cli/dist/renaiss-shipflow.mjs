@@ -3472,7 +3472,7 @@ function lintEscalationReason(reason) {
     problems.push('says "see the issue body" — an escalation must be self-contained; inline the substance');
   }
   const tableHeaders = r.matchAll(/^\s*\|\s*#\s*\|([^\n]*)$/gm);
-  const hasDecisionTable = [...tableHeaders].some((header) => /\|\s*recommendation\s*\|/i.test(header[1]));
+  const hasDecisionTable = [...tableHeaders].some((header) => /(?:^|\|)\s*recommendation\s*(?:\||$)/i.test(header[1]));
   if (hasDecisionTable && /^\s*\*\*recommendation:?\*\*/im.test(r)) {
     problems.push("carries both a decision table with a Recommendation column and a separate **Recommendation:** line — state each recommendation once, in the table row it belongs to");
   }
