@@ -3410,7 +3410,6 @@ function hasCompleteReplyChoices(reason) {
   const choices = new Set;
   let complete = true;
   let columns;
-  let seenDecisionTable = false;
   const text = (value) => value.trim().replace(/^[*_]+|[*_]+$/g, "").trim();
   const add = (number, answer, consequence) => {
     answer = text(answer);
@@ -3430,10 +3429,8 @@ function hasCompleteReplyChoices(reason) {
       if (!columns || cells.every((c) => !c || /^:?-+:?$/.test(c)))
         continue;
       const answerIndex = columns.findIndex((c) => /^(decision|option|answer|choice)$/.test(c));
-      if (answerIndex < 0 && seenDecisionTable)
+      if (answerIndex < 0)
         continue;
-      if (answerIndex >= 0)
-        seenDecisionTable = true;
       const consequenceIndex = columns.findIndex((c) => /^(if chosen|consequence|outcome|then|result)$/.test(c));
       const option = cells[answerIndex] ?? "";
       const arrow = option.indexOf("→");
@@ -3474,8 +3471,8 @@ function lintEscalationReason(reason) {
   if (/see the issue body/i.test(r)) {
     problems.push('says "see the issue body" — an escalation must be self-contained; inline the substance');
   }
-  const tableHeader = /^\s*\|\s*#\s*\|([^\n]*)$/m.exec(r);
-  const hasDecisionTable = !!tableHeader && /\|\s*recommendation\s*\|/i.test(tableHeader[1]);
+  const tableHeaders = r.matchAll(/^\s*\|\s*#\s*\|([^\n]*)$/gm);
+  const hasDecisionTable = [...tableHeaders].some((header) => /\|\s*recommendation\s*\|/i.test(header[1]));
   if (hasDecisionTable && /^\s*\*\*recommendation:?\*\*/im.test(r)) {
     problems.push("carries both a decision table with a Recommendation column and a separate **Recommendation:** line — state each recommendation once, in the table row it belongs to");
   }
