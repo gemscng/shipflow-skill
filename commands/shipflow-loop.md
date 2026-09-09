@@ -22,7 +22,8 @@ file's real section headings (§) — follow them there, never from memory.
 | `cap=N` | how many PRs to open per pass before pausing; `cap=all` drains the queue |
 | `concurrency=N` | max issues/PRs worked at once (#744); `concurrency=1` = fully serial |
 | `usage-max=N` | do not start a tick once the Claude 5-hour **or** weekly usage is at/above N% (default **90**) |
-| `limit-reset=off` | never spend Claude Code's once-a-week `/limit-reset` when the 5-hour window stops a tick (default: spend it, 5-hour window only) |
+| `reset-at=N` | spend the once-a-week `/limit-reset` only once the blocking 5-hour window is at/above N% (default **99**; between `usage-max` and this the tick just pauses) |
+| `limit-reset=off` | never spend Claude Code's once-a-week `/limit-reset` when the 5-hour window stops a tick (default: spend it, 5-hour window only, at/over `reset-at`) |
 | `refill=on` | after an empty bug sweep, also file work from `priorities`, uncovered `test_priority: high` features, and flaky tests (`auto-refill`; default **off** — `loop-bug-sweep.md` step 4) |
 | anything else | an `issue next` filter (e.g. `--label bug`) |
 
@@ -34,7 +35,8 @@ file's real section headings (§) — follow them there, never from memory.
 `$SHIPFLOW_LOOP_USAGE_MAX` → **90**. Also invocation-only.
 **Session reset:** a `limit-reset=off` token → export
 `SHIPFLOW_LOOP_LIMIT_RESET=off` for the run so the tool refuses the spend
-too; `$SHIPFLOW_LOOP_LIMIT_RESET` → **on**.
+too; `$SHIPFLOW_LOOP_LIMIT_RESET` → **on**. **Reset floor:** a user
+`reset-at=N` token → `$SHIPFLOW_LOOP_RESET_AT` → **99**. Also invocation-only.
 **Refill:** a `refill=on` token → `$SHIPFLOW_LOOP_REFILL` → **off**. Also
 invocation-only; the sweep's `bug-hunt` / `bug-hunt-cap` config knobs still
 bound it.
@@ -59,9 +61,11 @@ bound it.
    Pass `--max N` only for an explicit `usage-max=N` token; otherwise the
    tool reads `$SHIPFLOW_LOOP_USAGE_MAX`, then 90.
    Exit **3** = at/over the threshold → try the once-a-week session reset
-   first: `"$PLUGIN_DIR/bin/shipflow-usage" limit-reset --text`. It exits
+   first: `"$PLUGIN_DIR/bin/shipflow-usage" limit-reset --text` (pass
+   `--reset-at N` only for an explicit `reset-at=N` token; the tool spends
+   only at/over 99% by default). It exits
    **0** → the 5-hour window cleared, re-run `check` and run the tick
-   normally. Exit **5** (not worth spending / already used / disabled) or
+   normally. Exit **5** (under the 99% floor / already used / disabled) or
    **2** (outcome unreadable) → post
    `⏸ paused · usage <reason> ≥ N% · <reset outcome> · next check at the
    next tick` and **end the tick** — nothing else runs, the cron stays.

@@ -21,8 +21,9 @@
 # Usage gate: before every tick the supervisor runs `shipflow-usage check`
 # against Codex's live rate limits (what /usage shows). At/over usage-max it
 # tries `shipflow-usage limit-reset` — one of the account's rate-limit reset
-# credits — and skips the tick when that does not clear it, so a paused loop
-# costs nothing. The gate lives next to this script in the plugin (bin/); a
+# credits, spent only once the window is at/over the 99% reset floor
+# (SHIPFLOW_LOOP_RESET_AT) — and skips the tick when that does not clear it,
+# so a paused loop costs nothing. The gate lives next to this script in the plugin (bin/); a
 # missing gate is logged and the tick runs.
 #
 # Env: CODEX_BIN (codex) · CODEX_HOME (~/.codex) · SHIPFLOW_CODEX_SANDBOX
@@ -30,7 +31,8 @@
 # SHIPFLOW_LOOP_WATCH (15m) · SHIPFLOW_CODEX_LOOP_DIR ($PWD, passed as -C) ·
 # SHIPFLOW_STATE_DIR (~/.shipflow — holds codex-loop.log and codex-loop.stop) ·
 # SHIPFLOW_USAGE_BIN (bin/shipflow-usage next to this script) ·
-# SHIPFLOW_LOOP_USAGE_MAX (90) — read by shipflow-usage.
+# SHIPFLOW_LOOP_USAGE_MAX (90) · SHIPFLOW_LOOP_RESET_AT (99) — read by
+# shipflow-usage.
 set -euo pipefail
 
 CODEX_BIN="${CODEX_BIN:-codex}"

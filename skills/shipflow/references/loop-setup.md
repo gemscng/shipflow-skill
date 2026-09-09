@@ -26,10 +26,12 @@ it in the summary and move on. Threshold: `usage-max=N` token →
 
 When the 5-hour window is what stops a tick, the gate spends Claude Code's
 once-a-week `/limit-reset` through `shipflow-usage limit-reset` (5-hour
-window only, never for a weekly limit, one attempt per week — loop-mode.md
-§ "Exit 3 → spend the once-a-week session reset"). A `limit-reset=off`
-token means `export SHIPFLOW_LOOP_LIMIT_RESET=off` for the run, so the tool
-refuses the spend even if a tick asks for it.
+window only, never for a weekly limit, one attempt per week, and **only
+once that window is at/over the 99% reset floor** — between 90% and 99% the
+tick just pauses; loop-mode.md § "Exit 3 → spend the once-a-week session
+reset"). Floor: `reset-at=N` token → `$SHIPFLOW_LOOP_RESET_AT` → 99. A
+`limit-reset=off` token means `export SHIPFLOW_LOOP_LIMIT_RESET=off` for
+the run, so the tool refuses the spend even if a tick asks for it.
 
 Codex: no sink to install — `shipflow-usage` reads Codex's live limits
 (`SHIPFLOW_USAGE_SOURCE=codex`) and `limit-reset` spends a rate-limit reset

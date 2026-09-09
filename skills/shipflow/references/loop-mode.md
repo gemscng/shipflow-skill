@@ -118,7 +118,7 @@ PLUGIN_DIR=$(ls -d ~/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/nu
 
 | Exit | Means | Do |
 |---|---|---|
-| **3** | 5h or 7d usage ≥ max (the line names the window and its reset time) | try the session reset below **first**. It exits 0 → the 5-hour window cleared, run the tick normally. Anything else → post `⏸ paused · usage <line> · <reset outcome> · rechecks next tick` as this tick's ONLY output and **end the tick**. No plan, no drift probe, no `inbox`, no dispatch. Keep the cron — the next tick re-checks; the window resets on its own. |
+| **3** | 5h or 7d usage ≥ max (the line names the window and its reset time) | try the session reset below **first** (it spends only at/over the **99%** reset floor; between 90% and 99% it exits 5 and the tick simply pauses). It exits 0 → the 5-hour window cleared, run the tick normally. Anything else → post `⏸ paused · usage <line> · <reset outcome> · rechecks next tick` as this tick's ONLY output and **end the tick**. No plan, no drift probe, no `inbox`, no dispatch. Keep the cron — the next tick re-checks; the window resets on its own. |
 | **2** | cannot tell — no snapshot, unusable `recorded_at`, or a snapshot older than `--max-age` (1h) that was below max | **continue**, and add `usage: unknown (<reason>)` to the summary line. Tick 1: run `"$PLUGIN_DIR/bin/shipflow-usage" install-statusline` (idempotent; exit 4 = a foreign statusLine exists — print its chain hint, never overwrite). The sink starts reporting from the next Claude Code session. |
 | **1** | bad `usage-max` / `--max` / `--max-age` (not a number, or out of range) — stderr says so | **continue**, and add `usage: gate misconfigured (<stderr>)` to the summary line so the operator fixes the token; never treat it as a pass |
 | **0** | below max, or the account reports no limits | continue; nothing to say |
@@ -143,32 +143,38 @@ Claude Code ships an **undocumented** `/limit-reset` slash command that
 clears the **5-hour** ("session") window immediately. It is allowed **once a
 week** and what it frees still counts against the weekly limit, so it is a
 scarce resource — the thing that saves an overnight run, not a knob to lean
-on. `shipflow-usage limit-reset` decides whether spending it is justified
-and then spends it. **Never run `claude -p "/limit-reset"` yourself**, and
+on. So it is spent only when the 5-hour window is **at/over the reset floor,
+99%** (token `reset-at=N` / `$SHIPFLOW_LOOP_RESET_AT` / `--reset-at N`;
+operator requirement, 2026-09-09) — not merely at/over the 90% gate, where
+the window still has room and clears on its own within hours. Between the
+gate and the floor the loop pauses and waits. `shipflow-usage limit-reset`
+decides whether spending it is justified and then spends it. **Never run `claude -p "/limit-reset"` yourself**, and
 never type it at the operator instead of running the tool.
 
 ```bash
-# --max N only when the operator passed an explicit usage-max=N token.
+# --max N only when the operator passed an explicit usage-max=N token;
+# --reset-at N only for an explicit reset-at=N token (default 99).
 "$PLUGIN_DIR/bin/shipflow-usage" limit-reset --text
 ```
 
 | Exit | Means | Do |
 |---|---|---|
 | **0** | the session window was reset | re-run `check`; on 0 run the tick normally and add `usage: session limit reset (1/week, still counts toward the weekly limit)` to the summary line |
-| **5** | not spent, and the printed reason says why: below max · the **weekly** window is the blocker · both windows over · usage unknown · already used this week · the CLI has no such command · `SHIPFLOW_LOOP_LIMIT_RESET=off` | pause as usual, with that reason in the paused line |
+| **5** | not spent, and the printed reason says why: below max · **under the 99% reset floor** (the window resets on its own) · the **weekly** window is the blocker · both windows over · usage unknown · already used this week · the CLI has no such command · `SHIPFLOW_LOOP_LIMIT_RESET=off` | pause as usual, with that reason in the paused line |
 | **2** | it ran but the outcome is unreadable — a transient "try again in a moment", or output the tool does not recognise | pause as usual; it retries in an hour, not next tick |
 
-The rails are in the tool, not in your judgement: it refuses when the
-**weekly** window is at/above max (a session reset never clears the week),
-refuses when usage is unknown, and holds a week-long cooldown in
+The rails are in the tool, not in your judgement: it refuses under the
+99% floor, refuses when the **weekly** window is at/above max (a session
+reset never clears the week), refuses when usage is unknown, and holds a
+week-long cooldown in
 `~/.shipflow/usage.json` so a 15-minute cron cannot burn a second attempt.
 Anything it does not recognise counts as "no reset happened" — the loop
 stays paused rather than dispatching into a limit. Operator opt-out:
 `SHIPFLOW_LOOP_LIMIT_RESET=off` (or the `limit-reset=off` token).
 
 The command is undocumented, so two things are unproven: whether Claude
-Code grants a reset while the window is merely near the threshold (the gate
-stops at 90%, not at 100%), and the exact wording of every refusal. Both
+Code grants a reset while the window is not yet at 100% (the tool asks at
+99%, not at 100%), and the exact wording of every refusal. Both
 land in the same place — exit 2 or 5, the loop pauses exactly as it did
 before the reset existed, and the reason is printed for the operator. It
 needs a Claude Code that has the command (absent in 2.1.240, present in

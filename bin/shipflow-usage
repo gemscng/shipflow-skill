@@ -28,15 +28,19 @@
 //                                        configured (exit 4 when one is — chain
 //                                        it instead, never overwritten)
 //   shipflow-usage limit-reset           spend Claude Code's once-a-week
-//         [--max N] [--dry-run] [--text] "/limit-reset" to clear the 5-hour
-//                                        window so a paused loop can resume
+//         [--max N] [--reset-at N]       "/limit-reset" to clear the 5-hour
+//         [--dry-run] [--text]           window so a paused loop can resume.
+//                                        Only when the window is at/over the
+//                                        reset floor (--reset-at, default 99%),
+//                                        never merely at/over --max
 //                                        (exit 0 = reset, 5 = skipped,
 //                                        2 = attempted, outcome unclear)
 //   shipflow-usage show                  print the snapshot
 //
 // Env: SHIPFLOW_STATE_DIR (default ~/.shipflow) · SHIPFLOW_LOOP_USAGE_MAX
-// (default for --max, 90) · SHIPFLOW_USAGE_MAX_AGE (default for --max-age,
-// 3600) · CLAUDE_CONFIG_DIR (default ~/.claude, for install-statusline) ·
+// (default for --max, 90) · SHIPFLOW_LOOP_RESET_AT (default for --reset-at,
+// 99) · SHIPFLOW_USAGE_MAX_AGE (default for --max-age, 3600) ·
+// CLAUDE_CONFIG_DIR (default ~/.claude, for install-statusline) ·
 // SHIPFLOW_CLAUDE_BIN (default `claude` on PATH, for limit-reset).
 //
 // ── OpenAI Codex CLI (`--source codex` / SHIPFLOW_USAGE_SOURCE=codex) ─────────
@@ -51,8 +55,8 @@
 //   limit-reset    spends one reset credit through the app server. A Codex
 //                  reset clears EVERY window, so the 5-hour-only and
 //                  weekly-blocker rails do not apply; what remains: only at/over
-//                  max, only with a credit available, one attempt per cooldown,
-//                  SHIPFLOW_LOOP_LIMIT_RESET=off
+//                  the reset floor (--reset-at, default 99%), only with a credit
+//                  available, one attempt per cooldown, SHIPFLOW_LOOP_LIMIT_RESET=off
 //   install-statusline   not needed — prints so, exit 0
 //
 // Source: --source codex|claude → $SHIPFLOW_USAGE_SOURCE → codex when the shell
@@ -83,6 +87,11 @@ const WINDOW_ORDER = ["five_hour", "seven_day", "spend_limit"];
 // retries after an hour, not every 15-minute tick.
 const RESET_COOLDOWN_SECONDS = 7 * 24 * 3600;
 const RESET_RETRY_SECONDS = 3600;
+// The gate stops ticks at --max (90%) so a dispatched worker never runs into
+// the limit, but a reset is a scarce resource: a window at 90% still has room
+// and resets on its own within hours. Spend the reset only once the window is
+// effectively exhausted (operator requirement, 2026-09-09: "only at 99%").
+const RESET_FLOOR_DEFAULT = 99;
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -172,12 +181,14 @@ function parseArgs(argv) {
   const opts = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--max" || a === "--max-age") {
+    if (a === "--max" || a === "--max-age" || a === "--reset-at") {
       opts[a.slice(2)] = argv[++i];
     } else if (a.startsWith("--max=")) {
       opts.max = a.slice(6);
     } else if (a.startsWith("--max-age=")) {
       opts["max-age"] = a.slice(10);
+    } else if (a.startsWith("--reset-at=")) {
+      opts["reset-at"] = a.slice(11);
     } else if (a === "--source") {
       opts.source = argv[++i];
     } else if (a.startsWith("--source=")) {
@@ -410,7 +421,28 @@ function resetCooldownReason(snapshot, now) {
   return null;
 }
 
-function resetSkipReason(result, snapshot, now) {
+// --reset-at: the usage the blocking window must have reached before a reset
+// is spent. Resolved like --max (flag → env → default); a floor under --max
+// changes nothing, because below --max the verdict is never "over".
+function resetFloor(opts) {
+  const floor = Number(opts["reset-at"] ?? envNum(process.env.SHIPFLOW_LOOP_RESET_AT) ?? RESET_FLOOR_DEFAULT);
+  if (!Number.isFinite(floor) || floor <= 0 || floor > 100) {
+    process.stderr.write(`shipflow-usage: --reset-at must be a percentage in (0, 100], got ${JSON.stringify(opts["reset-at"])}\n`);
+    return null;
+  }
+  return floor;
+}
+
+// The window that stopped the loop is over --max but still under the reset
+// floor: it resets on its own, so the once-a-week reset is not spent on it.
+function resetFloorReason(result, floor) {
+  const w = result.worst;
+  if (!w || w.used_percentage >= floor) return null;
+  const at = typeof w.resets_at === "number" ? ` — it resets on its own at ${formatResetsAt(w.resets_at)}` : "";
+  return `${w.label} usage ${Math.round(w.used_percentage)}% is under the reset floor ${floor}%${at}`;
+}
+
+function resetSkipReason(result, snapshot, now, floor) {
   const off = resetKnobOff();
   if (off) return off;
   if (result.verdict !== "over") {
@@ -426,7 +458,7 @@ function resetSkipReason(result, snapshot, now) {
   if (weekly && weekly.used_percentage >= result.max) {
     return `7d usage ${Math.round(weekly.used_percentage)}% ≥ ${result.max}% — the weekly limit survives a session reset`;
   }
-  return resetCooldownReason(snapshot, now);
+  return resetFloorReason(result, floor) || resetCooldownReason(snapshot, now);
 }
 
 function cmdLimitReset(opts) {
@@ -435,12 +467,14 @@ function cmdLimitReset(opts) {
     process.stderr.write(`shipflow-usage: --max must be a percentage in (0, 100], got ${JSON.stringify(opts.max)}\n`);
     return 1;
   }
+  const floor = resetFloor(opts);
+  if (floor === null) return 1;
   const now = nowSeconds();
   const snapshot = readJSON(SNAPSHOT);
   const result = evaluate(snapshot, { max, maxAge: 3600, now });
-  const out = { action: "limit-reset", max, outcome: "skipped", reason: "", detail: "", ran: false };
+  const out = { action: "limit-reset", max, reset_at: floor, outcome: "skipped", reason: "", detail: "", ran: false };
 
-  const skip = resetSkipReason(result, snapshot, now);
+  const skip = resetSkipReason(result, snapshot, now, floor);
   if (skip) {
     out.reason = skip;
     emitReset(out, opts);
@@ -663,7 +697,7 @@ async function cmdCheckCodex(opts) {
 }
 
 // Why the loop may not spend a Codex reset credit right now. null = go ahead.
-function codexResetSkipReason(result, snapshot, now) {
+function codexResetSkipReason(result, snapshot, now, floor) {
   const off = resetKnobOff();
   if (off) return off;
   if (result.verdict !== "over") {
@@ -671,6 +705,8 @@ function codexResetSkipReason(result, snapshot, now) {
       ? `usage is unknown (${result.reason}) — never spend a reset credit on a guess`
       : `usage is below the threshold (${result.reason})`;
   }
+  const underFloor = resetFloorReason(result, floor);
+  if (underFloor) return underFloor;
   const available = snapshot && snapshot.reset_credits ? Number(snapshot.reset_credits.available) : 0;
   if (!(available > 0)) {
     return "no rate-limit reset credit available — Codex grants them over time (they show under /usage)";
@@ -691,16 +727,18 @@ const CODEX_RESET_OUTCOMES = {
 async function cmdLimitResetCodex(opts) {
   const t = gateThresholds(opts);
   if (!t) return 1;
+  const floor = resetFloor(opts);
+  if (floor === null) return 1;
   const now = nowSeconds();
   const { snapshot, error } = await codexRefresh(now);
   const result = evaluate(snapshot, { max: t.max, maxAge: 3600, now });
-  const out = { action: "limit-reset", source: "codex", max: t.max, outcome: "skipped", reason: "", detail: "", ran: false };
+  const out = { action: "limit-reset", source: "codex", max: t.max, reset_at: floor, outcome: "skipped", reason: "", detail: "", ran: false };
   if (error && result.verdict !== "over") {
     out.reason = `usage is unknown (cannot read Codex limits: ${error}) — never spend a reset credit on a guess`;
     emitReset(out, opts);
     return 5;
   }
-  const skip = codexResetSkipReason(result, snapshot, now);
+  const skip = codexResetSkipReason(result, snapshot, now, floor);
   if (skip) {
     out.reason = skip;
     emitReset(out, opts);
@@ -823,7 +861,7 @@ async function main() {
     default:
       process.stderr.write(
         "usage: shipflow-usage record | check [--max N] [--max-age SECONDS] [--text] | " +
-          "limit-reset [--max N] [--dry-run] [--text] | install-statusline [--dry-run] | show\n" +
+          "limit-reset [--max N] [--reset-at N] [--dry-run] [--text] | install-statusline [--dry-run] | show\n" +
           "       [--source codex|claude]  (default: $SHIPFLOW_USAGE_SOURCE, else codex inside a Codex shell, else claude)\n",
       );
       return 1;
