@@ -6584,16 +6584,93 @@ async function probeServer(apiUrl) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
+function buildIdentityCell(v) {
+  return v.error ? `unreachable (${v.error})` : `${v.version ? `${v.version} · ` : ""}${(v.revision || "unknown").slice(0, 12)}${v.dirty ? "+dirty" : ""}${v.buildTime ? ` · built ${v.buildTime}` : ""}`;
+}
+var GATEWAYS = [
+  { name: "discord", flag: "discordUrl", env: "SHIPFLOW_DISCORD_URL" },
+  { name: "slack", flag: "slackUrl", env: "SHIPFLOW_SLACK_URL" },
+  { name: "telegram", flag: "telegramUrl", env: "SHIPFLOW_TELEGRAM_URL" },
+  { name: "whatsapp", flag: "whatsappUrl", env: "SHIPFLOW_WHATSAPP_URL" }
+];
+function resolveGatewayUrl(flagUrl, envVar) {
+  return flagUrl || process.env[envVar] || undefined;
+}
+var INVALID_GATEWAY_URL = "<invalid url>";
+function parseGatewayUrl(raw) {
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:" || !u.hostname)
+    return null;
+  u.username = "";
+  u.password = "";
+  u.search = "";
+  u.hash = "";
+  const display = u.pathname === "/" ? `${u.origin}/` : `${u.origin}/…`;
+  u.pathname = `${u.pathname.replace(/\/+$/, "")}/health`;
+  return { display, probe: u.toString() };
+}
+function isTimeout(e) {
+  const name = e?.name;
+  return name === "TimeoutError" || name === "AbortError";
+}
+function pickVersionInfo(body) {
+  const b = body && typeof body === "object" ? body : {};
+  const out = {};
+  if (typeof b.version === "string")
+    out.version = b.version;
+  if (typeof b.revision === "string")
+    out.revision = b.revision;
+  if (typeof b.dirty === "boolean")
+    out.dirty = b.dirty;
+  if (typeof b.buildTime === "string")
+    out.buildTime = b.buildTime;
+  if (typeof b.goVersion === "string")
+    out.goVersion = b.goVersion;
+  return out;
+}
+async function probeGateway(rawUrl) {
+  const target = parseGatewayUrl(rawUrl);
+  if (!target)
+    return { url: INVALID_GATEWAY_URL, error: "invalid url" };
+  const url = target.display;
+  let res;
+  try {
+    res = await fetch(target.probe, { signal: AbortSignal.timeout(8000) });
+  } catch (e) {
+    return { url, error: isTimeout(e) ? "timeout" : "connection failed" };
+  }
+  if (!res.ok)
+    return { url, error: `HTTP ${res.status}` };
+  try {
+    return { url, ...pickVersionInfo(await res.json()) };
+  } catch (e) {
+    return { url, error: isTimeout(e) ? "timeout" : "invalid response" };
+  }
+}
 function registerVersionCommand(program2, cliVersion2) {
-  program2.command("version").description("Show ShipFlow component versions: CLI, installed plugin/skill, the server build, and CLI drift vs the npm registry's latest").option("--api-url <url>", "Override the server URL for the build probe").option("--check", `Exit ${driftExitCode("stale")} when the installed CLI is BEHIND the registry (0 otherwise) — the loop's drift gate`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  const cmd = program2.command("version").description("Show ShipFlow component versions: CLI, installed plugin/skill, the server build, and CLI drift vs the npm registry's latest").option("--api-url <url>", "Override the server URL for the build probe").option("--check", `Exit ${driftExitCode("stale")} when the installed CLI is BEHIND the registry (0 otherwise) — the loop's drift gate`).option("--json", "Output JSON").option("--yaml", "Output YAML");
+  for (const g of GATEWAYS)
+    cmd.option(`--${g.name}-url <url>`, `Override the ${g.name} gateway URL for the version probe`);
+  cmd.action(runAction(async (opts) => {
     const cli = cliVersion2;
     const plugin = installedPluginVersion();
     const apiUrl = resolveApiUrl(opts.apiUrl);
-    const [server, registry, githubCred] = await Promise.all([
+    const configuredGateways = GATEWAYS.map((g) => ({ name: g.name, url: resolveGatewayUrl(opts[g.flag], g.env) })).filter((g) => Boolean(g.url));
+    const [server, registry, githubCred, gatewayProbes] = await Promise.all([
       probeServer(apiUrl),
       fetchRegistryLatest(),
-      probeGitHubCredential(apiUrl)
+      probeGitHubCredential(apiUrl),
+      Promise.all(configuredGateways.map((g) => probeGateway(g.url)))
     ]);
+    const gateways = {};
+    configuredGateways.forEach((g, i) => {
+      gateways[g.name] = gatewayProbes[i];
+    });
     const drift = classifyDrift(cli, registry.latest);
     const channel = resolveCliChannel();
     const updaterPath = channel === "launcher-cache" ? resolveLauncherUpdater() : null;
@@ -6602,18 +6679,18 @@ function registerVersionCommand(program2, cliVersion2) {
     const publishLag = buildPublishLag(mainCli.version, registry.latest, mainCli.error ?? registry.error);
     const warnings = driftWarnings({ cli, plugin, registryLatest: registry.latest, registryError: registry.error, drift, channel, updaterPath, publishLag });
     const github = githubCred ? { ...githubCred.github, line: githubCred.line, ...githubCred.error ? { error: githubCred.error } : {} } : null;
-    emit(opts, { cli, plugin, server: { url: apiUrl, ...server }, registry, drift, channel, remediation, warnings, publishLag, github }, () => {
-      const serverCell = server.error ? `unreachable (${server.error})` : `${server.version ? `${server.version} · ` : ""}${(server.revision || "unknown").slice(0, 12)}${server.dirty ? "+dirty" : ""}${server.buildTime ? ` · built ${server.buildTime}` : ""}`;
+    emit(opts, { cli, plugin, server: { url: apiUrl, ...server }, registry, drift, channel, remediation, warnings, publishLag, github, ...configuredGateways.length ? { gateways } : {} }, () => {
       const driftIcon = { current: "✅", stale: "⛔", ahead: "\uD83E\uDDEA", unknown: "❔" };
       const lagIcon = { "in-sync": "✅", "main-ahead": "⚠️", "npm-ahead": "ℹ️", unknown: "❔" };
       const lagCell = publishLag.main ? `${publishLag.main} — publishLag ${lagIcon[publishLag.status]} ${publishLag.status}` : `unreachable (${publishLag.error}) — publishLag ❔ unknown`;
       for (const line of renderTable(["Component", "Version"], [
         ["cli", `${cli} (${channel})`],
         ["plugin/skill", plugin ?? "not installed"],
-        [`server (${apiUrl})`, serverCell],
+        [`server (${apiUrl})`, buildIdentityCell(server)],
         ["npm latest", registry.latest ? `${registry.latest} — drift ${driftIcon[drift]} ${drift}` : `unreachable (${registry.error}) — drift ❔ unknown`],
         ["origin/main CLI", lagCell],
-        ...githubCred ? [["github credential", githubCred.line]] : []
+        ...githubCred ? [["github credential", githubCred.line]] : [],
+        ...configuredGateways.map((g) => [`${g.name} gateway (${gateways[g.name].url})`, buildIdentityCell(gateways[g.name])])
       ]))
         console.log(line);
       for (const w of warnings)
