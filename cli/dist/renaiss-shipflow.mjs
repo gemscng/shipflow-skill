@@ -12716,7 +12716,6 @@ Greenlit class + normal slice → intake may proceed; deploy-blast-radius work A
 // src/commands/config.ts
 init_config();
 init_helpers();
-var MERGE_POLICIES2 = ["manual", "auto-on-green", "auto-timeout"];
 var SETTINGS = [
   {
     key: "auto-issue",
@@ -12741,8 +12740,8 @@ var SETTINGS = [
     field: "mergePolicy",
     set: (v, c) => {
       const p = v.trim();
-      if (!MERGE_POLICIES2.includes(p))
-        throw new Error(`merge-policy must be one of: ${MERGE_POLICIES2.join(", ")}`);
+      if (!MERGE_POLICIES.includes(p))
+        throw new Error(`merge-policy must be one of: ${MERGE_POLICIES.join(", ")}`);
       return c.mergePolicy = p;
     },
     effective: resolveMergePolicy
