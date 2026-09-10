@@ -8176,6 +8176,7 @@ function sortIssuesForPickup(issues) {
 init_shipflow_contract_data();
 
 // src/evidence.ts
+init_client();
 var IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"];
 function isImagePath(p) {
   const lower = p.toLowerCase();
@@ -8228,6 +8229,21 @@ function evidenceCommentVerdict(status, githubCommented, prCommented = false, co
         isError: false
       };
   }
+}
+var EVIDENCE_ACCESS_ERROR_CODES = ["GITHUB_REPO_UNREACHABLE", "GITHUB_INSTALLATION_AUTH"];
+function evidenceApiErrorVerdict(err) {
+  if (!(err instanceof ApiError))
+    return null;
+  const code = err.code;
+  if (!code || !EVIDENCE_ACCESS_ERROR_CODES.includes(code))
+    return null;
+  return {
+    exitCode: EXIT_EVIDENCE_THREAD_FAILED,
+    note: `❌ evidence NOT delivered — GitHub access failed (${code}): ${err.message}`,
+    isError: true,
+    code,
+    error: err.message
+  };
 }
 function validateEvidenceSelection(before, after, misc, labels = [], beforeCaptions = [], afterCaptions = [], imageCaptions = [], actual = [], actualCaptions = []) {
   const hasBefore = before.length > 0;
@@ -9149,6 +9165,14 @@ ${block}`));
       actual: actual.map(toImg),
       actualCaptions,
       images: misc.map(toImg)
+    }).catch((err) => {
+      const access = evidenceApiErrorVerdict(err);
+      if (!access)
+        throw err;
+      if (opts.json)
+        console.log(JSON.stringify({ error: access.error, code: access.code }));
+      console.error(access.note);
+      return process.exit(access.exitCode);
     });
     const threadVerdict = evidenceThreadVerdict(res.threadStatus, res.threadNotified, res.threadError);
     const commentVerdict = evidenceCommentVerdict(res.commentStatus, res.githubCommented, !!res.prCommented, res.commentError);
