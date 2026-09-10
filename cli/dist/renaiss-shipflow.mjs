@@ -4831,13 +4831,59 @@ function ghIntentGateAuditCandidates(repo, number) {
     return [];
   }
 }
-function ghIssueLastEditedAt(repo, number) {
-  const q = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){lastEditedAt}}}";
-  const data = ghGraphQL(repo, q, number);
-  const issue = data?.repository?.issue;
-  if (!issue)
-    throw new Error(`GraphQL returned no issue ${repo}#${number} (repository null or unreadable)`);
-  return issue.lastEditedAt ? String(issue.lastEditedAt) : null;
+function ghIssueBodyRevisions(repo, number) {
+  const q = "query($o:String!,$r:String!,$n:Int!,$c:String){viewer{login} repository(owner:$o,name:$r){issue(number:$n){" + "lastEditedAt userContentEdits(first:100,after:$c){totalCount pageInfo{hasNextPage endCursor} " + "nodes{editedAt deletedAt editor{__typename login} diff}}}}}";
+  const where = `${repo}#${number}`;
+  const newestFirst = [];
+  let viewerLogin = "";
+  let total = null;
+  let lastEditedAt = null;
+  let cursor;
+  for (let page = 0;; page++) {
+    if (page >= BODY_REVISION_PAGE_CAP)
+      throw new Error(`edit history of ${where} exceeds ${BODY_REVISION_PAGE_CAP} pages`);
+    const data = ghGraphQL(repo, q, number, cursor);
+    const issue = data?.repository?.issue;
+    if (!issue)
+      throw new Error(`GraphQL returned no issue ${where} (repository null or unreadable)`);
+    const conn = issue.userContentEdits;
+    if (!conn || !Array.isArray(conn.nodes) || typeof conn.totalCount !== "number") {
+      throw new Error(`edit history of ${where} unreadable (no userContentEdits connection)`);
+    }
+    viewerLogin = String(data?.viewer?.login ?? "").trim();
+    if (!viewerLogin)
+      throw new Error(`GraphQL returned no viewer login while reading ${where}`);
+    if (total === null) {
+      total = conn.totalCount;
+      lastEditedAt = issue.lastEditedAt ? String(issue.lastEditedAt) : null;
+    } else if (conn.totalCount !== total) {
+      throw new Error(`edit history of ${where} changed while paging (${total} → ${conn.totalCount})`);
+    }
+    for (const node of conn.nodes) {
+      if (!node || typeof node !== "object")
+        throw new Error(`edit history of ${where} has an unreadable revision`);
+      newestFirst.push({
+        editedAt: String(node.editedAt ?? "").trim(),
+        editor: node.editor?.__typename === "User" ? String(node.editor.login ?? "").trim() : "",
+        body: node.deletedAt || typeof node.diff !== "string" ? null : node.diff
+      });
+    }
+    if (!conn.pageInfo?.hasNextPage)
+      break;
+    cursor = conn.pageInfo.endCursor ? String(conn.pageInfo.endCursor) : undefined;
+    if (!cursor)
+      throw new Error(`edit history of ${where} has a next page but no cursor`);
+  }
+  if (newestFirst.length !== total) {
+    throw new Error(`edit history of ${where} incomplete (read ${newestFirst.length} of ${total})`);
+  }
+  if (newestFirst.length === 0 !== (lastEditedAt === null)) {
+    throw new Error(`edit history of ${where} disagrees with lastEditedAt (${newestFirst.length} revisions, lastEditedAt ${lastEditedAt})`);
+  }
+  if (lastEditedAt !== null && Date.parse(newestFirst[0].editedAt) !== Date.parse(lastEditedAt)) {
+    throw new Error(`edit history of ${where} lags lastEditedAt (newest ${newestFirst[0].editedAt || "undated"}, lastEditedAt ${lastEditedAt})`);
+  }
+  return { viewerLogin, revisions: newestFirst.reverse() };
 }
 function ghIntentGateAuditCount(repo, number) {
   try {
@@ -4970,7 +5016,7 @@ function ghResolveReviewThread(threadId) {
     _exec(`gh api graphql -f query=${shellQuote(m)} -f t=${shellQuote(threadId)}`, { stdio: "ignore" });
   } catch {}
 }
-var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner,headRefOid,mergedAt", GH_GRAPHQL_PAGE_MAX = 100, LIST_BY_LABEL_FIELDS, LABEL_COLORS, LABEL_PREFIX_COLORS;
+var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner,headRefOid,mergedAt", GH_GRAPHQL_PAGE_MAX = 100, LIST_BY_LABEL_FIELDS, LABEL_COLORS, LABEL_PREFIX_COLORS, BODY_REVISION_PAGE_CAP = 50;
 var init_gh = __esm(() => {
   init_sh();
   init_shipflow_contract_data();
@@ -7638,6 +7684,164 @@ function lintBodyLength(body) {
 // src/commands/issue.ts
 init_config();
 
+// src/judge-block.ts
+init_shipflow_contract_data();
+var JUDGE_OPEN = SHIPFLOW_CONTRACT.markers.judge;
+var JUDGE_END = SHIPFLOW_CONTRACT.markers.judgeEnd;
+var JUDGE_STATES = ["queued", "working", "review", "waiting", "blocked", "merged"];
+function isJudgeState(s) {
+  return JUDGE_STATES.includes(s);
+}
+var STATE_LABEL = {
+  queued: { emoji: "⚪", label: "Queued — nothing needed from you" },
+  working: { emoji: "\uD83D\uDFE2", label: "Loop working" },
+  review: { emoji: "\uD83D\uDD35", label: "PR in review" },
+  waiting: { emoji: "⏸", label: "Waiting on you" },
+  blocked: { emoji: "\uD83D\uDD34", label: "Blocked externally" },
+  merged: { emoji: "✅", label: "Merged" }
+};
+function judgeCell(s) {
+  const prefix = SHIPFLOW_CONTRACT.markers.markerPrefix;
+  return s.replace(/\s+/g, " ").trim().split(prefix).join("&lt;" + prefix.slice(1));
+}
+function judgeProgress(spec) {
+  if (spec.progress != null && Number.isFinite(spec.progress))
+    return Math.max(0, Math.min(5, Math.floor(spec.progress)));
+  if (spec.state === "merged")
+    return 5;
+  if (spec.pr)
+    return /approved/i.test(spec.prStatus ?? "") ? 4 : 3;
+  return spec.state === "working" ? 1 : 0;
+}
+function meter2(n) {
+  const k = Math.max(0, Math.min(5, n));
+  return "▰".repeat(k) + "▱".repeat(5 - k);
+}
+function shortTime(iso) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(iso);
+  return m ? `${m[1]} ${m[2]}Z` : iso;
+}
+function validateJudgeSpec(spec) {
+  const p = [];
+  if (spec.state === "waiting" && spec.decisions.length === 0) {
+    p.push("state=waiting needs at least one --decide `N: reply → consequence` — the reader must know what to type");
+  }
+  if (spec.state === "blocked" && !spec.blocker?.trim()) {
+    p.push('state=blocked needs a blocker — pass --blocker "<gate> → #<issue>", or park the issue with `issue wait --on` so the chain can be walked');
+  }
+  if (spec.state === "review" && !spec.pr) {
+    p.push("state=review needs --pr <n>");
+  }
+  spec.decisions.forEach((d, i) => {
+    if (!/^\d+:\s+\S/.test(d.trim()))
+      p.push(`--decide #${i + 1} must start with \`N: \` (the reply the human types): ${JSON.stringify(d)}`);
+    if (!/→/.test(d))
+      p.push(`--decide #${i + 1} must state its consequence after \`→\`: ${JSON.stringify(d)}`);
+  });
+  return p;
+}
+function renderJudgeBlock(spec) {
+  const { emoji, label } = STATE_LABEL[spec.state];
+  const head = [`${emoji} **${label}**`];
+  if (spec.decisions.length)
+    head.push(`${spec.decisions.length} decision${spec.decisions.length === 1 ? "" : "s"}`);
+  if (spec.unblocks)
+    head.push(`unblocks ${spec.unblocks} issue${spec.unblocks === 1 ? "" : "s"}`);
+  head.push(`since ${shortTime(spec.since)}`);
+  head.push(`checked ${shortTime(spec.checked ?? new Date().toISOString())}`);
+  const lines = [`> ${head.join(" · ")}`];
+  const state = [];
+  const acc = spec.acceptance;
+  const useAcceptance = !!acc && acc.total > 0 && spec.progress == null;
+  const gauge = useAcceptance ? `${meter2(Math.round(acc.done / acc.total * 5))} ${acc.done}/${acc.total} accepted` : meter2(judgeProgress(spec));
+  if (spec.pr)
+    state.push(`PR #${spec.pr}${spec.prStatus?.trim() ? ` ${judgeCell(spec.prStatus)}` : ""}`);
+  if (spec.blocker?.trim())
+    state.push(`blocked: ${judgeCell(spec.blocker)}`);
+  lines.push(`> **State** ${gauge}${state.length ? `${useAcceptance ? " · " : " "}${state.join(" · ")}` : ""}`);
+  if (spec.decisions.length)
+    lines.push(`> **Decide** ${spec.decisions.map((d) => "`" + judgeCell(d).replace(/`/g, "") + "`").join(" · ")}`);
+  if (spec.impact?.trim())
+    lines.push(`> **Impact** ${judgeCell(spec.impact)}`);
+  return `${JUDGE_OPEN} state=${spec.state} since=${spec.since} -->
+${lines.join(`
+`)}
+${JUDGE_END}`;
+}
+var BLOCK_RE = new RegExp(`${escapeRegExp(JUDGE_OPEN)} state=[^\\n]*-->\\n[\\s\\S]*?${escapeRegExp(JUDGE_END)}\\n*`);
+function parseJudgeBlock(body) {
+  const m = new RegExp(`${escapeRegExp(JUDGE_OPEN)} state=(\\S+) since=(\\S+) -->`).exec(body);
+  if (!m || !isJudgeState(m[1]))
+    return null;
+  return { state: m[1], since: m[2] };
+}
+var LEADING_OPEN_RE = new RegExp(`^${escapeRegExp(JUDGE_OPEN)} state=(\\S+) since=(\\S+) -->\\n`);
+function stripLeadingJudgeBlock(body) {
+  const open = LEADING_OPEN_RE.exec(body);
+  if (!open || !isJudgeState(open[1]) || Number.isNaN(Date.parse(open[2])))
+    return null;
+  const afterOpen = body.slice(open[0].length);
+  const end = afterOpen.indexOf(JUDGE_END);
+  if (end < 0)
+    return null;
+  const inner = afterOpen.slice(0, end);
+  if (!inner.endsWith(`
+`))
+    return null;
+  const lines = inner.slice(0, -1).split(`
+`);
+  if (lines.length > 4)
+    return null;
+  const prefix = SHIPFLOW_CONTRACT.markers.markerPrefix;
+  if (lines.some((l) => !l.startsWith("> ") || l.includes("\r") || l.includes(prefix)))
+    return null;
+  const rest = afterOpen.slice(end + JUDGE_END.length);
+  if (rest !== "" && !rest.startsWith(`
+`))
+    return null;
+  return rest.replace(/^\n+/, "");
+}
+function upsertJudgeBlock(body, block) {
+  if (BLOCK_RE.test(body))
+    return body.replace(BLOCK_RE, `${block}
+
+`);
+  return `${block}
+
+${body.replace(/^\s+/, "")}`;
+}
+function extractImpact(body) {
+  const rest = body.replace(BLOCK_RE, "");
+  const m = /^\*\*Impact\*\*\s+(.+?)\s*$/m.exec(rest);
+  return m ? m[1].trim() : undefined;
+}
+function extractAcceptance(body) {
+  const rest = body.replace(BLOCK_RE, "");
+  let done = 0;
+  let total = 0;
+  for (const line of rest.split(`
+`)) {
+    if (/^\s*[-*]\s+\[[xX]\]\s/.test(line)) {
+      done++;
+      total++;
+    } else if (/^\s*[-*]\s+\[ \]\s/.test(line))
+      total++;
+  }
+  return { done, total };
+}
+function linesToAction(body) {
+  const lines = body.split(`
+`);
+  const open = lines.findIndex((l) => l.startsWith(`${JUDGE_OPEN} state=`));
+  if (open >= 0) {
+    const end = lines.findIndex((l, i) => i > open && l.startsWith(JUDGE_END));
+    const decide = lines.findIndex((l, i) => i > open && (end < 0 || i < end) && /^>\s*\*\*Decide\*\*/.test(l));
+    return (decide >= 0 ? decide : open + 1) + 1;
+  }
+  const cue = lines.findIndex((l) => /^>\s*\*\*Decide\*\*/.test(l) || /action needed|remedy:|unblock:/i.test(l));
+  return cue >= 0 ? cue + 1 : -1;
+}
+
 // src/issue-order.ts
 init_pr_state();
 init_shipflow_contract_data();
@@ -7707,7 +7911,7 @@ var INTAKE_GATE_MARKER = "<!-- shipflow:intake-gated -->";
 function hasIntakeGateMarker(comments) {
   return comments.some((c) => c.viewerDidAuthor && /<!--\s*shipflow:intake-gated\s*-->/.test(c.body));
 }
-function classifyIntakeApproval(removals, lastEditedAt, renamedAt, opts) {
+function classifyIntakeApproval(removals, bodyEdits, renamedAt, opts) {
   let approvedAt = null;
   for (const r of removals) {
     if (!r.actorKnown)
@@ -7722,13 +7926,53 @@ function classifyIntakeApproval(removals, lastEditedAt, renamedAt, opts) {
   }
   if (approvedAt === null)
     return "unapproved";
-  const body = (lastEditedAt ?? "").trim();
-  const changes = body === "" ? [...renamedAt] : [body, ...renamedAt];
-  for (const raw of changes) {
-    const changed = Date.parse((raw ?? "").trim());
-    if (Number.isNaN(changed))
+  for (const raw of renamedAt) {
+    const changed2 = Date.parse((raw ?? "").trim());
+    if (Number.isNaN(changed2) || changed2 > approvedAt)
       return "stale";
-    if (changed > approvedAt)
+  }
+  if (bodyEdits != null && typeof bodyEdits === "object")
+    return bodyRevisionsVerdict(bodyEdits, approvedAt);
+  const body = (bodyEdits ?? "").trim();
+  if (body === "")
+    return "approved";
+  const changed = Date.parse(body);
+  return Number.isNaN(changed) || changed > approvedAt ? "stale" : "approved";
+}
+function bodyRevisionsVerdict(history, approvedAt) {
+  const revs = history.revisions;
+  if (revs.length === 0)
+    return "approved";
+  let approvedIdx = -1;
+  let prev = -Infinity;
+  for (let k = 0;k < revs.length; k++) {
+    const t = Date.parse((revs[k].editedAt ?? "").trim());
+    if (Number.isNaN(t))
+      throw new Error(`edit history unverifiable: revision ${k + 1} has no placeable time`);
+    if (t < prev)
+      throw new Error("edit history unverifiable: revisions out of order");
+    prev = t;
+    if (t < approvedAt)
+      approvedIdx = k;
+  }
+  const later = revs.slice(approvedIdx + 1);
+  if (later.length === 0)
+    return "approved";
+  if (approvedIdx < 0)
+    throw new Error("edit history incomplete: no revision before the approval");
+  if (revs.some((r) => typeof r.body !== "string" || r.body === "")) {
+    throw new Error("edit history unverifiable: a revision is deleted, empty or unreadable");
+  }
+  const viewer = (history.viewerLogin ?? "").trim().toLowerCase();
+  if (viewer === "")
+    throw new Error("edit history unverifiable: the CLI's own login is unknown");
+  const approved = revs[approvedIdx].body;
+  const want = (stripLeadingJudgeBlock(approved) ?? approved).replace(/^\s+/, "");
+  for (const r of later) {
+    if ((r.editor ?? "").trim().toLowerCase() !== viewer)
+      return "stale";
+    const rest = stripLeadingJudgeBlock(r.body);
+    if (rest === null || rest.replace(/^\s+/, "") !== want)
       return "stale";
   }
   return "approved";
@@ -7997,138 +8241,6 @@ function renderScreenshotsSection(shots) {
 
 // src/commands/issue.ts
 init_prompts();
-
-// src/judge-block.ts
-init_shipflow_contract_data();
-var JUDGE_OPEN = SHIPFLOW_CONTRACT.markers.judge;
-var JUDGE_END = SHIPFLOW_CONTRACT.markers.judgeEnd;
-var JUDGE_STATES = ["queued", "working", "review", "waiting", "blocked", "merged"];
-function isJudgeState(s) {
-  return JUDGE_STATES.includes(s);
-}
-var STATE_LABEL = {
-  queued: { emoji: "⚪", label: "Queued — nothing needed from you" },
-  working: { emoji: "\uD83D\uDFE2", label: "Loop working" },
-  review: { emoji: "\uD83D\uDD35", label: "PR in review" },
-  waiting: { emoji: "⏸", label: "Waiting on you" },
-  blocked: { emoji: "\uD83D\uDD34", label: "Blocked externally" },
-  merged: { emoji: "✅", label: "Merged" }
-};
-function judgeCell(s) {
-  const prefix = SHIPFLOW_CONTRACT.markers.markerPrefix;
-  return s.replace(/\s+/g, " ").trim().split(prefix).join("&lt;" + prefix.slice(1));
-}
-function judgeProgress(spec) {
-  if (spec.progress != null && Number.isFinite(spec.progress))
-    return Math.max(0, Math.min(5, Math.floor(spec.progress)));
-  if (spec.state === "merged")
-    return 5;
-  if (spec.pr)
-    return /approved/i.test(spec.prStatus ?? "") ? 4 : 3;
-  return spec.state === "working" ? 1 : 0;
-}
-function meter2(n) {
-  const k = Math.max(0, Math.min(5, n));
-  return "▰".repeat(k) + "▱".repeat(5 - k);
-}
-function shortTime(iso) {
-  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(iso);
-  return m ? `${m[1]} ${m[2]}Z` : iso;
-}
-function validateJudgeSpec(spec) {
-  const p = [];
-  if (spec.state === "waiting" && spec.decisions.length === 0) {
-    p.push("state=waiting needs at least one --decide `N: reply → consequence` — the reader must know what to type");
-  }
-  if (spec.state === "blocked" && !spec.blocker?.trim()) {
-    p.push('state=blocked needs a blocker — pass --blocker "<gate> → #<issue>", or park the issue with `issue wait --on` so the chain can be walked');
-  }
-  if (spec.state === "review" && !spec.pr) {
-    p.push("state=review needs --pr <n>");
-  }
-  spec.decisions.forEach((d, i) => {
-    if (!/^\d+:\s+\S/.test(d.trim()))
-      p.push(`--decide #${i + 1} must start with \`N: \` (the reply the human types): ${JSON.stringify(d)}`);
-    if (!/→/.test(d))
-      p.push(`--decide #${i + 1} must state its consequence after \`→\`: ${JSON.stringify(d)}`);
-  });
-  return p;
-}
-function renderJudgeBlock(spec) {
-  const { emoji, label } = STATE_LABEL[spec.state];
-  const head = [`${emoji} **${label}**`];
-  if (spec.decisions.length)
-    head.push(`${spec.decisions.length} decision${spec.decisions.length === 1 ? "" : "s"}`);
-  if (spec.unblocks)
-    head.push(`unblocks ${spec.unblocks} issue${spec.unblocks === 1 ? "" : "s"}`);
-  head.push(`since ${shortTime(spec.since)}`);
-  head.push(`checked ${shortTime(spec.checked ?? new Date().toISOString())}`);
-  const lines = [`> ${head.join(" · ")}`];
-  const state = [];
-  const acc = spec.acceptance;
-  const useAcceptance = !!acc && acc.total > 0 && spec.progress == null;
-  const gauge = useAcceptance ? `${meter2(Math.round(acc.done / acc.total * 5))} ${acc.done}/${acc.total} accepted` : meter2(judgeProgress(spec));
-  if (spec.pr)
-    state.push(`PR #${spec.pr}${spec.prStatus?.trim() ? ` ${judgeCell(spec.prStatus)}` : ""}`);
-  if (spec.blocker?.trim())
-    state.push(`blocked: ${judgeCell(spec.blocker)}`);
-  lines.push(`> **State** ${gauge}${state.length ? `${useAcceptance ? " · " : " "}${state.join(" · ")}` : ""}`);
-  if (spec.decisions.length)
-    lines.push(`> **Decide** ${spec.decisions.map((d) => "`" + judgeCell(d).replace(/`/g, "") + "`").join(" · ")}`);
-  if (spec.impact?.trim())
-    lines.push(`> **Impact** ${judgeCell(spec.impact)}`);
-  return `${JUDGE_OPEN} state=${spec.state} since=${spec.since} -->
-${lines.join(`
-`)}
-${JUDGE_END}`;
-}
-var BLOCK_RE = new RegExp(`${escapeRegExp(JUDGE_OPEN)} state=[^\\n]*-->\\n[\\s\\S]*?${escapeRegExp(JUDGE_END)}\\n*`);
-function parseJudgeBlock(body) {
-  const m = new RegExp(`${escapeRegExp(JUDGE_OPEN)} state=(\\S+) since=(\\S+) -->`).exec(body);
-  if (!m || !isJudgeState(m[1]))
-    return null;
-  return { state: m[1], since: m[2] };
-}
-function upsertJudgeBlock(body, block) {
-  if (BLOCK_RE.test(body))
-    return body.replace(BLOCK_RE, `${block}
-
-`);
-  return `${block}
-
-${body.replace(/^\s+/, "")}`;
-}
-function extractImpact(body) {
-  const rest = body.replace(BLOCK_RE, "");
-  const m = /^\*\*Impact\*\*\s+(.+?)\s*$/m.exec(rest);
-  return m ? m[1].trim() : undefined;
-}
-function extractAcceptance(body) {
-  const rest = body.replace(BLOCK_RE, "");
-  let done = 0;
-  let total = 0;
-  for (const line of rest.split(`
-`)) {
-    if (/^\s*[-*]\s+\[[xX]\]\s/.test(line)) {
-      done++;
-      total++;
-    } else if (/^\s*[-*]\s+\[ \]\s/.test(line))
-      total++;
-  }
-  return { done, total };
-}
-function linesToAction(body) {
-  const lines = body.split(`
-`);
-  const open = lines.findIndex((l) => l.startsWith(`${JUDGE_OPEN} state=`));
-  if (open >= 0) {
-    const end = lines.findIndex((l, i) => i > open && l.startsWith(JUDGE_END));
-    const decide = lines.findIndex((l, i) => i > open && (end < 0 || i < end) && /^>\s*\*\*Decide\*\*/.test(l));
-    return (decide >= 0 ? decide : open + 1) + 1;
-  }
-  const cue = lines.findIndex((l) => /^>\s*\*\*Decide\*\*/.test(l) || /action needed|remedy:|unblock:/i.test(l));
-  return cue >= 0 ? cue + 1 : -1;
-}
 
 // src/judge-chain.ts
 function nextHop(issue, repo) {
@@ -8526,7 +8638,7 @@ ${section}` : section;
             const timeline = ghIssueTimelineSignals(repo, i.number, NEEDS_REPORTER_APPROVAL_LABEL);
             const botStrip = timeline.removals.some((r) => r.actorKnown && r.actorIsBot === true);
             const hasIntakeAudit = botStrip && ghIntakeGateAuditCount(repo, i.number) > 0;
-            approval = classifyIntakeApproval(timeline.removals, ghIssueLastEditedAt(repo, i.number), timeline.renamedAt, { hasIntakeAudit });
+            approval = classifyIntakeApproval(timeline.removals, ghIssueBodyRevisions(repo, i.number), timeline.renamedAt, { hasIntakeAudit });
           } catch (e) {
             console.warn(`intake gate: could not read #${i.number}'s approval evidence (withheld this pass, nothing written): ${e.message}`);
           }

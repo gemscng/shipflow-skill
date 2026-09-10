@@ -495,9 +495,13 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
      - **One reply ≠ two decisions:** if `needs-reporter-review` is also
        on the issue, that confirm does **not** clear approval.
      - **Approval binds to the CONTENT:** body OR title edited **after**
-       removal → re-arm (pre-approval edits untouched). `lastEditedAt` =
-       body only; a retitle is a `RenamedTitleEvent`, and on a thin-bodied
-       issue the title IS the spec (PR #450 round 6).
+       removal → re-arm (pre-approval edits untouched). Body = the full
+       `userContentEdits` history: every later revision must be saved by
+       the loop's own account AND match the approved text once one leading
+       Judge block is removed, so `issue judge` updates don't re-arm; any
+       other edit re-arms, unreadable history withholds (#1129). A retitle
+       is a `RenamedTitleEvent`, and on a thin-bodied issue the title IS
+       the spec (PR #450 round 6).
      - **Chat reports by a maintainer are not gated:** a Slack/Discord
        report is filed by the App, so its association reads `NONE`. When
        the linked reporter holds write/maintain/admin on the repo the
