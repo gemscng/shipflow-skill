@@ -40,7 +40,10 @@ case "$UPD" in
     # stored CLI config (renaiss-shipflow config set live-reload …), else unset.
     PREF="${SHIPFLOW_LIVE_RELOAD:-}"
     if [ -z "$PREF" ]; then
-      PREF="$(grep -o '"liveReload"[[:space:]]*:[[:space:]]*\(true\|false\)' "$HOME/.config/renaissshipflow/config.json" 2>/dev/null | grep -oE 'true|false' | head -1)"
+      # `|| true`: no config file, or no liveReload key in it, is the UNDECIDED
+      # case — grep exits non-zero there, and under `set -euo pipefail` that
+      # killed the hook before it could ask (issue #676).
+      PREF="$(grep -o '"liveReload"[[:space:]]*:[[:space:]]*\(true\|false\)' "$HOME/.config/renaissshipflow/config.json" 2>/dev/null | grep -oE 'true|false' | head -1 || true)"
     fi
     case "$PREF" in 1|true|yes|on|TRUE) PREF=true ;; 0|false|no|off|FALSE) PREF=false ;; *) PREF="" ;; esac
 

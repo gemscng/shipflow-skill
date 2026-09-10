@@ -27,7 +27,8 @@ silently installs any pending update at each session start, so updates load
 `SHIPFLOW_LIVE_RELOAD` overrides). When **unset** and an update installs, the
 hook adds a note: ask the user **once**, persist the answer with
 `renaiss-shipflow config set live-reload true` (or `false`), offer
-`/reload-plugins` for the current update, and never re-ask. `true` → the hook
+`/reload-plugins` for the current update, and never re-ask. To be asked again,
+restore it with `renaiss-shipflow config unset live-reload`. `true` → the hook
 refreshes the loaded plugin dir in place and emits `reloadSkills`, applying
 new skills/commands in the **current** session (experimental: the version
 label stays stale until restart; may miss some changes). `false` → the safe

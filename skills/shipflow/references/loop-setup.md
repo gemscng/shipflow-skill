@@ -86,7 +86,8 @@ PR-triggered workflow, or have the user set `require-ci false` first.
 
 ## Policies — the three knobs (set once, then trust them)
 
-Read with `renaiss-shipflow config list`; set with `config set <key> <v>`
+Read with `renaiss-shipflow config list`; set with `config set <key> <v>`;
+restore the default with `renaiss-shipflow config unset <key>`
 (env vars `SHIPFLOW_*` override):
 
 | Knob | Default | Meaning |

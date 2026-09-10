@@ -12870,15 +12870,29 @@ function registerConfigCommand(program2) {
     try {
       echo = s.set(value, cfg);
     } catch (e) {
+      let message = e.message;
+      if (value.trim().toLowerCase() === "unset") {
+        message += ` — to restore the default, run: renaiss-shipflow config unset ${key}`;
+      }
       if (opts.json) {
-        console.log(JSON.stringify({ error: e.message }));
+        console.log(JSON.stringify({ error: message }));
       } else {
-        console.error(e.message);
+        console.error(message);
       }
       process.exit(1);
     }
     saveConfig(cfg);
     emit(opts, { [s.field]: s.effective() ?? null }, () => console.log(`${key} = ${echo}`));
+  }));
+  config.command("unset <key>").description("Restore a preference to its default (removes the stored value; env vars still override)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((key, opts) => {
+    const s = byKey.get(key) ?? unknownKey(key, opts.json);
+    const cfg = loadConfig();
+    if (Object.hasOwn(cfg, s.field)) {
+      delete cfg[s.field];
+      saveConfig(cfg);
+    }
+    const v = s.effective();
+    emit(opts, { [s.field]: v ?? null }, () => console.log(`${key} = ${v === undefined ? "unset" : String(v)}`));
   }));
   config.command("get <key>").description("Read a preference (env vars override stored config)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((key, opts) => {
     const s = byKey.get(key) ?? unknownKey(key, opts.json);
