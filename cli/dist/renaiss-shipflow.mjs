@@ -3457,6 +3457,49 @@ function hasCompleteReplyChoices(reason) {
   }
   return complete && choices.size >= 2;
 }
+function isRecommendationCell(cell) {
+  const match = /^([*_]*)recommendation([*_]*)$/i.exec(cell.trim());
+  if (!match)
+    return false;
+  if (!match[1] && !match[2])
+    return true;
+  const runs = [];
+  for (const [side, markers] of [match[1], match[2]].entries()) {
+    const parts = markers.match(/\*+|_+/g) ?? [];
+    for (const [i, part] of parts.entries()) {
+      runs.push({
+        marker: part[0],
+        left: side === 0,
+        size: part.length,
+        open: side === 0 || i < parts.length - 1 && (i > 0 || part[0] === "*"),
+        close: side === 1 || i > 0 && (i < parts.length - 1 || part[0] === "*")
+      });
+    }
+  }
+  for (let end = 0;end < runs.length; end++) {
+    const closer = runs[end];
+    while (closer.close && closer.size) {
+      let start = end - 1;
+      for (;start >= 0; start--) {
+        const opener2 = runs[start];
+        if (!opener2.size || !opener2.open || opener2.marker !== closer.marker)
+          continue;
+        if ((opener2.close || closer.open) && closer.size % 3 !== 0 && (opener2.size + closer.size) % 3 === 0)
+          continue;
+        break;
+      }
+      if (start < 0)
+        break;
+      const opener = runs[start];
+      if (!opener.left || closer.left || runs.slice(start + 1, end).some((run) => run.size))
+        return false;
+      const used = opener.size > 1 && closer.size > 1 ? 2 : 1;
+      opener.size -= used;
+      closer.size -= used;
+    }
+  }
+  return runs.every((run) => run.size === 0);
+}
 function lintEscalationReason(reason) {
   const r = reason.trim();
   const problems = [];
@@ -3472,8 +3515,8 @@ function lintEscalationReason(reason) {
     problems.push('says "see the issue body" — an escalation must be self-contained; inline the substance');
   }
   const tableHeaders = r.matchAll(/^\s*\|\s*#\s*\|([^\n]*)$/gm);
-  const hasDecisionTable = [...tableHeaders].some((header) => /(?:^|\|)\s*recommendation\s*(?:\||$)/i.test(header[1]));
-  if (hasDecisionTable && /^\s*\*\*recommendation:?\*\*/im.test(r)) {
+  const hasDecisionTable = [...tableHeaders].some((header) => header[1].split("|").some(isRecommendationCell));
+  if (hasDecisionTable && STANDALONE_RECOMMENDATION_RE.test(r)) {
     problems.push("carries both a decision table with a Recommendation column and a separate **Recommendation:** line — state each recommendation once, in the table row it belongs to");
   }
   const actionLines = actionSectionLineCount(r);
@@ -3696,7 +3739,7 @@ function formatEscalationBody(reason, opts = {}) {
   ].join(`
 `);
 }
-var ESCALATION_CATEGORIES, ACTION_SECTION_LINE_CAP = 10, ACTION_LINE_WORD_LIMIT, DECISION_LOOSE_LINE, RE_ESCAPE, ESCALATION_BANNER;
+var ESCALATION_CATEGORIES, ACTION_SECTION_LINE_CAP = 10, ACTION_LINE_WORD_LIMIT, STANDALONE_RECOMMENDATION_RE, DECISION_LOOSE_LINE, RE_ESCAPE, ESCALATION_BANNER;
 var init_escalation_format = __esm(() => {
   init_shipflow_contract_data();
   init_pr_state();
@@ -3710,6 +3753,7 @@ var init_escalation_format = __esm(() => {
     design: "This changes what people see or how they interact (a new screen, layout, visual, or flow), and " + "taste and product fit are the reporter's call. A design built first and rejected later costs a " + "full rework, so the loop proposes the design here and builds only the option approved."
   };
   ACTION_LINE_WORD_LIMIT = SHIPFLOW_CONTRACT.readability.visibleLineWordCap;
+  STANDALONE_RECOMMENDATION_RE = /^\s*\*\*recommendation:?\*\*/im;
   DECISION_LOOSE_LINE = /^\s*(\d+)(?:[.)]\s+|\s+[-–]\s+)(\S.*)$/;
   RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
   ESCALATION_BANNER = `${SHIPFLOW_CONTRACT.markers.escalationBannerHeading} — the loop is parked here until you reply.`;
