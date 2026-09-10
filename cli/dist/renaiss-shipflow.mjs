@@ -5546,6 +5546,88 @@ function registerTriggerCommand(program2) {
 init_gh();
 init_client();
 init_config();
+
+// src/profile-select.ts
+init_config();
+init_project();
+import { execSync as execSync3 } from "node:child_process";
+function listStores() {
+  return ["", ...listProfiles()].map((name) => {
+    const creds = credentialsForProfile(name);
+    return { name, org: creds?.org ?? "", signedIn: !!creds?.jwt };
+  });
+}
+function selectStoreForOwner(stores, owner) {
+  const want = owner.trim().toLowerCase();
+  if (!want)
+    return null;
+  const hits = stores.filter((s) => s.org.trim().toLowerCase() === want);
+  return hits.find((s) => s.signedIn) ?? hits[0] ?? null;
+}
+function profileNameForOrg(org) {
+  const slug = org.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || "org";
+}
+function storeForLogin(stores, org) {
+  const hit = selectStoreForOwner(stores, org);
+  if (hit)
+    return hit.name;
+  const dflt = stores.find((s) => s.name === "");
+  const defaultEmpty = !dflt || !dflt.org && !dflt.signedIn;
+  return defaultEmpty ? "" : profileNameForOrg(org);
+}
+function autoProfileDisabled() {
+  const v = (process.env.SHIPFLOW_PROFILE_AUTO ?? "").trim().toLowerCase();
+  return ["off", "0", "false", "no"].includes(v);
+}
+function cwdOriginOwner() {
+  try {
+    const url = execSync3("git remote get-url origin", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    return parseGitRemote(url)?.owner ?? null;
+  } catch {
+    return null;
+  }
+}
+function autoSelectProfile(opts = {}) {
+  if (autoProfileDisabled())
+    return null;
+  const stores = opts.stores ?? listStores();
+  if (!stores.some((s) => s.name !== ""))
+    return null;
+  const owner = opts.owner === undefined ? cwdOriginOwner() : opts.owner;
+  if (!owner)
+    return null;
+  const hit = selectStoreForOwner(stores, owner);
+  return hit ? { profile: hit.name, owner } : null;
+}
+var source = "none";
+var selection = null;
+function applyProfileSelection(flag) {
+  const explicit = (flag ?? "").trim();
+  if (explicit) {
+    process.env.SHIPFLOW_PROFILE = explicit;
+    source = "flag";
+    return;
+  }
+  if (activeProfile()) {
+    source = "env";
+    return;
+  }
+  const auto = autoSelectProfile();
+  if (auto) {
+    process.env.SHIPFLOW_PROFILE = auto.profile;
+    source = "auto";
+    selection = auto;
+  }
+}
+function profileSource() {
+  return source;
+}
+function autoSelection() {
+  return selection;
+}
+
+// src/commands/login.ts
 init_prompts();
 init_helpers();
 
@@ -5685,7 +5767,16 @@ function formatTokenConnectError(status, body) {
   return null;
 }
 function registerLoginCommand(program2) {
-  program2.command("login").description("Sign in to ShipFlow (uses gh auth)").option("--no-gh-bootstrap", "Don't auto-run `gh auth login` if gh isn't logged in").option("--with-gh-token", "If no ShipFlow org exists for your account yet, connect one with your gh token — a bridge while the GitHub App install awaits an org admin's approval (#980)").option("--org <login>", "Org to connect with --with-gh-token (defaults to your only org without the App)").action(runAction(async (opts) => {
+  program2.command("login").description("Sign in to ShipFlow (uses gh auth)").option("--no-gh-bootstrap", "Don't auto-run `gh auth login` if gh isn't logged in").option("--with-gh-token", "If no ShipFlow org exists for your account yet, connect one with your gh token — a bridge while the GitHub App install awaits an org admin's approval (#980)").option("--org <login>", "Org to sign in to (skips the tenant prompt); with --with-gh-token, the org to connect (defaults to your only org without the App)").option("--all", "Sign in to every tenant you belong to, each in its own store (issue #1146) — no prompt").action(runAction(async (opts) => {
+    if (opts.all && opts.org) {
+      console.error("--all signs in to every tenant; drop --org (or drop --all to pick one).");
+      process.exit(1);
+    }
+    const explicitStore = profileSource() === "flag" || profileSource() === "env";
+    if (opts.all && explicitStore) {
+      console.error("--all writes each org to its own store; drop --profile / SHIPFLOW_PROFILE.");
+      process.exit(1);
+    }
     if (!ghInstalled()) {
       console.error("gh (GitHub CLI) is not installed. See https://cli.github.com/");
       process.exit(1);
@@ -5734,43 +5825,68 @@ function registerLoginCommand(program2) {
       result = connected.result;
       connectedLine = connected.line;
     }
+    const identity = captureGitIdentity();
+    if (opts.all) {
+      if (connectedLine)
+        console.log(connectedLine);
+      for (const t of result.tenants) {
+        process.env.SHIPFLOW_PROFILE = storeForLogin(listStores(), t.tenant.githubOrg);
+        persistSession(t, apiUrl, identity);
+        const where2 = activeProfile() ? ` [profile: ${activeProfile()}]` : " [default store]";
+        console.log(`Signed in for ${t.tenant.displayName} (${t.tenant.githubOrg})${where2}.`);
+      }
+      console.log(`${result.tenants.length} tenant${result.tenants.length === 1 ? "" : "s"} signed in (${apiUrl}). ` + "Commands pick the store from each repo's origin owner; `renaiss-shipflow profiles` lists them." + identity.line);
+      return;
+    }
     const wanted = opts.org?.trim().toLowerCase();
     let chosen = result.tenants.find((t) => wanted && t.tenant.githubOrg.toLowerCase() === wanted) ?? result.tenants[0];
     if (result.tenants.length > 1 && !(wanted && chosen.tenant.githubOrg.toLowerCase() === wanted)) {
       const idx = await promptSelect("You belong to multiple ShipFlow tenants. Pick one:", result.tenants.map((t) => `${t.tenant.displayName} (${t.tenant.githubOrg})`));
       chosen = result.tenants[idx];
     }
-    saveCredentials({
-      jwt: chosen.token,
-      refreshToken: chosen.refreshToken,
-      tenantId: chosen.tenant.id,
-      org: chosen.tenant.githubOrg,
-      expiresAt: Math.floor(Date.now() / 1000) + 24 * 60 * 60
-    });
-    const cfg = loadConfig();
-    cfg.defaultOrg = chosen.tenant.githubOrg;
-    cfg.apiUrl = apiUrl;
-    let gitLine = "";
-    try {
-      const u = ghUser();
-      cfg.gitName = u.name;
-      cfg.gitEmail = ghMatchedEmail(u);
-      gitLine = `
-Git identity captured: ${cfg.gitName} <${cfg.gitEmail}> — apply per-repo with \`renaiss-shipflow git-identity --fix\`.`;
-    } catch {
-      gitLine = "\n⚠️ Could not read the GitHub account's email — run `renaiss-shipflow git-identity --fix` later.";
-    }
-    saveConfig(cfg);
+    if (!explicitStore)
+      process.env.SHIPFLOW_PROFILE = storeForLogin(listStores(), chosen.tenant.githubOrg);
+    persistSession(chosen, apiUrl, identity);
     const profile = activeProfile();
     const where = profile ? ` [profile: ${profile}]` : "";
     if (connectedLine)
       console.log(connectedLine);
-    console.log(`Signed in as @${process.env.USER ?? "you"} for ${chosen.tenant.displayName} (${apiUrl})${where}.${gitLine}`);
-    if (!profile && result.tenants.length > 1) {
-      console.log(`Tip: you belong to multiple tenants — keep them side by side with profiles, e.g.
-` + `  renaiss-shipflow --profile ${chosen.tenant.githubOrg} login`);
+    console.log(`Signed in as @${process.env.USER ?? "you"} for ${chosen.tenant.displayName} (${apiUrl})${where}.${identity.line}`);
+    if (result.tenants.length > 1) {
+      console.log("Tip: you belong to multiple tenants — `renaiss-shipflow login --all` signs in to every one, each in its own store;\n" + "  commands then pick the store from the repo's origin owner (`renaiss-shipflow profiles` shows which).");
     }
   }));
+}
+function captureGitIdentity() {
+  try {
+    const u = ghUser();
+    const email = ghMatchedEmail(u);
+    return {
+      name: u.name,
+      email,
+      line: `
+Git identity captured: ${u.name} <${email}> — apply per-repo with \`renaiss-shipflow git-identity --fix\`.`
+    };
+  } catch {
+    return { line: "\n⚠️ Could not read the GitHub account's email — run `renaiss-shipflow git-identity --fix` later." };
+  }
+}
+function persistSession(t, apiUrl, identity) {
+  saveCredentials({
+    jwt: t.token,
+    refreshToken: t.refreshToken,
+    tenantId: t.tenant.id,
+    org: t.tenant.githubOrg,
+    expiresAt: Math.floor(Date.now() / 1000) + 24 * 60 * 60
+  });
+  const cfg = loadConfig();
+  cfg.defaultOrg = t.tenant.githubOrg;
+  cfg.apiUrl = apiUrl;
+  if (identity.name)
+    cfg.gitName = identity.name;
+  if (identity.email)
+    cfg.gitEmail = identity.email;
+  saveConfig(cfg);
 }
 async function pickOrgForTokenConnect(payload, explicitOrg) {
   const picked = pickTokenConnectOrg(payload.orgs, explicitOrg);
@@ -5804,7 +5920,7 @@ async function connectOrgWithGhToken(client, ghToken, org) {
 // src/commands/git-identity.ts
 init_gh();
 init_config();
-import { execFileSync, execSync as execSync3 } from "node:child_process";
+import { execFileSync, execSync as execSync4 } from "node:child_process";
 import { hostname } from "node:os";
 
 // src/git-local.ts
@@ -5971,7 +6087,7 @@ function findSuspiciousEmails(emails, hostname) {
 init_helpers();
 var git = (args) => {
   try {
-    return execSync3(`git ${args}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    return execSync4(`git ${args}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
   } catch {
     return "";
   }
@@ -6093,7 +6209,7 @@ init_client();
 
 // src/cli-drift.ts
 init_sh();
-import { execSync as execSync4 } from "node:child_process";
+import { execSync as execSync5 } from "node:child_process";
 import { createRequire as createRequire2 } from "node:module";
 import { existsSync as existsSync2, readdirSync as readdirSync2, realpathSync as realpathSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
@@ -6275,7 +6391,7 @@ async function fetchRegistryLatest(opts = {}) {
     return { package: pkg, latest: null, error: e instanceof Error ? e.message : String(e) };
   }
 }
-var mainCliExec = execSync4;
+var mainCliExec = execSync5;
 function readMainCliVersion(opts = {}) {
   const exec = opts.exec ?? mainCliExec;
   try {
@@ -8929,7 +9045,7 @@ init_helpers();
 // src/commands/pr.ts
 init_config();
 init_gh();
-import { execSync as execSync5 } from "node:child_process";
+import { execSync as execSync6 } from "node:child_process";
 import { closeSync, existsSync as existsSync3, lstatSync, openSync, readFileSync as readFileSync5, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { createHash as createHash3 } from "node:crypto";
 import { join as join4 } from "node:path";
@@ -10421,7 +10537,7 @@ ${opts.body ?? ""}`;
     await signalBestEffort(ctx, "prs", created.number, "opened", {
       repo: ctx.project.repoFullName,
       branch,
-      headSha: execSync5("git rev-parse HEAD").toString().trim(),
+      headSha: execSync6("git rev-parse HEAD").toString().trim(),
       issueRefs: issueNumber ? [issueNumber] : [],
       previewUrl: opts.previewUrl ?? ""
     }, "PR opened but ShipFlow signal failed");
@@ -10565,7 +10681,7 @@ ${opts.body ?? ""}`;
     }
     const guard = syncEntryGuard({
       rebase: rebaseInProgress(),
-      currentBranch: execSync5("git rev-parse --abbrev-ref HEAD").toString().trim(),
+      currentBranch: execSync6("git rev-parse --abbrev-ref HEAD").toString().trim(),
       head,
       number,
       base: rebaseOnto() ?? `origin/${base}`,
@@ -10577,18 +10693,18 @@ ${opts.body ?? ""}`;
     }
     const beforeSha = localHeadSha();
     try {
-      execSync5(`git fetch origin ${shellQuote(base)}`, { stdio: "ignore" });
+      execSync6(`git fetch origin ${shellQuote(base)}`, { stdio: "ignore" });
     } catch (e) {
       throw new Error(`git fetch origin ${base} failed (network or remote issue): ${e.message}`);
     }
     let conflicted = false;
     try {
-      execSync5(`git rebase ${shellQuote(`origin/${base}`)}`, { stdio: "pipe" });
+      execSync6(`git rebase ${shellQuote(`origin/${base}`)}`, { stdio: "pipe" });
     } catch {
       conflicted = true;
       if (!opts.keepConflicts) {
         try {
-          execSync5("git rebase --abort", { stdio: "ignore" });
+          execSync6("git rebase --abort", { stdio: "ignore" });
         } catch {}
       }
     }
@@ -10629,7 +10745,7 @@ ${opts.body ?? ""}`;
     let pushed = false;
     if (opts.push !== false) {
       try {
-        execSync5("git push --force-with-lease", { stdio: "ignore" });
+        execSync6("git push --force-with-lease", { stdio: "ignore" });
       } catch (e) {
         throw new Error(`git push --force-with-lease failed (network, or the remote moved — rebase again): ${e.message}`);
       }
@@ -10929,7 +11045,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
 
 `);
     try {
-      execSync5(`gh pr comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(stampLoopReview(opts.comment))}`, { stdio: ["ignore", "ignore", "inherit"] });
+      execSync6(`gh pr comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(stampLoopReview(opts.comment))}`, { stdio: ["ignore", "ignore", "inherit"] });
     } catch (e) {
       emit(opts, { number, approved: false, scan: scanField, ...degradedField({ degraded: [...ctx.degraded, GITHUB_REST_DEP] }) }, () => {
         console.error(`⛔ Not approving PR #${number}: the scan attestation comment could not be posted (${flattenCause(e)}).`);
@@ -11032,7 +11148,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
 function branchAuthorEmails() {
   for (const range of ["origin/main..HEAD", "origin/master..HEAD"]) {
     try {
-      const out = execSync5(`git log --format=%ae ${range}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+      const out = execSync6(`git log --format=%ae ${range}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
       if (out)
         return out.split(`
 `);
@@ -11040,7 +11156,7 @@ function branchAuthorEmails() {
     } catch {}
   }
   try {
-    return execSync5("git log --format=%ae -30", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(`
+    return execSync6("git log --format=%ae -30", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(`
 `).filter(Boolean);
   } catch {
     return [];
@@ -11130,7 +11246,7 @@ function watchStdinBytes() {
   };
 }
 function currentBranch() {
-  return execSync5("git rev-parse --abbrev-ref HEAD").toString().trim();
+  return execSync6("git rev-parse --abbrev-ref HEAD").toString().trim();
 }
 function detectIssueFromBranch(branch) {
   const m = branch.match(/^(?:issue|fix|feat)\/(?:issue-)?(\d+)/);
@@ -11212,7 +11328,7 @@ function parseConflictMarkerRecords(out) {
 }
 function gitPaths(cmd) {
   try {
-    const out = execSync5(`${cmd} -z`, { cwd: repoToplevel(), stdio: ["ignore", "pipe", "ignore"] }).toString();
+    const out = execSync6(`${cmd} -z`, { cwd: repoToplevel(), stdio: ["ignore", "pipe", "ignore"] }).toString();
     return { paths: out.split("\x00").filter(Boolean), ok: true, cmd };
   } catch {
     return { paths: [], ok: false, cmd };
@@ -11224,7 +11340,7 @@ function changedPaths(baseRef) {
 function repoToplevel() {
   let root;
   try {
-    root = execSync5("git rev-parse --show-toplevel", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    root = execSync6("git rev-parse --show-toplevel", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
   } catch (e) {
     throw new Error(`conflict-marker scan failed (git rev-parse --show-toplevel): ${e.message}`);
   }
@@ -11256,7 +11372,7 @@ function grepConflictMarkers(root, mode, chunk) {
   const pathspec = chunk.map(shellQuote).join(" ");
   const cmd = `git --literal-pathspecs grep --text -z ${mode} -E ${shellQuote(CONFLICT_MARKER_PATTERN)} -- ${pathspec}`;
   try {
-    return execSync5(cmd, { cwd: root, stdio: ["ignore", "pipe", "ignore"] }).toString();
+    return execSync6(cmd, { cwd: root, stdio: ["ignore", "pipe", "ignore"] }).toString();
   } catch (e) {
     if (e.status === 1)
       return "";
@@ -11286,7 +11402,7 @@ function unrecoveredMatches(matched, recovered) {
 function rebaseInProgress() {
   let gitDir;
   try {
-    gitDir = execSync5("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    gitDir = execSync6("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
   } catch {
     return null;
   }
@@ -11298,7 +11414,7 @@ function rebaseInProgress() {
 }
 function refExists(ref) {
   try {
-    execSync5(`git rev-parse --verify --quiet ${shellQuote(`${ref}^{commit}`)}`, { stdio: ["ignore", "ignore", "ignore"] });
+    execSync6(`git rev-parse --verify --quiet ${shellQuote(`${ref}^{commit}`)}`, { stdio: ["ignore", "ignore", "ignore"] });
     return true;
   } catch {
     return false;
@@ -11309,7 +11425,7 @@ function rebaseOnto() {
   if (!state)
     return null;
   try {
-    const gitDir = execSync5("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    const gitDir = execSync6("git rev-parse --absolute-git-dir", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
     const onto = readFileSync5(join4(gitDir, state, "onto"), "utf8").trim();
     return onto && refExists(onto) ? onto : null;
   } catch {
@@ -11318,7 +11434,7 @@ function rebaseOnto() {
 }
 function originHeadRef() {
   try {
-    const ref = execSync5("git symbolic-ref --short refs/remotes/origin/HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    const ref = execSync6("git symbolic-ref --short refs/remotes/origin/HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
     return ref && refExists(ref) ? ref : null;
   } catch {
     return null;
@@ -11364,7 +11480,7 @@ function shouldDropApprovedLabel(i) {
 }
 function localHeadSha() {
   try {
-    return commitSha(execSync5("git rev-parse HEAD").toString());
+    return commitSha(execSync6("git rev-parse HEAD").toString());
   } catch {
     return null;
   }
@@ -12061,9 +12177,9 @@ function verdictForFeatureMapping(fm) {
 init_output();
 init_project();
 init_helpers();
-import { execSync as execSync6 } from "node:child_process";
+import { execSync as execSync7 } from "node:child_process";
 var REF_RESOLUTION_ERROR = "Failed to resolve git HEAD ref. Ensure you are in a git repository with at least one commit, or pass --ref explicitly.";
-function resolveRef(explicit, runGit = () => execSync6("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim()) {
+function resolveRef(explicit, runGit = () => execSync7("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim()) {
   if (explicit)
     return explicit;
   let ref = "";
@@ -12762,7 +12878,7 @@ function detectRunner(root) {
 // src/commands/release.ts
 init_prompts();
 init_helpers();
-import { execSync as execSync7 } from "node:child_process";
+import { execSync as execSync8 } from "node:child_process";
 function registerReleaseCommand(program2) {
   program2.command("release").description("Trigger a ShipFlow release (patch_notes + regression + downstream workflows)").option("--tag <tag>", "Release tag (e.g. v0.7.3)").option("--base-tag <tag>", "Previous tag (auto-detect if omitted)").option("--env <env>", "Target environment (staging|prod)").option("--wait", "Block and stream status until terminal").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     requireFlagWhenMachine(opts, "--tag", opts.tag);
@@ -12786,7 +12902,7 @@ function registerReleaseCommand(program2) {
 }
 function safeLatestTag() {
   try {
-    return execSync7("git describe --tags --abbrev=0", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    return execSync8("git describe --tags --abbrev=0", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
   } catch {
     return;
   }
@@ -12812,9 +12928,25 @@ function registerProfilesCommand(program2) {
   const profiles = program2.command("profiles").description("List config profiles (isolated credentials per tenant)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction((opts) => {
     const active = activeProfile();
     const data = rows();
-    emit(opts, { active: active || null, dir: configDir(), profiles: data }, () => {
-      console.log(`Active profile: ${active || "(default)"}`);
+    const source2 = profileSource();
+    const auto = autoSelection();
+    const owner = cwdOriginOwner();
+    const holder = owner ? selectStoreForOwner(listStores(), owner) : null;
+    emit(opts, {
+      active: active || null,
+      source: source2,
+      autoSelected: auto,
+      cwdOwner: owner,
+      cwdOwnerStore: holder ? holder.name : null,
+      dir: configDir(),
+      profiles: data
+    }, () => {
+      const how = source2 === "auto" && auto ? ` (auto: origin owner ${auto.owner})` : source2 === "flag" ? " (--profile)" : source2 === "env" ? " (SHIPFLOW_PROFILE)" : "";
+      console.log(`Active profile: ${active || "(default)"}${how}`);
       console.log(`Config dir:     ${configDir()}`);
+      if (owner && !holder) {
+        console.log(`Repo owner:     ${owner} — no store holds this org; sign in with: renaiss-shipflow login --org ${owner}`);
+      }
       console.log("");
       const tableRows = data.map((r) => [
         `${r.active ? "*" : " "} ${r.profile || "(default)"}`,
@@ -12824,11 +12956,10 @@ function registerProfilesCommand(program2) {
       ]);
       for (const l of renderTable(["Profile", "Signed in", "Org", "Tenant"], tableRows))
         console.log(l);
-      if (data.filter((r) => r.signedIn).length < 2) {
-        console.log("");
-        console.log("Add a tenant in its own store:");
-        console.log("  renaiss-shipflow --profile <name> login   (or SHIPFLOW_PROFILE=<name> renaiss-shipflow login)");
-      }
+      console.log("");
+      console.log("Each org keeps its own store; commands pick the store from the repo's origin owner.");
+      console.log("  add an org:        renaiss-shipflow login --org <org>     (every tenant at once: login --all)");
+      console.log("  force one store:   --profile <name> / SHIPFLOW_PROFILE=<name>; disable auto-selection: SHIPFLOW_PROFILE_AUTO=off");
     }, { pretty: true });
   }));
   profiles.command("dir").description("Print the active config directory (honors --profile / SHIPFLOW_PROFILE / SHIPFLOW_CONFIG_DIR)").action(runAction(() => {
@@ -12841,9 +12972,7 @@ var pkg = createRequire3(import.meta.url)("../package.json");
 var program2 = new Command;
 program2.name("renaiss-shipflow").description("CLI for RenaissShipFlow - AI-powered project management automation").version(pkg.version).option("--api-url <url>", "RenaissShipFlow API base URL").option("--org <org>", "Organization slug", "default").option("--profile <name>", "Config profile — isolated credentials per tenant (also SHIPFLOW_PROFILE)");
 program2.hook("preAction", () => {
-  const p = program2.opts().profile;
-  if (p)
-    process.env.SHIPFLOW_PROFILE = p;
+  applyProfileSelection(program2.opts().profile);
 });
 installJsonUsageOverride(program2);
 registerAuthCommands(program2);

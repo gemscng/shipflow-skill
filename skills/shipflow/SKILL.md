@@ -85,7 +85,8 @@ are identical across harnesses.
 | "sign in" | `renaiss-shipflow login` |
 | "connect with my gh token (App install not approved yet)" | `renaiss-shipflow login --with-gh-token --org <org>` — bridge (#980); GitHub events are not delivered until the App is installed |
 | "link this repo" | `renaiss-shipflow init` |
-| "list config profiles" | `renaiss-shipflow profiles` — switch with `--profile <name>` or `SHIPFLOW_PROFILE` |
+| "list config profiles" / "which org am I using here" | `renaiss-shipflow profiles` — one store per org, picked automatically from the repo's `origin` owner (#1146); force one with `--profile <name>` / `SHIPFLOW_PROFILE`, disable with `SHIPFLOW_PROFILE_AUTO=off` |
+| "sign in to another org" / "every ShipFlow call here is 404/403" | `renaiss-shipflow login --org <org>` writes that org to its own store without touching the others; `renaiss-shipflow login --all` signs in to every tenant at once. A 404/403 in a repo whose owner has no store is a missing sign-in, not an outage — `profiles` names the gap |
 
 ## Output handling
 
