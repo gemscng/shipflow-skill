@@ -2284,7 +2284,10 @@ class ShipFlowClient {
   async claimIssue(org, projectId, number, body) {
     try {
       const res = await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/issues/${number}/claim`, body);
-      return res?.claim ?? null;
+      return {
+        claim: res?.claim ?? null,
+        reflectionWarnings: Array.isArray(res?.reflectionWarnings) ? res.reflectionWarnings : []
+      };
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
         let holder;
@@ -8494,6 +8497,20 @@ function renderReadmitBody(dep) {
   return parts.join(`
 `);
 }
+function reportClaimReflection(repo, number, warnings) {
+  for (const w of warnings) {
+    console.error(`⚠️ #${number} claimed, but GitHub ${w.step} reflection failed (${w.kind}): ${w.message}`);
+  }
+  if (!warnings.some((w) => w.kind === "repo_unreachable"))
+    return;
+  try {
+    ghEnsureLabel(repo, IN_PROGRESS_LABEL);
+    ghIssueAddLabels(repo, number, [IN_PROGRESS_LABEL]);
+    console.error(`↻ #${number}: re-applied "${IN_PROGRESS_LABEL}" via gh`);
+  } catch (e) {
+    console.error(`⚠️ #${number}: gh could not re-apply "${IN_PROGRESS_LABEL}" either: ${e.message}`);
+  }
+}
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
   issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--assignee <login...>", "Assignee(s) for the new issue (@me = the gh login). Default under pickup-scope=assigned: the current login — assignment is the queueing gesture (#600), so an unassigned filing is invisible to `issue next`").option("--no-assign", "File UNASSIGNED, overriding the pickup-scope=assigned auto-assign default — the per-invocation opt-out for a human filing a backlog item that the loop should NOT pick up. Mutually exclusive with --assignee").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
@@ -8564,11 +8581,12 @@ ${section}` : section;
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const agent = opts.agent ?? process.env.SHIPFLOW_AGENT ?? hostname2();
     try {
-      await ctx.client.claimIssue(ctx.creds.org, ctx.project.projectId, number, {
+      const claim = await ctx.client.claimIssue(ctx.creds.org, ctx.project.projectId, number, {
         repo,
         agent,
         ttlMinutes: opts.ttl ? parseInt(opts.ttl, 10) : undefined
       });
+      reportClaimReflection(repo, number, claim.reflectionWarnings);
     } catch (e) {
       if (e instanceof ClaimConflictError) {
         console.error(`⛔ #${number} is taken: ${e.message}`);
@@ -8735,8 +8753,9 @@ ${section}` : section;
     const candidates = sortIssuesForPickup(matching);
     let raced = 0;
     for (const cand of candidates) {
+      let claim;
       try {
-        await ctx.client.claimIssue(ctx.creds.org, ctx.project.projectId, cand.number, {
+        claim = await ctx.client.claimIssue(ctx.creds.org, ctx.project.projectId, cand.number, {
           repo,
           agent,
           ttlMinutes: opts.ttl ? parseInt(opts.ttl, 10) : undefined
@@ -8749,6 +8768,7 @@ ${section}` : section;
         console.warn(`Claim failed for #${cand.number} (skipping): ${e.message}`);
         continue;
       }
+      reportClaimReflection(repo, cand.number, claim.reflectionWarnings);
       const issueData = ghIssueView(repo, cand.number);
       const t = await loadTriage(ctx, repo, cand.number);
       printIssueContext(issueData, t.triage, repo, ctx.project, opts, t.unavailable, healed.length ? { healed } : {});
