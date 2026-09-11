@@ -17,7 +17,8 @@ features sharing paths/layers (the regression risk).
 that exits non-zero, carries `degraded[]`, or lists **0 features** is a
 **hard error** — not an empty project. Do not review as if the map was
 consulted. Restore with `renaiss-shipflow features generate --json`, then
-re-run; else `request_changes` naming the un-run feature-map step.
+re-run; else `--verdict blocked` (empty-map is not a code defect;
+no findings entry).
 
 ## Mode 1 — issue intake
 
@@ -73,7 +74,7 @@ outage, one key) and/or `["shipflow-api"]`; `["github-rest"]` for REST reads
 `degraded[]`.
 
 **Any `degraded[]` entry, or any marker in the table above, is
-`request_changes`** — name the un-run gate as the finding; a gate that could
+`--verdict blocked`** — not a findings entry. A gate that could
 not run is not a gate that passed, never a footnote.
 `reviewThreads.unresolved: null` is **not zero** — re-run
 `renaiss-shipflow pr packet <n>` or check `renaiss-shipflow pr reviews <n>`
@@ -110,8 +111,8 @@ mean "irrelevant", they stop meaning anything.
    + the pre-merge re-read; do not treat that zero as "no review is coming".
    **"unresolved: 0" is a MEASUREMENT, not a default.** `(UNAVAILABLE)` +
    `⚠️ review threads UNAVAILABLE` = count never determined, precondition
-   unsatisfiable — `request_changes`. Zero-by-default is the false green this
-   gate exists to prevent.
+   unsatisfiable — `--verdict blocked` (no findings entry). Zero-by-default
+   is the false green this gate exists to prevent.
 0b. **Security diff scan — a HARD PRECONDITION, and the diff comes from a FILE
    you captured, never from the cwd.**
 
@@ -126,10 +127,11 @@ mean "irrelevant", they stop meaning anything.
    ```
    Reads GitHub's view of the PR; resolves nothing from the working directory
    (not HEAD, base ref, or index). **Exits 9** on a zero-file capture,
-   unconditionally; any non-zero exit = blocker: `request_changes`, never
-   retry-and-hope. A file, not stdout — output compression can fake an empty
-   diff; use the printed `files=` / `sha256=`, don't re-derive. Written
-   `0600`: a private repo's full diff at a predictable path.
+   unconditionally; any non-zero exit = blocker: `--verdict blocked` (no
+   findings entry), never retry-and-hope. A file, not stdout — output
+   compression can fake an empty diff; use the printed `files=` / `sha256=`,
+   don't re-derive. Written `0600`: a private repo's full diff at a
+   predictable path.
 
    **Step 2 — READ `/tmp/pr-<n>.patch` yourself** (Read tool, hunk by hunk).
    That file, and nothing else, is the scan input:
@@ -152,7 +154,7 @@ mean "irrelevant", they stop meaning anything.
    run as a second opinion — never a substitute for Step 2, and its CLEAN
    verdict with empty `DIFF CONTENT` / `FILES MODIFIED` is evidence of
    nothing. #482's rule, verbatim: *a gate that could not run is
-   `request_changes`, never a footnote.*
+   `--verdict blocked`, never a footnote.*
 
    **Step 4 — attest, or you cannot approve.** All three parts, or the
    approval is refused:
@@ -175,7 +177,8 @@ mean "irrelevant", they stop meaning anything.
    a later head move makes the label not-approved until you re-approve.
    `--json` carries `scan: {files, expected, verdict}`; the PR text carries
    numbers + digest — `ran: true` is falsifiable. `--verdict request_changes`
-   is never blocked by this gate. Honest limit: the digest proves the
+   and `--verdict blocked` are never blocked by this gate (scan flags stay
+   unrequired). Honest limit: the digest proves the
    attestation used the PR's real bytes, unmoved since — not that you
    understood them; Step 2 stays yours.
 
@@ -200,7 +203,7 @@ mean "irrelevant", they stop meaning anything.
    diffs (auth/access surfaces, input parsing, new network/exec paths).
    Degrade loudly, never silently: even security-review unavailable → say so
    in the review; docs-only diffs may proceed, a code diff without any scan
-   is `request_changes` until it can run.
+   is `--verdict blocked` until it can run.
 1. **Deviations first.** Per entry in the packet's *Deviations from brief*
    section: conservative option? sound reason? spec still holds? An
    undocumented deviation you detect in the diff is itself a finding — the
@@ -348,11 +351,12 @@ mean "irrelevant", they stop meaning anything.
      `Re-approved <sha12> — rebase only, diff unchanged.`
      The original review remains the gate record; repeating it makes the
      reader diff two walls of text to learn nothing changed.
-   - **A gate blocked by infrastructure** (feature map empty/404, capture
-     failure, runner outage) opens the review body with
-     `Not a code defect — <gate> could not run.` + the one unblocking
-     action, before anything else. A bare red verdict on green code sends
-     the author bug-hunting (#935, #929).
+   - **A gate blocked by infrastructure** (empty-map, scan-capture fail,
+     threads-unavailable) → `--verdict blocked` with **no `--findings`**.
+     Summary: `Not a code defect — <gate> could not run.` + the one
+     unblocking action. Scan flags stay unrequired (same as
+     `request_changes`). The approve command still refuses. A bare red
+     verdict on green code sends the author bug-hunting (#935, #929).
    and:
    - **approve** (no unresolved threads, brief met, CI green) → after the
      empty-findings `post-review`, `renaiss-shipflow pr approve <pr> --scan-files <N> --scan-report <path> --scan-digest <hex> --comment
@@ -365,6 +369,9 @@ mean "irrelevant", they stop meaning anything.
      every unresolved external thread). The orchestrator re-dispatches a
      worker; after it pushes + `pr resolve`s the threads, re-review. Never
      approve while a thread is open.
+   - **blocked** → `renaiss-shipflow pr post-review <n> --verdict blocked
+     --summary "Not a code defect — <gate> could not run. <one action>."`
+     Zero findings. The approve command still refuses.
 
 (Reviewer and worker share one GitHub identity — native review approval is
 unavailable on own PRs; the approve command / the `shipflow-approved` label is the
@@ -391,14 +398,15 @@ yourself.
 Never return `approve` unless all hold:
 - [ ] `renaiss-shipflow pr diff <n> --out <path>` exited **0** and you READ
       the capture — the hunks, not a summary (§0b Step 2); an unperformed
-      scan is `request_changes`.
+      scan is `--verdict blocked`.
 - [ ] Scan report written; all three scan flags (`--scan-files` /
       `--scan-report` / `--scan-digest`, same capture) passed to
       `post-review` / `approve` (both refuse, exit 9, on a missing one, 0, a
       file-list mismatch, or a foreign digest).
 - [ ] Packet has no `degraded[]` entry, no degradation-table marker — every
-      gate ran; degraded = `request_changes`. (A `not applicable` note or a
-      ⚠️ quoted from the issue/PR body is not a degradation.)
+      gate ran; degraded = `--verdict blocked` (no findings). (A `not
+      applicable` note or a ⚠️ quoted from the issue/PR body is not a
+      degradation.)
 - [ ] `renaiss-shipflow pr reviews <n>`: zero unresolved threads (external
       bots included) — a *measured* zero, never undetermined. An immediate
       post-push zero is not settled; wait for the 120s window or a later tick.
@@ -410,7 +418,8 @@ Never return `approve` unless all hold:
 - [ ] Regression test added for the fixed bug (or skip justified: pure-CSS /
       no test framework).
 - [ ] `features --json` pulled — non-zero exit, `degraded[]`, or 0 features
-      is a hard error (not an empty map); neighbouring features checked.
+      is a hard error (not an empty map) → `--verdict blocked`; neighbouring
+      features checked.
 - [ ] Parent issue's Judge block reads the truth (#969): state `review`
       naming this PR, `linesToAction ≤ 4` from `renaiss-shipflow issue judge
       <n> --state review --pr <pr> --pr-status "<standing>" --json`. A stale
@@ -421,7 +430,7 @@ cheap.
 
 ## Return (compact)
 ```json
-{ "target": "issue:42" | "pr:87", "verdict": "approve" | "request_changes" | "reject" | "close",
+{ "target": "issue:42" | "pr:87", "verdict": "approve" | "request_changes" | "reject" | "close" | "blocked",
   "featuresImpacted": ["auth", "billing"],
   "brief": "intake mode: acceptance criteria + regression-check features",
   "decisionFile": "close verdict only: snapshot-bound JSON per loop-close.md",

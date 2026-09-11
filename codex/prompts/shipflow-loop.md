@@ -22,6 +22,7 @@ file's real section headings (§) — follow them there, never from memory.
 | `cap=N` | how many PRs to open per pass before pausing; `cap=all` drains the queue |
 | `concurrency=N` | max issues/PRs worked at once (#744); `concurrency=1` = fully serial |
 | `usage-max=N` | do not start a tick once the Claude 5-hour **or** weekly usage is at/above N% (default **90**) |
+| `takeover=on` | take the tenant over for this machine's local agent (#1151): `renaiss-shipflow agent takeover` at run start and again every tick as the heartbeat, `agent release` on `stop`. The server hands this loop the automatic issue-triage, PR-review and test-runner events meanwhile (the rest keep running server-side) and the dashboard names you. Default **off** |
 | `reset-at=N` | spend the once-a-week `/limit-reset` only once the blocking 5-hour window is at/above N% (default **99**; between `usage-max` and this the tick just pauses) |
 | `limit-reset=off` | never spend Claude Code's once-a-week `/limit-reset` when the 5-hour window stops a tick (default: spend it, 5-hour window only, at/over `reset-at`) |
 | `refill=on` | after an empty bug sweep, also file work from `priorities`, uncovered `test_priority: high` features, and flaky tests (`auto-refill`; default **off** — `loop-bug-sweep.md` step 4) |
@@ -37,6 +38,10 @@ file's real section headings (§) — follow them there, never from memory.
 `SHIPFLOW_LOOP_LIMIT_RESET=off` for the run so the tool refuses the spend
 too; `$SHIPFLOW_LOOP_LIMIT_RESET` → **on**. **Reset floor:** a user
 `reset-at=N` token → `$SHIPFLOW_LOOP_RESET_AT` → **99**. Also invocation-only.
+**Takeover:** a `takeover=on` token → `$SHIPFLOW_LOOP_TAKEOVER` → **off**.
+Invocation-only; exit 3 from `agent takeover` (another member holds the
+tenant) ends the run before any dispatch — two loops must never drive one
+tenant.
 **Refill:** a `refill=on` token → `$SHIPFLOW_LOOP_REFILL` → **off**. Also
 invocation-only; the sweep's `bug-hunt` / `bug-hunt-cap` config knobs still
 bound it.

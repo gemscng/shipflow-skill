@@ -99,6 +99,32 @@ playbook table.
 The operator's chance to interrupt a wrong plan before workers spend tokens;
 later ticks print only the one-line summary — never repeat the plan block.
 
+### Takeover heartbeat — TICK-START, right after the usage gate (`takeover=on` only)
+
+When the run was started with `takeover=on` (#1151), this loop — not the
+server worker — performs the tenant's issue triage, PR review and test runs
+(the three workflows the loop already covers: intake judging, the reviewer,
+QA); the server keeps running everything else (patch notes, summaries,
+commit impact, regression/UAT, notifications, chat intake). The lease that
+says so lapses without a heartbeat. So every tick, immediately after the usage gate lets the
+tick run:
+
+```bash
+renaiss-shipflow agent takeover --json   # renews the lease; --agent defaults to $SHIPFLOW_AGENT / hostname
+```
+
+| Exit | Means | Do |
+|---|---|---|
+| **0** | lease acquired or renewed (`takeover.expiresAt` in the JSON) | continue |
+| **3** | another member's local agent holds the tenant — the JSON `holder` names them | post `⏹ stopped · tenant taken over by @<actor> (<agent>) until <expiresAt>` and **end the run** (delete the trigger). Two loops never drive one tenant |
+| other | transient — server unreachable, 5xx | continue the tick and add `takeover: renew failed (<reason>)` to the summary; the lease survives until its TTL, and the next tick retries |
+
+A paused tick (usage gate exit 3) still renews first, so a loop waiting out
+a usage window keeps its tenant. `stop` releases it: `renaiss-shipflow agent
+release`. Without `takeover=on` this section does not run and the server
+processes as before — the local loop and the server then share the tenant,
+which is the pre-#1151 behavior.
+
 ### Usage gate — TICK-START, before everything else
 
 The loop runs on the operator's Claude subscription. Once the account's
@@ -360,8 +386,9 @@ loop-authored PR goes through `renaiss-shipflow pr note <n> --body …
   merges it, silence parks forever by design. Exception `escalateOnce: true`
   (`rework_ceiling`, `correction_unreadable`, or `reporter_gate_stale` #439
   — gate stood past `stale-pr-hours`; `gateAgeHours` = how long): sole
-  action `issue escalate <parent> --for-pr <pr> --once-reason
-  <escalateOnceReason>`, then the row parks forever on that (PR, reason).
+  action `issue point-confirm <parent> --for-pr <pr> --once-reason
+  <escalateOnceReason>` for confirmation only (ordinary escalation for other
+  decisions; `loop-gate.md`), then the row parks on that (PR, reason).
   **Never a PR comment** — one shared login; an unmarked nudge reads as the
   reporter answering (#477). **Outranks `conflict`** and everything else:
   lower routes act on the PR, and acting can destroy the gate (self-clearing
@@ -615,7 +642,7 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
 
    | # | Step | Command / artifact |
    |---|---|---|
-   | 1 | **Capture** server-side — never from the cwd | `renaiss-shipflow pr diff <n> --out /tmp/pr-<n>.patch` → prints `files=N lines=N sha256=<hex>`; **exit 9 is a blocker → `request_changes`**, never a retry |
+   | 1 | **Capture** server-side — never from the cwd | `renaiss-shipflow pr diff <n> --out /tmp/pr-<n>.patch` → prints `files=N lines=N sha256=<hex>`; **exit 9 is a blocker → `--verdict blocked`**, never a retry |
    | 2 | **Read** the capture — the hunks, not a summary | Read `/tmp/pr-<n>.patch` (secrets, authz, input handling, exec/network, file posture, agent instruction text) |
    | 3 | **Write** the findings | `/tmp/pr-<n>.scan.md` — findings or none; "none" is a result and has to be recorded somewhere falsifiable |
    | 4 | **Attest** — all three flags, or approval is refused | `--scan-files <N>` `--scan-report <path>` `--scan-digest <hex>` |
@@ -754,7 +781,7 @@ still parks forever).
 | `state` | What it means | Action (`loop plan` token) |
 |---|---|---|
 | `reporter_corrected` (→ `loop-gate.md`) | still gated, and the reporter replied with a correction | `rework` per § "A reporter correction IS the human answering" — brief it as settled; the gate stays ON |
-| `awaiting_reporter` (→ `loop-gate.md`) | approved + green, interpretation unconfirmed (`needs-reporter-review`) | `park` — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable` / `reporter_gate_stale`) → `escalate_once`: `issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` ONCE, nothing else — **never a PR comment** |
+| `awaiting_reporter` (→ `loop-gate.md`) | approved + green, interpretation unconfirmed (`needs-reporter-review`) | `park` — the reporter must confirm; re-checked next tick. **Unless the row says `escalateOnce: true`** (`rework_ceiling` / `correction_unreadable` / `reporter_gate_stale`) → `escalate_once`: `issue point-confirm <parent> --for-pr <pr> --once-reason <escalateOnceReason>` for confirmation only; other decisions keep ordinary escalation (see `loop-gate.md`). ONCE, nothing else — **never a PR comment** |
 | `ci_failing` | a check is red | `fix_ci` — fix on branch, push; escalate after `max-fix-attempts` |
 | `changes_requested` | reviewer wants changes | `address_review` — pr-feedback → fix → push → reply |
 | `review_comments` | unaddressed comments — **any unresolved thread counts, including the loop reviewer's own** | `address_comments` — pr-feedback (may already be handled) → fix → `pr resolve` → reply. This is the fix half of review → fix → re-review; never route open findings back to a reviewer. If the PR merged mid-fix, **do not push the closed head**: park leftovers on `fix/pr-<n>-leftover`, then file a follow-up issue **only when `$base..HEAD` is non-empty** (`$base` captured at worktree add, before any commit) — already-handled comments produce none, and an empty follow-up is pure noise. Body per the issue-body ladder, `issue create` exit 12 handled as a duplicate (link or `--allow-duplicate`), never as a failure — loop-worker.md § "Merged mid-fix" owns the full contract |

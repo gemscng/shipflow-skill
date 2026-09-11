@@ -37,6 +37,17 @@ Codex: no sink to install — `shipflow-usage` reads Codex's live limits
 (`SHIPFLOW_USAGE_SOURCE=codex`) and `limit-reset` spends a rate-limit reset
 credit; `references/codex.md` § "Usage gate".
 
+## Takeover (once, at run start — `takeover=on` only)
+
+With a `takeover=on` token (or `SHIPFLOW_LOOP_TAKEOVER=on`), run
+`renaiss-shipflow agent takeover --json` before the cycle (#1151). Exit 0 →
+say `takeover: this loop drives <org> as @<actor> (<agent>), lease renews
+each tick` in the run-start summary. Exit 3 → another member's local agent
+already holds the tenant: print the holder from the JSON and **end the run**
+— do not fall back to sharing the tenant. The per-tick renew lives in
+loop-mode.md § "Takeover heartbeat"; `stop` runs `renaiss-shipflow agent
+release`.
+
 ## Setup — run in a worktree (once, before the cycle)
 
 Always in a git worktree, never the user's live checkout.

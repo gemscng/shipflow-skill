@@ -5,31 +5,49 @@ var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+function __accessProp(key) {
+  return this[key];
+}
+var __toESMCache_node;
+var __toESMCache_esm;
 var __toESM = (mod, isNodeMode, target) => {
+  var canCache = mod != null && typeof mod === "object";
+  if (canCache) {
+    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
+    var cached = cache.get(mod);
+    if (cached)
+      return cached;
+  }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
   for (let key of __getOwnPropNames(mod))
     if (!__hasOwnProp.call(to, key))
       __defProp(to, key, {
-        get: () => mod[key],
+        get: __accessProp.bind(mod, key),
         enumerable: true
       });
+  if (canCache)
+    cache.set(mod, to);
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
       get: all[name],
       enumerable: true,
       configurable: true,
-      set: (newValue) => all[name] = () => newValue
+      set: __exportSetter.bind(all, name)
     });
 };
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
-// ../../node_modules/commander/lib/error.js
+// node_modules/commander/lib/error.js
 var require_error = __commonJS((exports) => {
   class CommanderError extends Error {
     constructor(exitCode, code, message) {
@@ -53,7 +71,7 @@ var require_error = __commonJS((exports) => {
   exports.InvalidArgumentError = InvalidArgumentError;
 });
 
-// ../../node_modules/commander/lib/argument.js
+// node_modules/commander/lib/argument.js
 var require_argument = __commonJS((exports) => {
   var { InvalidArgumentError } = require_error();
 
@@ -132,7 +150,7 @@ var require_argument = __commonJS((exports) => {
   exports.humanReadableArgName = humanReadableArgName;
 });
 
-// ../../node_modules/commander/lib/help.js
+// node_modules/commander/lib/help.js
 var require_help = __commonJS((exports) => {
   var { humanReadableArgName } = require_argument();
 
@@ -482,7 +500,7 @@ ${itemIndentStr}`);
   exports.stripColor = stripColor;
 });
 
-// ../../node_modules/commander/lib/option.js
+// node_modules/commander/lib/option.js
 var require_option = __commonJS((exports) => {
   var { InvalidArgumentError } = require_error();
 
@@ -660,7 +678,7 @@ var require_option = __commonJS((exports) => {
   exports.DualOptions = DualOptions;
 });
 
-// ../../node_modules/commander/lib/suggestSimilar.js
+// node_modules/commander/lib/suggestSimilar.js
 var require_suggestSimilar = __commonJS((exports) => {
   var maxDistance = 3;
   function editDistance(a, b) {
@@ -733,7 +751,7 @@ var require_suggestSimilar = __commonJS((exports) => {
   exports.suggestSimilar = suggestSimilar;
 });
 
-// ../../node_modules/commander/lib/command.js
+// node_modules/commander/lib/command.js
 var require_command = __commonJS((exports) => {
   var EventEmitter = __require("node:events").EventEmitter;
   var childProcess = __require("node:child_process");
@@ -2043,7 +2061,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
   exports.useColor = useColor;
 });
 
-// ../../node_modules/commander/index.js
+// node_modules/commander/index.js
 var require_commander = __commonJS((exports) => {
   var { Argument } = require_argument();
   var { Command } = require_command();
@@ -2073,6 +2091,13 @@ function envelopeMessage(body) {
     }
   } catch {}
   return null;
+}
+function parseHolder(body) {
+  try {
+    return JSON.parse(body).holder;
+  } catch {
+    return;
+  }
 }
 function backoffMs(attempt) {
   return 300 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
@@ -2316,6 +2341,32 @@ class ShipFlowClient {
     const res = await this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/claims`);
     return res?.claims ?? [];
   }
+  async getTakeover(org) {
+    const res = await this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/agent/takeover`);
+    return res ?? { active: false };
+  }
+  async takeOverTenant(org, body) {
+    try {
+      const res = await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/agent/takeover`, body);
+      if (!res?.takeover)
+        throw new Error("takeover response carried no lease");
+      return res.takeover;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409)
+        throw new TakeoverConflictError(parseHolder(e.body));
+      throw e;
+    }
+  }
+  async releaseTakeover(org) {
+    try {
+      const res = await this.request("DELETE", `/api/v1/orgs/${encodeURIComponent(org)}/agent/takeover`);
+      return res?.released && res.takeover ? res.takeover : null;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409)
+        throw new TakeoverConflictError(parseHolder(e.body));
+      throw e;
+    }
+  }
   async createCapabilityRequest(org, projectId, body) {
     const res = await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/capability-requests`, body);
     return res.capabilityRequest;
@@ -2362,7 +2413,7 @@ function resolveTriggerRepo(repos, requested) {
   }
   return { ...repo, projectId: repo.projectId };
 }
-var ApiError, ClaimConflictError, WorkflowTriggerError;
+var ApiError, TakeoverConflictError, ClaimConflictError, WorkflowTriggerError;
 var init_client = __esm(() => {
   ApiError = class ApiError extends Error {
     status;
@@ -2380,6 +2431,14 @@ var init_client = __esm(() => {
       this.status = status;
       this.body = body;
       this.name = "ApiError";
+    }
+  };
+  TakeoverConflictError = class TakeoverConflictError extends Error {
+    holder;
+    constructor(holder) {
+      super(holder ? `tenant taken over by @${holder.actor}${holder.agent ? ` (${holder.agent})` : ""} until ${holder.expiresAt}` : "tenant taken over by another agent");
+      this.holder = holder;
+      this.name = "TakeoverConflictError";
     }
   };
   ClaimConflictError = class ClaimConflictError extends Error {
@@ -2535,7 +2594,7 @@ var init_shipflow_contract_data = __esm(() => {
       loopCloseRecord: "<!-- shipflow:loop-close-record"
     },
     intentGate: {
-      $comment: "The release rule for the #190 intent gate (`needs-reporter-review`), single-sourced so the server's matcher, the CLI's ping comment and the skill docs cannot drift (issue #411 — the doc promised a rule the code did not implement). POLARITY: the label is a merge blocker held until a human CONFIRMS, so this is an AUTHORIZATION control, not a sentiment classifier. THE RULE: the quote-stripped body must reduce to EXACTLY ONE meaningful line — blank lines and pure-decoration lines (a `---` rule) are scaffolding, but a fenced block and everything in it COUNT as content — and that line, with leading/trailing markdown decoration and punctuation trimmed, must EQUAL one of `confirmationTokens` (case-insensitive, emoji skin-tone/variation modifiers normalised away). Nothing else clears the gate: the token is the WHOLE reply, or it does not confirm. WHY THE WHOLE BODY (PR #441, third review pass): whole-line equality judged `block[0]` and ignored everything after it, so a bare token on line 1 confirmed whatever followed. Measured through the real handler, all of `Confirmed`+`But scope it to the CLI only`, `\uD83D\uDC4D`+`not this implementation though`, `yes`+`Actually no, revert it`, `LGTM`+`hold the merge, this is wrong`, `confirmed`+`- but only the CLI half` CLEARED, and so did the blank-line forms `confirmed`+`Actually no, revert it` and `Yes`+`Actually no, revert it`. Every one is #411's exact harm: a merge on a reading the reporter had just narrowed. A SINGLE newline was enough, and that settles the scoping question — the rule ALREADY refuses extra words on the token's own line (`Confirmed — ship it` is armed), so accepting arbitrary text one newline later is incoherent: the same act, the same ambiguity, the opposite answer. Drawing the boundary at the line or at the paragraph only moves the hole down; this defect has now appeared at three granularities. Requiring the whole body is NOT the denylist the veto list was — it never inspects what follows, it refuses when anything follows. THE PRICE: `confirmed` plus a thank-you parks too. Accepted — commentary goes in a separate comment, costing one extra reply, never a wrong merge. A pasted fenced block counts as content here (unlike in the `N: answer` block parser, which skips fences whole so a fence's inner line can never be promoted to the judged line): `/confirm` over a fenced `no` was measured clearing, and a token with an attachment is not a token alone. WHY AN EXACT TOKEN AND NOT A GRAMMAR (PR #441, second review pass): the previous design matched an affirmative OPENING WORD and then vetoed a list of negations and contrastives found later in the paragraph. That is a denylist of known shapes guarding an unbounded set of free-form natural language — the exact anti-pattern this issue exists to close, re-earned inside its own fix. Negation-after-affirmative has no finite enumeration: `Confirmed the bug still repros`, `Yes, change the copy first` and `ok 1 - test passed` all survived a 27-word veto list, and each one FAILED OPEN — it merged a reading nobody confirmed. An exact token has the correct failure polarity for EVERY input, not merely for the inputs somebody remembered to enumerate: anything that is not the token leaves the gate armed, which one more reply fixes. Tokens must be unambiguous ALONE, as a whole line — that is what excludes `ok`, `sure`, `agreed`, `correct` and every bare imperative (`ship`, `merge`, `approve`, `proceed`), which read as consent or as an instruction depending on the sentence they open. The `N: answer` reply protocol also releases the gate, but it is held to the SAME stands-alone invariant as the token path (PR #441, fourth review pass): the decision block must BE the whole quote-stripped reply (no meaningful line outside it, a pasted fence included), EVERY line of that block must itself be a decision line, EVERY answer must be a `confirmationTokens` entry, and an escalation banner must actually be outstanding on the thread. Both positional checks are load-bearing and neither alone suffices — measured by ablation, the length test alone leaves `1: yes` + NEWLINE + `Actually no, revert it` clearing (same paragraph, so the counts match) and the per-line test alone leaves `1: yes` + BLANK LINE + `revert it` clearing (a later paragraph the block never reached). Reading the answers had fixed WHAT the block said but not WHERE it stopped, so this door stayed fail-OPEN at both granularities after the token path had closed both — and the escalation-outstanding guard does not mitigate it, because answering `N:` is exactly what a reporter does on an escalated thread — a content-agnostic `^\\\\d+:` match let `1: no, redo it` clear the blocker it was rejecting, and a pasted stack-trace line `10: undefined is not a function` do it by accident. FAIL-STUCK IS THE PRICE, and it is paid deliberately in two places, BOTH of which must state that the token is the whole reply or a reporter cannot discover it: `releaseHint` is the exact sentence the CLI puts on the PR when it APPLIES the label, and the server posts a one-time `intentGateHint` nudge naming the tokens whenever a human reply misses — including when the commenter's `author_association` is untrusted, which was the one branch that failed stuck in silence. Both render the token list FROM `confirmationTokens`, never from a hand-written copy, so neither can drift from the matcher — preserve that. Removing the label by hand stays the human override. Do NOT re-add a free-text grammar here to make it friendlier — narrowing the openers is safe, widening them is how this control dies. AUDIT AUTHOR (issue #537): `auditAuthorSlug` is the GitHub App slug that posts the `intentGateCleared` audit comment — the ONE bot identity the CLI's `isIntentGateAuditComment` trusts. It exists because the reader had to move to REST to see botness at all: `gh issue view --json comments` is GraphQL, where a Bot's `login` carries NO `[bot]` suffix and a GitHub App's `authorAssociation` is `NONE`, so the `[bot]`-suffix test the CLI shipped could never fire and the #411 clearance path was dead from the day it landed (measured on PR #489, gh 2.95.0). REST's `user.type == \"Bot\"` restores the signal — but botness ALONE is not identity: `gemini-code-assist[bot]` and `chatgpt-codex-connector[bot]` are also `type: Bot` and comment on these very PRs, so trusting any bot would trade a dead control for a forgeable one. The CLI therefore requires `user.type == \"Bot\"` AND the login, normalised (trailing `[bot]` stripped, case-folded), to EQUAL this slug. It is a ONE-ENTRY ALLOWLIST on purpose: this is an authorization predicate on a merge gate, and the failure mode of a wrong entry must be fail-STUCK (one more reporter reply, or a hand removal of the label — the standing human override), never fail-OPEN. A self-hosted deployment that installs the App under a different slug edits THIS key — never a literal in the CLI, and never by widening the rule to \"any bot\". The `[bot]` suffix is stripped rather than required because the two APIs disagree about it; the suffix is a rendering detail of REST, not an identity. A PAT-backed machine user has `type: \"User\"` and keeps clearing through the OWNER/MEMBER/COLLABORATOR association branch, which this key does not touch.",
+      $comment: "The release rule for the #190 intent gate (`needs-reporter-review`), single-sourced so the server's matcher, the CLI's ping comment and the skill docs cannot drift (issue #411 — the doc promised a rule the code did not implement). POLARITY: the label is a merge blocker held until a human CONFIRMS, so this is an AUTHORIZATION control, not a sentiment classifier. THE RULE: the quote-stripped body must reduce to EXACTLY ONE meaningful line — blank lines and pure-decoration lines (a `---` rule) are scaffolding, but a fenced block and everything in it COUNT as content — and that line, with leading/trailing markdown decoration and punctuation trimmed, must EQUAL one of `confirmationTokens` (case-insensitive, emoji skin-tone/variation modifiers normalised away). Nothing else clears the gate: the token is the WHOLE reply, or it does not confirm. WHY THE WHOLE BODY (PR #441, third review pass): whole-line equality judged `block[0]` and ignored everything after it, so a bare token on line 1 confirmed whatever followed. Measured through the real handler, all of `Confirmed`+`But scope it to the CLI only`, `\uD83D\uDC4D`+`not this implementation though`, `yes`+`Actually no, revert it`, `LGTM`+`hold the merge, this is wrong`, `confirmed`+`- but only the CLI half` CLEARED, and so did the blank-line forms `confirmed`+`Actually no, revert it` and `Yes`+`Actually no, revert it`. Every one is #411's exact harm: a merge on a reading the reporter had just narrowed. A SINGLE newline was enough, and that settles the scoping question — the rule ALREADY refuses extra words on the token's own line (`Confirmed — ship it` is armed), so accepting arbitrary text one newline later is incoherent: the same act, the same ambiguity, the opposite answer. Drawing the boundary at the line or at the paragraph only moves the hole down; this defect has now appeared at three granularities. Requiring the whole body is NOT the denylist the veto list was — it never inspects what follows, it refuses when anything follows. THE PRICE: `confirmed` plus a thank-you parks too. Accepted — commentary goes in a separate comment, costing one extra reply, never a wrong merge. A pasted fenced block counts as content here (unlike in the `N: answer` block parser, which skips fences whole so a fence's inner line can never be promoted to the judged line): `/confirm` over a fenced `no` was measured clearing, and a token with an attachment is not a token alone. WHY AN EXACT TOKEN AND NOT A GRAMMAR (PR #441, second review pass): the previous design matched an affirmative OPENING WORD and then vetoed a list of negations and contrastives found later in the paragraph. That is a denylist of known shapes guarding an unbounded set of free-form natural language — the exact anti-pattern this issue exists to close, re-earned inside its own fix. Negation-after-affirmative has no finite enumeration: `Confirmed the bug still repros`, `Yes, change the copy first` and `ok 1 - test passed` all survived a 27-word veto list, and each one FAILED OPEN — it merged a reading nobody confirmed. An exact token has the correct failure polarity for EVERY input, not merely for the inputs somebody remembered to enumerate: anything that is not the token leaves the gate armed, which one more reply fixes. Tokens must be unambiguous ALONE, as a whole line — that is what excludes `ok`, `sure`, `agreed`, `correct` and every bare imperative (`ship`, `merge`, `approve`, `proceed`), which read as consent or as an instruction depending on the sentence they open. The `N: answer` reply protocol also releases the gate, but it is held to the SAME stands-alone invariant as the token path (PR #441, fourth review pass): the decision block must BE the whole quote-stripped reply (no meaningful line outside it, a pasted fence included), EVERY line of that block must itself be a decision line, EVERY answer must be a `confirmationTokens` entry, and an escalation must actually be OUTSTANDING on the thread. OUTSTANDING (issue #486, owner option 1) means the NEWEST \uD83D\uDEA7 banner is unanswered, not that a banner exists somewhere in history: banners are never deleted, so banner-present left a stale `1: yes` as a live door forever. ALL of these must hold: the comment listing (id, author, created_at, updated_at) succeeded; a newest CLI-heading banner exists; the delivery's labels still carry `needs-human`; the reply itself is in the listing and postdates the banner's last edit; and no ANSWER exists at or after that banner's `updated_at`, so an `escalate --update` refresh is a fresh question. An ANSWER is a non-bot comment whose quote-stripped body has no machinery shape, other than the triggering reply (matched by comment id), or a `Reply received` ack older than the triggering reply. The reply's own ack is excluded because the needs-human unblock runs first on the same delivery and has already posted it. A listing error or any unreadable field (zero id or time, empty author) means NOT outstanding: the door stays shut and the gate stays on. Both gates (`needs-reporter-review` and the intake gate `needs-reporter-approval`) use one shared server helper. Both positional checks are load-bearing and neither alone suffices — measured by ablation, the length test alone leaves `1: yes` + NEWLINE + `Actually no, revert it` clearing (same paragraph, so the counts match) and the per-line test alone leaves `1: yes` + BLANK LINE + `revert it` clearing (a later paragraph the block never reached). Reading the answers had fixed WHAT the block said but not WHERE it stopped, so this door stayed fail-OPEN at both granularities after the token path had closed both — and the escalation-outstanding guard does not mitigate it, because answering `N:` is exactly what a reporter does on an escalated thread — a content-agnostic `^\\\\d+:` match let `1: no, redo it` clear the blocker it was rejecting, and a pasted stack-trace line `10: undefined is not a function` do it by accident. FAIL-STUCK IS THE PRICE, and it is paid deliberately in two places, BOTH of which must state that the token is the whole reply or a reporter cannot discover it: `releaseHint` is the exact sentence the CLI puts on the PR when it APPLIES the label, and the server posts a one-time `intentGateHint` nudge naming the tokens whenever a human reply misses — including when the commenter's `author_association` is untrusted, which was the one branch that failed stuck in silence. Both render the token list FROM `confirmationTokens`, never from a hand-written copy, so neither can drift from the matcher — preserve that. Removing the label by hand stays the human override. Do NOT re-add a free-text grammar here to make it friendlier — narrowing the openers is safe, widening them is how this control dies. AUDIT AUTHOR (issue #537): `auditAuthorSlug` is the GitHub App slug that posts the `intentGateCleared` audit comment — the ONE bot identity the CLI's `isIntentGateAuditComment` trusts. It exists because the reader had to move to REST to see botness at all: `gh issue view --json comments` is GraphQL, where a Bot's `login` carries NO `[bot]` suffix and a GitHub App's `authorAssociation` is `NONE`, so the `[bot]`-suffix test the CLI shipped could never fire and the #411 clearance path was dead from the day it landed (measured on PR #489, gh 2.95.0). REST's `user.type == \"Bot\"` restores the signal — but botness ALONE is not identity: `gemini-code-assist[bot]` and `chatgpt-codex-connector[bot]` are also `type: Bot` and comment on these very PRs, so trusting any bot would trade a dead control for a forgeable one. The CLI therefore requires `user.type == \"Bot\"` AND the login, normalised (trailing `[bot]` stripped, case-folded), to EQUAL this slug. It is a ONE-ENTRY ALLOWLIST on purpose: this is an authorization predicate on a merge gate, and the failure mode of a wrong entry must be fail-STUCK (one more reporter reply, or a hand removal of the label — the standing human override), never fail-OPEN. A self-hosted deployment that installs the App under a different slug edits THIS key — never a literal in the CLI, and never by widening the rule to \"any bot\". The `[bot]` suffix is stripped rather than required because the two APIs disagree about it; the suffix is a rendering detail of REST, not an identity. A PAT-backed machine user has `type: \"User\"` and keeps clearing through the OWNER/MEMBER/COLLABORATOR association branch, which this key does not touch.",
       confirmationTokens: [
         "/confirm",
         "confirm",
@@ -3618,6 +3677,34 @@ function encodePrecedentContext(category, reason) {
 function renderEscalateOnceMarker(pr, reason) {
   return `${SHIPFLOW_CONTRACT.markers.escalateOnce} pr=${pr} reason=${reason} -->`;
 }
+function formatConfirmationPointer(repo, once) {
+  if (!POINTER_REPO.test(repo) || !Number.isSafeInteger(once.pr) || once.pr <= 0 || !CONFIRMATION_POINTER_REASONS.some((r) => r === once.reason)) {
+    throw new Error("Confirmation pointers require owner/repo, a positive PR number, and a reporter-gate refusal reason.");
+  }
+  return [
+    `⏸ Confirm on PR #${once.pr} → https://github.com/${repo}/pull/${once.pr}#new_comment_field`,
+    "",
+    SHIPFLOW_CONTRACT.markers.loop,
+    renderEscalateOnceMarker(once.pr, once.reason)
+  ].join(`
+`);
+}
+function confirmationPointer(body) {
+  if (!body)
+    return;
+  const lines = body.split(`
+`).map((l) => l.trimEnd()).filter(Boolean);
+  const match = /^⏸ Confirm on PR #(\d+) → https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/\1#new_comment_field$/.exec(lines[0] ?? "");
+  if (!match || !POINTER_REPO.test(match[2]) || lines[1] !== SHIPFLOW_CONTRACT.markers.loop || lines.length < 3)
+    return;
+  const pr = Number(match[1]);
+  if (!Number.isSafeInteger(pr) || pr <= 0 || String(pr) !== match[1])
+    return;
+  const markers = lines.slice(2);
+  if (!markers.every((line) => CONFIRMATION_POINTER_REASONS.some((reason) => line === renderEscalateOnceMarker(pr, reason))))
+    return;
+  return { repo: match[2], pr, markers };
+}
 function parseEscalateOnceKey(forPr, onceReason) {
   const raw = (forPr ?? "").trim();
   const reason = (onceReason ?? "").trim();
@@ -3641,12 +3728,20 @@ function escalateOnceLineRe(pr, reason, flags = "m") {
 function isEscalationBanner(body) {
   return !!body && body.trimStart().startsWith(SHIPFLOW_CONTRACT.markers.escalationBannerHeading);
 }
-function hasEscalateOnceMarker(body, pr, reason) {
-  if (!body || !reason || !isEscalationBanner(body))
+function hasEscalateOnceMarker(body, pr, reason, repo) {
+  if (!body || !reason)
+    return false;
+  const pointer = confirmationPointer(body);
+  if (pointer)
+    return pointer.pr === pr && (!repo || pointer.repo.toLowerCase() === repo.toLowerCase()) && pointer.markers.includes(renderEscalateOnceMarker(pr, reason));
+  if (!isEscalationBanner(body))
     return false;
   return escalateOnceLineRe(String(pr), reason.replace(RE_ESCAPE, "\\$&")).test(body);
 }
 function extractEscalateOnceMarkers(body) {
+  const pointer = confirmationPointer(body);
+  if (pointer)
+    return [...new Set(pointer.markers)];
   if (!body || !isEscalationBanner(body))
     return [];
   const found = body.match(escalateOnceLineRe("\\d+", "[^\\s>]+", "gm")) ?? [];
@@ -3742,7 +3837,7 @@ function formatEscalationBody(reason, opts = {}) {
   ].join(`
 `);
 }
-var ESCALATION_CATEGORIES, ACTION_SECTION_LINE_CAP = 10, ACTION_LINE_WORD_LIMIT, STANDALONE_RECOMMENDATION_RE, DECISION_LOOSE_LINE, RE_ESCAPE, ESCALATION_BANNER;
+var ESCALATION_CATEGORIES, ACTION_SECTION_LINE_CAP = 10, ACTION_LINE_WORD_LIMIT, STANDALONE_RECOMMENDATION_RE, DECISION_LOOSE_LINE, CONFIRMATION_POINTER_REASONS, POINTER_REPO, RE_ESCAPE, ESCALATION_BANNER;
 var init_escalation_format = __esm(() => {
   init_shipflow_contract_data();
   init_pr_state();
@@ -3758,6 +3853,8 @@ var init_escalation_format = __esm(() => {
   ACTION_LINE_WORD_LIMIT = SHIPFLOW_CONTRACT.readability.visibleLineWordCap;
   STANDALONE_RECOMMENDATION_RE = /^\s*\*\*recommendation:?\*\*/im;
   DECISION_LOOSE_LINE = /^\s*(\d+)(?:[.)]\s+|\s+[-–]\s+)(\S.*)$/;
+  CONFIRMATION_POINTER_REASONS = [REWORK_CEILING_REASON, CORRECTION_UNREADABLE_REASON, REPORTER_GATE_STALE_REASON];
+  POINTER_REPO = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/;
   RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
   ESCALATION_BANNER = `${SHIPFLOW_CONTRACT.markers.escalationBannerHeading} — the loop is parked here until you reply.`;
 });
@@ -5209,7 +5306,7 @@ var init_helpers = __esm(() => {
 // src/index.ts
 import { createRequire as createRequire3 } from "node:module";
 
-// ../../node_modules/commander/esm.mjs
+// node_modules/commander/esm.mjs
 var import__ = __toESM(require_commander(), 1);
 var {
   program,
@@ -7603,6 +7700,8 @@ async function closeFromDecision(ctx, repo, number, decisionFile, agent) {
 init_client();
 init_project();
 init_gh();
+init_gh();
+init_escalation_format();
 init_escalation_format();
 init_pr_state();
 import { hostname as hostname2 } from "node:os";
@@ -8888,6 +8987,35 @@ ${section}` : section;
     await ctx.client.signal(ctx.creds.org, ctx.project.projectId, "issues", number, "release-claim", { repo, reason });
     emit(opts, { number, released: true, reason }, () => console.log(`Released #${number}.`));
   }));
+  issue.command("point-confirm <number>").description("Point an issue at its gated PR with one visible line; preserve labels, claims, precedents and gate authorization").requiredOption("--for-pr <number>", "The linked PR awaiting reporter confirmation").requiredOption("--once-reason <token>", `The inbox refusal: ${CONFIRMATION_POINTER_REASONS.join(", ")}`).option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+    const once = parseEscalateOnceKey(opts.forPr, opts.onceReason);
+    if (!once || once instanceof Error)
+      throw new UsageError(once instanceof Error ? once.message : "A confirmation pointer requires a once-key.");
+    if (!/^\d+$/.test(numberStr) || !Number.isSafeInteger(Number(numberStr)) || Number(numberStr) <= 0) {
+      throw new UsageError("The parent must be a positive issue number.");
+    }
+    try {
+      formatConfirmationPointer(opts.repo ?? "owner/repo", once);
+    } catch (e) {
+      throw new UsageError(e.message);
+    }
+    const ctx = await loadCtx(program2);
+    const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    let body;
+    try {
+      body = formatConfirmationPointer(repo, once);
+    } catch (e) {
+      throw new UsageError(e.message);
+    }
+    const pr = ghPRView(repo, once.pr);
+    if (pr.number !== once.pr || ghIssueOrPrState(repo, once.pr) !== "open" || !pr.labels?.some((l) => l.name === SHIPFLOW_CONTRACT.labels.names.needsReporterReview) || !linkedIssueNumbers(pr).includes(number)) {
+      throw new UsageError(`PR #${once.pr} must be open, carry needs-reporter-review, and link issue #${number} via Closes or Part of.`);
+    }
+    const alreadyNotified = ghIssueComments(repo, number).some((c) => c.viewerDidAuthor && hasEscalateOnceMarker(c.body, once.pr, once.reason, repo));
+    if (!alreadyNotified)
+      ghIssueComment(repo, number, body);
+    emit(opts, { number, pr: once.pr, pointed: !alreadyNotified, alreadyNotified, once }, () => console.log(alreadyNotified ? `#${number}: PR #${once.pr} already notified for ${once.reason}.` : body));
+  }));
   issue.command("escalate <number>").description("Hand an issue to a human: label needs-human + comment why. Keeps the work lock so the loop skips it this run.").option("--reason <reason>", "Why it's blocked / what a human must decide; no literal backticks").option("--reason-file <path>", "UTF-8 reason file; '-' reads stdin; mutually exclusive with --reason").option("--category <key>", `Why this class of work is gated on a human — appends the standard rationale. One of: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`).option("--owner <login>", "Accountable human named on the comment (default: signoff-owner config, else the issue author)").option("--update", "Edit the loop's latest \uD83D\uDEA7 escalation comment in place instead of stacking a new one").option("--force", "Skip the reason lint (open question without recommendation / not self-contained / no action section)").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for needs-human)").option("--release", "Also release the ShipFlow claim (default: keep it so the loop won't re-pick it this run)").option("--for-pr <number>", "The PR whose inbox row owed this escalation — stamps the permanent once-key. Use WITH --once-reason (issue #488)").option("--once-reason <token>", `The escalate-once reason from the inbox row (\`escalateOnceReason\`). One of: ${ESCALATE_ONCE_REASONS.join(", ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     if (opts.reason !== undefined && opts.reasonFile !== undefined) {
       throw new UsageError("issue escalate: --reason and --reason-file are mutually exclusive — pass one or the other.");
@@ -9411,9 +9539,19 @@ var REVIEW_CONTRACT = {
     }
   },
   verdicts: {
-    $comment: "Carried AS-IS per side; unifying the vocabulary is a later slice of #96. Do not gate on the server enum — the server review is advisory.",
-    loop: ["approve", "comment", "request_changes", "reject"],
-    server: ["looks_good", "comment", "request_changes"]
+    $comment: "Carried AS-IS per side; unifying the vocabulary is a later slice of #96. Do not gate on the server enum — the server review is advisory. `blocked` is loop-only (issue #969): an infra-gate failure, not a code verdict. githubEvent is the semantic GitHub reviewDecision; the write still posts COMMENT (shared identity). emitsFindings false — never a line-1 severity/effort pseudo-finding.",
+    loop: ["approve", "comment", "request_changes", "reject", "blocked"],
+    server: ["looks_good", "comment", "request_changes"],
+    blocked: {
+      header: "⏸ BLOCKED — a review gate could not run (not a code verdict)",
+      githubEvent: "request_changes",
+      emitsFindings: false
+    }
+  },
+  roles: {
+    $comment: "Role word both reviewers stamp in the verdict header (issue #969). Server reviews are advisory; the loop review is the merge gate.",
+    server: "\uD83D\uDCAC Advisory review",
+    loop: "Merge gate"
   },
   judgedDecisions: {
     $comment: "Rules for every LLM-judged auto-decision (issue #209). evalAccept is the default acceptance expression cmd/revieweval evaluates when a -baseline is supplied: grammar `<metric> >= <signed>pt [AND <clause>...] over >= <N> runs`, metrics precision|recall|f1, signed deltas in percentage points on mean-of-runs; ACCEPT when every clause holds on the mean deltas with >=N runs per side, PARK when some clause fails in every candidate run, anything else is GRAY-ZONE and escalates to a human. swapAndAggregate: a single-pass LLM judge is position-biased — order consistency is <=65% single-pass (MT-Bench) — so every judged decision MUST run the judge twice with the candidate list order swapped/reversed and count only verdicts BOTH passes agree on; disagreements are reported, never silently resolved.",
@@ -10082,6 +10220,7 @@ function buildReviewPacketData(input) {
 // src/review-contract.ts
 init_shipflow_contract_data();
 var LOOP_VERDICTS = REVIEW_CONTRACT.verdicts.loop;
+var LOOP_ROLE = REVIEW_CONTRACT.roles.loop;
 var SEVERITIES = REVIEW_CONTRACT.severities;
 var DEFAULT_SEVERITY = REVIEW_CONTRACT.defaultSeverity;
 function severityBadge(severity) {
@@ -10097,16 +10236,24 @@ function effortTag(effort) {
 }
 var FINGERPRINT_SIMILARITY_THRESHOLD = REVIEW_CONTRACT.merge.fingerprintSimilarityThreshold;
 function verdictHeader(verdict) {
+  const role = REVIEW_CONTRACT.roles.loop;
   switch (verdict) {
     case "approve":
-      return "**✅ APPROVE — ShipFlow review**";
+      return `**✅ APPROVE — ShipFlow review** · ${role}`;
     case "request_changes":
-      return "**\uD83D\uDD34 CHANGES REQUESTED — ShipFlow review**";
+      return `**\uD83D\uDD34 CHANGES REQUESTED — ShipFlow review** · ${role}`;
     case "reject":
-      return "**⛔ REJECT — ShipFlow review**";
+      return `**⛔ REJECT — ShipFlow review** · ${role}`;
+    case "blocked":
+      return `**${REVIEW_CONTRACT.verdicts.blocked.header}** · ${role}`;
     default:
-      return "**\uD83D\uDCAC ShipFlow review — comments**";
+      return `**\uD83D\uDCAC ShipFlow review — comments** · ${role}`;
   }
+}
+function verdictAllowsFindings(verdict) {
+  if (verdict !== "blocked")
+    return true;
+  return REVIEW_CONTRACT.verdicts.blocked.emitsFindings;
 }
 function findingsIssueGuardError(findings) {
   if (!Array.isArray(findings))
@@ -10257,7 +10404,8 @@ function splitAnchorable(findings, anchors) {
   return { inline, body };
 }
 function buildReviewPayload(opts) {
-  const { inline, body: unanchored } = splitAnchorable(opts.findings, opts.anchors);
+  const findings = verdictAllowsFindings(opts.verdict) ? opts.findings : [];
+  const { inline, body: unanchored } = splitAnchorable(findings, opts.anchors);
   const lines = [verdictHeader(opts.verdict)];
   if (opts.summary.trim())
     lines.push("", opts.summary.trim());
@@ -10516,7 +10664,7 @@ function evaluateScanAttestation(i) {
       ...base,
       ok: false,
       verdict: "undetermined",
-      reason: `GitHub's changed-file count could not be read, so the attestation of ${i.attested} file(s) could not be verified — a gate that could not run is request_changes, never a footnote`,
+      reason: `GitHub's changed-file count could not be read, so the attestation of ${i.attested} file(s) could not be verified — a gate that could not run is --verdict blocked, never a footnote`,
       degraded: [GITHUB_REST_DEP]
     };
   }
@@ -10534,7 +10682,7 @@ function evaluateScanAttestation(i) {
       ...base,
       ok: false,
       verdict: "undetermined",
-      reason: "this PR's diff could not be re-read, so --scan-digest could not be checked — a gate that could not run is request_changes, never a footnote",
+      reason: "this PR's diff could not be re-read, so --scan-digest could not be checked — a gate that could not run is --verdict blocked, never a footnote",
       degraded: [GITHUB_REST_DEP]
     };
   }
@@ -11195,7 +11343,7 @@ ${opts.body ?? ""}`;
     const rawVerdict = (opts.verdict ?? "").trim();
     if (!LOOP_VERDICTS.includes(rawVerdict)) {
       console.error(`Unknown review verdict "${opts.verdict ?? ""}" — valid: ${LOOP_VERDICTS.join(", ")}`);
-      console.error(`   Nothing was posted. A blocking verdict is \`--verdict request_changes\`.`);
+      console.error(`   Nothing was posted. A blocking verdict is \`--verdict request_changes\`. An infra-gate failure is \`--verdict blocked\`.`);
       process.exit(1);
     }
     const verdict = rawVerdict;
@@ -11227,6 +11375,11 @@ ${opts.body ?? ""}`;
       console.error("   Nothing was posted. Each finding needs a non-empty string `issue` (not title/summary).");
       process.exit(1);
     }
+    if (!verdictAllowsFindings(verdict) && findings.length > 0) {
+      console.error(`--verdict ${verdict} refuses --findings (${findings.length} ${findings.length === 1 ? "entry" : "entries"}) — a blocked gate is not a code verdict.`);
+      console.error("   Nothing was posted. Omit --findings (or pass an empty array).");
+      process.exit(1);
+    }
     const census = changedFilesOrNull(repo, number);
     const approving = verdict === "approve";
     let prDiff = null;
@@ -11253,7 +11406,7 @@ ${opts.body ?? ""}`;
         console.error(`   Capture the diff server-side, READ that file, then attest to what you read:`);
         console.error(`     renaiss-shipflow pr diff ${number} --out /tmp/pr-${number}.patch   # prints files=<n> … sha256=<hex>`);
         console.error(`     …then re-run with --scan-files <n> --scan-report <path> --scan-digest <sha256>.`);
-        console.error(`   Reporting that the scan could not run is always allowed: --verdict request_changes.`);
+        console.error(`   Reporting that the scan could not run is always allowed: --verdict blocked (infra) or --verdict request_changes.`);
       });
       process.exit(SCAN_EXIT);
     }
@@ -11306,7 +11459,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
         console.error(`   Capture the diff server-side, READ that file, then attest to what you read:`);
         console.error(`     renaiss-shipflow pr diff ${number} --out /tmp/pr-${number}.patch   # prints files=<n> … sha256=<hex>`);
         console.error(`     …then re-run: renaiss-shipflow pr approve ${number} --scan-files <n> --scan-report <path> --scan-digest <sha256>`);
-        console.error(`   A scan that could not run is request_changes (pr post-review ${number} --verdict request_changes), never an approval.`);
+        console.error(`   A scan that could not run is --verdict blocked (pr post-review ${number} --verdict blocked), never an approval.`);
       });
       process.exit(SCAN_EXIT);
     }
@@ -11997,7 +12150,7 @@ function collectInboxPrRows(repo, me, opts) {
         }
         parentMarkers.set(n, bodies);
       }
-      return bodies.some((b) => hasEscalateOnceMarker(b, prNumber, reason));
+      return bodies.some((b) => hasEscalateOnceMarker(b, prNumber, reason, repo));
     });
     if (filed)
       return true;
@@ -12636,6 +12789,9 @@ ${cat}`);
       console.log(`  ${l}`);
   }
 }
+function realCategories(features) {
+  return [...new Set(Object.values(features).map((f) => f.category).filter((c) => Boolean(c)))].sort();
+}
 function emitMappingOrEmpty(opts, fm) {
   const verdict = verdictForFeatureMapping(fm);
   if (verdict.status === "empty") {
@@ -12646,13 +12802,15 @@ function emitMappingOrEmpty(opts, fm) {
     process.exit(UNEXPECTED_EXIT_CODE);
   }
   const features = verdict.mapping.features ?? {};
-  const keys = Object.keys(features).filter((k) => !opts.category || (features[k].category ?? "") === opts.category);
+  const categoryLower = opts.category?.toLowerCase();
+  const keys = Object.keys(features).filter((k) => !categoryLower || (features[k].category ?? "").toLowerCase() === categoryLower);
   const jsonOut = opts.category ? { ...verdict.mapping, features: Object.fromEntries(keys.map((k) => [k, features[k]])), category: opts.category } : verdict.mapping;
+  if (opts.category && !keys.length) {
+    console.error(`No category "${opts.category}". Categories: ${realCategories(features).join(", ")}`);
+  }
   emit(opts, jsonOut, () => {
-    if (opts.category && !keys.length) {
-      console.log(`No features in category "${opts.category}".`);
+    if (opts.category && !keys.length)
       return;
-    }
     printFeatureMap(fm, features, keys);
   }, { pretty: true });
 }
@@ -12665,7 +12823,7 @@ function flagsFrom(opts, cmd) {
   };
 }
 function registerFeaturesCommand(program2) {
-  const features = program2.command("features").description("ShipFlow's feature map for this project (features → file paths/test info) — the reviewer's whole-system view").option("--json", "Output the raw feature map").option("--yaml", "Output YAML").option("--category <name>", "Filter to one category").action(runAction(async (opts) => {
+  const features = program2.command("features").description("ShipFlow's feature map for this project (features → file paths/test info) — the reviewer's whole-system view").option("--json", "Output the raw feature map").option("--yaml", "Output YAML").option("--category <name>", "Filter to one category (case-insensitive)").action(runAction(async (opts) => {
     const { creds, client, project } = await loadCtx(program2);
     const fm = await client.getFeatureMapping(creds.org, project.projectId);
     emitMappingOrEmpty(opts, fm);
@@ -13038,6 +13196,70 @@ function registerClaimsCommand(program2) {
   }));
 }
 
+// src/commands/agent.ts
+init_client();
+init_helpers();
+import { hostname as hostname4 } from "node:os";
+var TAKEOVER_HELD_EXIT_CODE = 3;
+function describeTakeover(t, now = new Date) {
+  const who = t.agent ? `@${t.actor} (${t.agent})` : `@${t.actor}`;
+  const exp = new Date(t.expiresAt);
+  const mins = Math.max(0, Math.round((exp.getTime() - now.getTime()) / 60000));
+  const until = Number.isFinite(exp.getTime()) ? `until ${exp.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} (${mins} min)` : "";
+  return `${who} ${until}`.trim();
+}
+function registerAgentCommand(program2) {
+  const agent = program2.command("agent").description("Local-agent takeover of the tenant (who processes its workflows: the server or your loop)");
+  agent.command("takeover").description("Take the tenant over for this machine's local agent, or renew the lease (exit 3 when someone else holds it)").option("--agent <name>", "Agent label recorded on the lease (default: $SHIPFLOW_AGENT or hostname)").option("--ttl-minutes <n>", "Lease lifetime without a renew (default 30, max 60)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    const { creds, client } = loadJwtCtx(program2);
+    const label = opts.agent ?? process.env.SHIPFLOW_AGENT ?? hostname4();
+    const ttl = opts.ttlMinutes === undefined ? undefined : Number(opts.ttlMinutes);
+    if (ttl !== undefined && (!Number.isInteger(ttl) || ttl <= 0)) {
+      console.error(`--ttl-minutes must be a positive whole number of minutes, got ${JSON.stringify(opts.ttlMinutes)}`);
+      process.exit(1);
+    }
+    try {
+      const takeover = await client.takeOverTenant(creds.org, { agent: label, ttlMinutes: ttl });
+      emit(opts, { org: creds.org, takeover }, () => {
+        console.log(`Tenant ${creds.org} taken over by ${describeTakeover(takeover)}.`);
+        console.log("While the lease is active the server hands this agent the issue triage, PR review and test-runner events (the loop does those itself); patch notes, summaries and the other workflows keep running server-side. Renew with the same command, release with `renaiss-shipflow agent release`.");
+      }, { pretty: true });
+    } catch (e) {
+      if (e instanceof TakeoverConflictError) {
+        emit(opts, { org: creds.org, error: "tenant taken over", holder: e.holder ?? null }, () => {
+          console.error(`Tenant ${creds.org} is already taken over by ${e.holder ? describeTakeover(e.holder) : "another member's agent"}.`);
+        }, { pretty: true });
+        process.exit(TAKEOVER_HELD_EXIT_CODE);
+      }
+      throw e;
+    }
+  }));
+  agent.command("release").description("Release this member's takeover so the server worker resumes processing").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    const { creds, client } = loadJwtCtx(program2);
+    try {
+      const released = await client.releaseTakeover(creds.org);
+      emit(opts, { org: creds.org, released: released !== null, takeover: released }, () => {
+        console.log(released ? `Released the takeover of ${creds.org} (${describeTakeover(released)}); the server worker resumes processing.` : `${creds.org} was not taken over; nothing to release.`);
+      }, { pretty: true });
+    } catch (e) {
+      if (e instanceof TakeoverConflictError) {
+        emit(opts, { org: creds.org, error: "tenant taken over by someone else", holder: e.holder ?? null }, () => {
+          console.error(`${creds.org} is taken over by ${e.holder ? describeTakeover(e.holder) : "another member's agent"}; only they or an owner/admin can release it (it lapses on its own when their heartbeat stops).`);
+        }, { pretty: true });
+        process.exit(TAKEOVER_HELD_EXIT_CODE);
+      }
+      throw e;
+    }
+  }));
+  agent.command("status").description("Who drives the tenant's workflows right now").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    const { creds, client } = loadJwtCtx(program2);
+    const status = await client.getTakeover(creds.org);
+    emit(opts, { org: creds.org, ...status }, () => {
+      console.log(status.active && status.takeover ? `${creds.org}: taken over by local agent ${describeTakeover(status.takeover)}.` : `${creds.org}: processed server-side (no local-agent takeover).`);
+    }, { pretty: true });
+  }));
+}
+
 // src/commands/capability.ts
 init_helpers();
 var CAPABILITY_CLASSES = ["capability", "access", "secret", "policy"];
@@ -13286,6 +13508,7 @@ registerFeaturesCommand(program2);
 registerPrioritiesCommand(program2);
 registerConfigCommand(program2);
 registerClaimsCommand(program2);
+registerAgentCommand(program2);
 registerCapabilityCommand(program2);
 registerPRCommand(program2);
 registerTestCommand(program2);

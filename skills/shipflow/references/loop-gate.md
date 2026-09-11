@@ -27,7 +27,7 @@ card ONLY when one of those states is in play.
   the whole reply; anything more is a correction.
 
   | **Releasing the gate** | only the reporter, with a reply that is ONLY `/confirm` / `confirm` / `confirmed` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / 👍 / `+1` and nothing else — never the loop |
-  | **Releasing it the other way** — the numbered `N: answer` door | a decision reply to an escalation ALSO releases it, under **four** preconditions, every one required: the block is the whole quote-stripped reply; **every** line of that block is itself a decision line; **every** answer is a `confirmationTokens` entry; and the thread carries an escalation banner. That fourth one is weaker than it sounds — `escalationOutstanding` returns true on the **first banner found anywhere in the comment history**, with no answered/resolved/superseded check, so a **stale** banner still opens this door (#486). The rule is single-sourced in `contracts/shipflow-contract.json` → `intentGate.$comment` — read it there; do **not** restate the matcher here (two hand-written copies is how #411 happened) |
+  | **Releasing it the other way** — the numbered `N: answer` door | a decision reply to an escalation ALSO releases it, under **four** preconditions, every one required: the block is the whole quote-stripped reply; **every** line of that block is itself a decision line; **every** answer is a `confirmationTokens` entry; and an escalation is **outstanding** — the thread's **newest** 🚧 banner is unanswered since its last edit and `needs-human` is still on, so an answered or superseded banner does not open this door (#486). The rule is single-sourced in `contracts/shipflow-contract.json` → `intentGate.$comment` — read it there; do **not** restate the matcher here (two hand-written copies is how #411 happened) |
   | **Correcting the reading** | leaves the gate ON, by design: rework the PR — the loop now DOES, via `reporter_corrected` (see below) |
   | **A QUALIFIED yes** | also leaves it ON — `yes but change the copy first` is a correction, not consent |
   | **Prose that reads as consent** | also leaves it ON — even `Confirmed — ship it`, because it is not the token |
@@ -102,28 +102,39 @@ card ONLY when one of those states is in play.
   | **Gate** | Untouched. Never remove the label; never post a confirmation on the reporter's behalf. `pr automerge` still refuses with `unconfirmed interpretation`, and the reworked PR re-arms. |
   | **Ceiling** | `max-fix-attempts` reworks per PR (default 3). At the ceiling the row falls back to `awaiting_reporter` carrying `rework_ceiling` in `reasons` → escalate ONCE, don't re-poll. |
   | **`correction_unreadable`** | The PR has human-shaped comments but NO loop-machinery comment at all, so the detector refuses to read the thread (below). Escalate to a human — never hand-judge it into a rework. |
-  | **`reporter_gate_stale`** | Nobody replied AT ALL and the gate has stood past `stale-pr-hours` (#439). `gateAgeHours` is the wait, anchored on the gate notice — **not** `updatedAt`, which the loop's own machinery keeps resetting. Escalate once; never nudge the PR. |
+  | **`reporter_gate_stale`** | Nobody replied AT ALL and the gate has stood past `stale-pr-hours` (#439). `gateAgeHours` is the wait, anchored on the gate notice — **not** `updatedAt`, which the loop's own machinery keeps resetting. Notify once; never nudge the PR. |
 
   🟡 **The three refusals arrive as WORK, once.** `rework_ceiling`,
   `correction_unreadable` and `reporter_gate_stale` stay
   `awaiting_reporter` — no rework route out — but carry **`escalateOnce:
   true`** and `needsAttention: true` (Phase A iterates `needsAttention`).
   A PR with no linked issue has nothing to escalate and stays parked. Do
-  ONLY the escalation from such a row — never a rework, never a merge.
+  ONLY the notification from such a row — never a rework, never a merge.
+  **Confirmation-only → `issue point-confirm` (#975).** When the only
+  decision is confirming the PR interpretation, the issue is one visible
+  pointer line to the PR comment box. It has no issue-reply footer, decision
+  panel, label changes, claim release, or precedent lookup. Parent tokens
+  still only nudge; server authorization is unchanged.
+  **Other or mixed decisions → ordinary escalation.** Keep the full numbered
+  escalation for correction handling, operator work, or a separate decision;
+  never hide these inside a confirmation pointer. A Judge block for a
+  confirmation-only wait uses `review` with `--pr-status "Awaiting reporter confirmation"`,
+  not `waiting` with an issue-side confirmation reply.
 
   🔴 **Once means ONCE PER (PR, REASON), EVER — and you must pass the
   key.**
 
   | | |
   |---|---|
-  | **Command** | `renaiss-shipflow issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason>` |
+  | **Confirmation-only command** | `renaiss-shipflow issue point-confirm <parent> --for-pr <pr> --once-reason <escalateOnceReason>` |
+  | **Other decisions** | `renaiss-shipflow issue escalate <parent> --for-pr <pr> --once-reason <escalateOnceReason> --reason "…" --category <category>` |
   | **Both flags, always** | The CLI refuses a half-written key (exit 1, nothing written). Copy `escalateOnceReason` verbatim off the row. |
   | **Invariant** | At most **one** escalation per (PR, reason), forever. A genuinely NEW reason on the same PR earns exactly one more. A PR is capped at one per `ESCALATE_ONCE_REASONS` entry. |
-  | **Where it lives** | A hidden `escalate-once` marker inside the escalation banner — no extra comment. `inbox` reads it back off the parent's comments. |
-  | **What counts as a key** | Three filters, all required: the CLI's own account authored the comment, the marker stands alone at column 0, and the comment **is an escalation banner**. A marker in any other CLI comment on the parent — an `issue wait --reason`, a loop-progress note — is prose, not a key. |
+  | **Where it lives** | A hidden `escalate-once` marker inside the escalation banner or bounded pointer — no extra comment. `inbox` reads it back off the parent's comments. |
+  | **What counts as a key** | Three filters, all required: the CLI's own account authored the comment, the marker stands alone at column 0, and the comment **is an escalation banner or the complete bounded pointer**. A pointer’s PR number, same-repo comment-box URL and reporter-only reason must agree. A marker in any other CLI comment on the parent — an `issue wait --reason`, a loop-progress note — is prose, not a key. |
   | **`--update`** | Refused **with** a key — this is the one notification that (PR, reason) ever gets, so it must be a new comment. **Without** a key it is safe: an in-place edit carries every marker on the edited banner forward, so an ordinary re-escalation of the same parent can never erase a key already on file. |
-  | **No precedent reuse** | A keyed escalation sends `surfaceOnly:true`, surfaces the `Precedent on file` fold, and never auto-applies. Undo cannot un-write the once-key, so a reused-then-undone answer would park the row forever. |
-  | **Write it plainly** | Marker literals inside a `--reason` are escaped before they reach the banner, **and** a key is only read out of a banner, so quoting one anywhere — an escalation reason, an `issue wait` reason, a progress note — is harmless. Only the real `--for-pr`/`--once-reason` flags file one. |
+  | **No precedent reuse** | Pointers never query or capture precedents. A keyed escalation sends `surfaceOnly:true`, surfaces the `Precedent on file` fold, and never auto-applies. Undo cannot un-write the once-key, so a reused-then-undone answer would park the row forever. |
+  | **Write it plainly** | Marker literals inside a `--reason` are escaped before they reach the banner, **and** a key is only read out of a banner or complete bounded pointer, so quoting one anywhere — an escalation reason, an `issue wait` reason, a progress note — is harmless. Only the real `--for-pr`/`--once-reason` flags file one. Pointers accept no free-text reason and reject closed, ungated, or unlinked PRs before writes; repeat calls with an authenticated key do nothing. |
 
   ⚠️ **Never "just re-escalate", never key once-ness off the label:** the
   server strips `needs-human` on any non-machinery comment — label-keyed

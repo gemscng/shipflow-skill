@@ -72,12 +72,12 @@ into. These rules exist because each was violated at measurable cost:
   reader diff two walls of text to learn nothing changed.
 - **Empty fields are omitted, not printed.** `health Δ n/a` is a row that
   says nothing — a line/row/cell earns its place only when it has content.
-- **A blocked gate is not a code verdict.** When `request_changes` is
-  forced by infrastructure (feature map empty/404, scan capture failed,
-  CI runner outage), the FIRST body line is
-  `Not a code defect — <gate> could not run.` followed by the one action
-  that unblocks it. A bare red verdict on green code sends the author
-  hunting for a bug that isn't there (#935, #929).
+- **A blocked gate is not a code verdict.** Empty-map / scan-capture fail /
+  threads-unavailable → `--verdict blocked` (⏸ header from
+  `verdicts.blocked`, zero findings). Never a line-1 severity/effort
+  finding. The approve command still refuses. Scan flags stay unrequired
+  (same as `request_changes`). A bare red verdict on green code sends the
+  author hunting for a bug that isn't there (#935, #929).
 - **The recommendation appears once.** In the decision table's
   Recommendation column when there is a table, else as the single
   `**Recommendation:**` line — never both (#890 said "Hold" twice).
@@ -121,6 +121,21 @@ PR body template (sections, all visual-first, blank line between each):
 `Closes #N` (full fix) / `Part of #N` (slice) · **Root cause** ≤3 bullets, `mermaid`
 if the failure is a flow · **Changed** table (file → before → after) · **Testing**
 checklist with numbers · **Evidence** images/links.
+
+### Confirmation-only notification — one PR reply surface (#975)
+
+`renaiss-shipflow issue point-confirm <parent> --for-pr <pr> --once-reason
+<escalateOnceReason>` emits exactly one visible issue line:
+
+`⏸ Confirm on PR #N → https://github.com/owner/repo/pull/N#new_comment_field`
+
+The PR owns the confirmation and correction. Never add an issue reply
+protocol, numbered decision table, decision panel, or second confirmation
+ask to this pointer. Labels, claims, precedents, and gate authorization stay
+unchanged. The hidden loop and once-key markers preserve machinery identity
+and authenticated notification suppression. Parent tokens remain nudges.
+Ordinary and mixed decisions retain the escalation contract below; a reason
+mentioning “confirm PR” alone never proves confirmation is its only ask.
 
 ### Escalation comment — the 🚧 shape (#969)
 
