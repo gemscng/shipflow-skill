@@ -2367,6 +2367,33 @@ class ShipFlowClient {
       throw e;
     }
   }
+  async nextAgentJob(org, opts = {}) {
+    const q = new URLSearchParams;
+    if (opts.wait !== undefined)
+      q.set("wait", String(opts.wait));
+    if (opts.agent)
+      q.set("agent", opts.agent);
+    const qs = q.size ? `?${q}` : "";
+    try {
+      const res = await this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/agent/jobs/next${qs}`);
+      return res?.job ?? null;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409)
+        throw new TakeoverConflictError(parseHolder(e.body));
+      throw e;
+    }
+  }
+  async finishAgentJob(org, jobId, result) {
+    await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/agent/jobs/${encodeURIComponent(jobId)}/result`, result);
+  }
+  async createAgentToolCall(org, jobId, call, wait = 20) {
+    const res = await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/agent/jobs/${encodeURIComponent(jobId)}/tool-calls?wait=${wait}`, call);
+    return res.toolCall;
+  }
+  async getAgentToolCall(org, jobId, callId, wait = 20) {
+    const res = await this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/agent/jobs/${encodeURIComponent(jobId)}/tool-calls/${encodeURIComponent(callId)}?wait=${wait}`);
+    return res.toolCall;
+  }
   async createCapabilityRequest(org, projectId, body) {
     const res = await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/capability-requests`, body);
     return res.capabilityRequest;
@@ -13197,9 +13224,457 @@ function registerClaimsCommand(program2) {
 }
 
 // src/commands/agent.ts
+import { hostname as hostname4 } from "node:os";
+
+// src/agent-engine.ts
+init_client();
+import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { mkdtempSync, rmSync as rmSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join as join6 } from "node:path";
+var LEAKED_CLAUDE_ENV_KEYS = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_EXECPATH",
+  "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING",
+  "CLAUDE_AGENT_SDK_VERSION",
+  "ANTHROPIC_API_KEY"
+];
+function claudeEnv(parent = process.env) {
+  const env = {};
+  for (const [k, v] of Object.entries(parent)) {
+    if (!LEAKED_CLAUDE_ENV_KEYS.includes(k))
+      env[k] = v;
+  }
+  return env;
+}
+var MCP_SERVER_NAME = "renaissshipflow";
+function mcpToolNames(tools) {
+  return tools.map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`).join(",");
+}
+function buildClaudeArgs(job, opts = {}) {
+  const req = job.request;
+  const args = ["-p"];
+  const images = usableImages(req.images);
+  if (job.kind === "tools") {
+    args.push("--output-format", "json", "--no-session-persistence", "--tools", "");
+    if (opts.mcpConfigPath)
+      args.push("--mcp-config", opts.mcpConfigPath, "--allowedTools", mcpToolNames(req.tools ?? []));
+    if (opts.strictMcp)
+      args.push("--strict-mcp-config");
+  } else if (images.length > 0) {
+    args.push("--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--tools", "");
+  } else {
+    args.push("--output-format", "json", "--no-session-persistence", "--tools", "");
+  }
+  if (req.effort)
+    args.push("--effort", req.effort);
+  if (req.systemPrompt)
+    args.push("--system-prompt", req.systemPrompt);
+  if (job.kind === "tools" && req.maxTurns && req.maxTurns > 0)
+    args.push("--max-turns", String(req.maxTurns));
+  const model = opts.model ?? job.model;
+  if (model)
+    args.push("--model", model);
+  return args;
+}
+function usableImages(images) {
+  return (images ?? []).filter((i) => i.data && i.mediaType);
+}
+function streamJsonUserMessage(prompt, images) {
+  const content = [];
+  if (prompt)
+    content.push({ type: "text", text: prompt });
+  for (const img of images) {
+    content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
+  }
+  return JSON.stringify({ type: "user", message: { role: "user", content } }) + `
+`;
+}
+function claudeStdin(job) {
+  const images = job.kind === "tools" ? [] : usableImages(job.request.images);
+  return images.length > 0 ? streamJsonUserMessage(job.request.userPrompt, images) : job.request.userPrompt;
+}
+function extractResultJson(stdout) {
+  const isResult = (text2) => {
+    try {
+      return JSON.parse(text2).type === "result";
+    } catch {
+      return false;
+    }
+  };
+  const whole = stdout.trim();
+  if (whole.startsWith("{") && isResult(whole))
+    return whole;
+  let last = "";
+  for (const raw of stdout.split(`
+`)) {
+    const line = raw.trim();
+    if (line.startsWith("{") && isResult(line))
+      last = line;
+  }
+  return last || whole;
+}
+function parseClaudeResult(stdout, stderr, exitCode, signal) {
+  const text2 = extractResultJson(stdout);
+  let parsed;
+  try {
+    parsed = JSON.parse(text2);
+  } catch {
+    parsed = undefined;
+  }
+  if (exitCode !== 0) {
+    const detail = (stderr.trim() || stdout.trim() || "(no output)").slice(0, 2000);
+    const how = signal ? `killed by ${signal}` : `exited ${exitCode}`;
+    return { ok: false, error: `claude CLI ${how}: ${parsed?.result ?? detail}` };
+  }
+  if (!parsed || parsed.type !== "result") {
+    return { ok: false, error: `claude CLI produced no result event: ${(stdout.trim() || stderr.trim()).slice(0, 500)}` };
+  }
+  if (parsed.is_error || parsed.subtype && parsed.subtype !== "success") {
+    return { ok: false, error: `claude CLI reported ${parsed.subtype ?? "an error"}: ${(parsed.result ?? "").slice(0, 2000)}` };
+  }
+  let tokensIn = 0, tokensOut = 0, cacheCreation = 0, cacheRead = 0;
+  const models = Object.keys(parsed.modelUsage ?? {}).sort();
+  for (const m of models) {
+    const u = parsed.modelUsage[m];
+    tokensIn += u.inputTokens ?? 0;
+    tokensOut += u.outputTokens ?? 0;
+    cacheCreation += u.cacheCreationInputTokens ?? 0;
+    cacheRead += u.cacheReadInputTokens ?? 0;
+  }
+  if (models.length === 0 && parsed.usage) {
+    tokensIn = parsed.usage.input_tokens ?? 0;
+    tokensOut = parsed.usage.output_tokens ?? 0;
+  }
+  return {
+    ok: true,
+    response: {
+      content: parsed.result ?? "",
+      tokensIn,
+      tokensOut,
+      cacheCreationTokens: cacheCreation,
+      cacheReadTokens: cacheRead,
+      costUsd: parsed.total_cost_usd ?? 0,
+      model: models.join(",")
+    }
+  };
+}
+async function handleMcpRequest(tools, run, req, counter) {
+  const id = req.id;
+  switch (req.method) {
+    case "initialize":
+      return { jsonrpc: "2.0", id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: MCP_SERVER_NAME, version: "1.0" } } };
+    case "notifications/initialized":
+      return { jsonrpc: "2.0", id, result: {} };
+    case "tools/list":
+      return { jsonrpc: "2.0", id, result: { tools: tools.map((t) => ({ name: t.name, description: t.description ?? "", inputSchema: t.inputSchema ?? { type: "object" } })) } };
+    case "tools/call": {
+      const name = req.params?.name;
+      if (!name)
+        return { jsonrpc: "2.0", id, error: { code: -32602, message: "invalid params: tool name missing" } };
+      counter.calls++;
+      const { output, isError } = await run(name, req.params?.arguments ?? {});
+      return { jsonrpc: "2.0", id, result: { ...isError ? { isError: true } : {}, content: [{ type: "text", text: output }] } };
+    }
+    default:
+      return { jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${req.method ?? ""}` } };
+  }
+}
+function newBridgeToken() {
+  return randomBytes(24).toString("hex");
+}
+function startToolBridge(tools, run, token = newBridgeToken()) {
+  const counter = { calls: 0 };
+  const server = createServer((req, res) => {
+    if (req.method !== "POST") {
+      res.writeHead(405).end("method not allowed");
+      return;
+    }
+    if (req.headers.authorization !== `Bearer ${token}`) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized: missing or wrong bridge token" } }));
+      return;
+    }
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32700, message: "parse error" } }));
+        return;
+      }
+      handleMcpRequest(tools, run, parsed, counter).then((out) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(out));
+      }, (e) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, error: { code: -32000, message: e instanceof Error ? e.message : String(e) } }));
+      });
+    });
+  });
+  return new Promise((resolve4, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      resolve4({
+        url: `http://127.0.0.1:${port}`,
+        token,
+        toolCalls: () => counter.calls,
+        close: () => new Promise((done) => {
+          server.closeAllConnections?.();
+          server.close(() => done());
+        })
+      });
+    });
+  });
+}
+function writeMcpConfig(dir, url, token) {
+  const path = join6(dir, "mcp-config.json");
+  writeFileSync4(path, JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { type: "http", url, headers: { Authorization: `Bearer ${token}` } } } }), { mode: 384 });
+  return path;
+}
+function summarizeJob(job) {
+  return {
+    id: job.id,
+    kind: job.kind,
+    workflowType: job.workflowType,
+    executionId: job.executionId,
+    stage: job.stage,
+    model: job.model,
+    ...job.request.tools?.length ? { tools: job.request.tools.length } : {}
+  };
+}
+function relayToolRunner(client, org, jobId, opts) {
+  const wait = opts.wait ?? 20;
+  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  return async (name, input) => {
+    let state = await client.createAgentToolCall(org, jobId, { name, input }, wait);
+    while (state.status !== "done") {
+      if (Date.now() > opts.deadline)
+        return { output: `tool ${name} timed out waiting for the server`, isError: true };
+      if (wait === 0)
+        await sleep(250);
+      state = await client.getAgentToolCall(org, jobId, state.id, wait);
+    }
+    if (state.error)
+      return { output: state.error, isError: true };
+    return { output: state.output ?? "", isError: false };
+  };
+}
+async function runAgentJob(job, client, org, opts) {
+  const started = Date.now();
+  const deadline = Math.min(started + opts.timeoutMs, new Date(job.expiresAt).getTime() || Infinity);
+  let bridge;
+  let scratch;
+  let mcpConfigPath;
+  try {
+    if (job.kind === "tools") {
+      const tools = job.request.tools ?? [];
+      if (tools.length === 0)
+        return { error: "tools job carried no tool definitions", toolCalls: 0, durationMs: Date.now() - started };
+      bridge = await startToolBridge(tools, relayToolRunner(client, org, job.id, { deadline }));
+      scratch = mkdtempSync(join6(tmpdir(), "shipflow-engine-"));
+      mcpConfigPath = writeMcpConfig(scratch, bridge.url, bridge.token);
+    }
+    const args = buildClaudeArgs(job, { model: opts.model, mcpConfigPath, strictMcp: opts.strictMcp });
+    const run = await spawnClaude(opts.claudeBin, args, claudeStdin(job), claudeEnv(opts.env ?? process.env), Math.max(1000, deadline - Date.now()));
+    const parsed = parseClaudeResult(run.stdout, run.stderr, run.exitCode, run.signal);
+    const toolCalls = bridge?.toolCalls() ?? 0;
+    if (!parsed.ok)
+      return { error: run.timedOut ? `local claude timed out after ${Math.round(opts.timeoutMs / 60000)} min` : parsed.error, toolCalls, durationMs: Date.now() - started };
+    if (job.kind === "tools" && toolCalls === 0 && !job.request.toolsOptional) {
+      return { error: "claude CLI completed without calling any MCP tools — the MCP bridge was not used (check the CLI's --mcp-config support)", toolCalls, durationMs: Date.now() - started };
+    }
+    return { response: { ...parsed.response, toolCalls }, toolCalls, durationMs: Date.now() - started };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e), toolCalls: bridge?.toolCalls() ?? 0, durationMs: Date.now() - started };
+  } finally {
+    if (bridge)
+      await bridge.close();
+    if (scratch)
+      rmSync2(scratch, { recursive: true, force: true });
+  }
+}
+function spawnClaude(bin, args, stdin, env, timeoutMs) {
+  return new Promise((resolve4, reject) => {
+    const child = spawn(bin, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "", stderr = "", timedOut = false;
+    child.stdout.setEncoding("utf8").on("data", (d) => {
+      stdout += d;
+    });
+    child.stderr.setEncoding("utf8").on("data", (d) => {
+      stderr += d;
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    child.once("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve4({ stdout, stderr, exitCode: code, signal, timedOut });
+    });
+    child.stdin.on("error", () => {});
+    child.stdin.end(stdin);
+  });
+}
+function detectClaude(bin, env = claudeEnv()) {
+  const probe = (flag) => new Promise((resolve4) => {
+    const child = spawn(bin, [flag], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.setEncoding("utf8").on("data", (d) => {
+      out += d;
+    });
+    child.stderr.setEncoding("utf8").on("data", (d) => {
+      out += d;
+    });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 15000);
+    child.once("error", (e) => {
+      clearTimeout(timer);
+      resolve4(`ERROR: ${e.message}`);
+    });
+    child.once("close", () => {
+      clearTimeout(timer);
+      resolve4(out);
+    });
+  });
+  return Promise.all([probe("--version"), probe("--help")]).then(([version, help]) => {
+    if (version.startsWith("ERROR:"))
+      throw new Error(`cannot run ${bin}: ${version.slice(7)} — install Claude Code or pass --claude-bin`);
+    return { version: version.trim().split(`
+`)[0] ?? "", strictMcp: help.includes("--strict-mcp-config") };
+  });
+}
+async function serveEngine(client, org, opts) {
+  const lease = { agent: opts.agent, mode: "engine", ttlMinutes: opts.ttlMinutes };
+  await client.takeOverTenant(org, lease);
+  opts.onEvent({ type: "started", org, agent: opts.agent, claude: opts.claudeBin, model: opts.model, concurrency: opts.concurrency });
+  let served = 0, failed = 0, claimed = 0;
+  const state = { reason: "stopped" };
+  const controller = new AbortController;
+  const stopAll = (why) => {
+    if (!controller.signal.aborted) {
+      state.reason = why;
+      controller.abort();
+    }
+  };
+  opts.stop.addEventListener("abort", () => stopAll("stopped"), { once: true });
+  if (opts.stop.aborted)
+    stopAll("stopped");
+  const pause = (ms) => new Promise((resolve4) => {
+    if (controller.signal.aborted)
+      return resolve4();
+    let timer;
+    const onAbort = () => {
+      if (timer)
+        clearTimeout(timer);
+      resolve4();
+    };
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+    const finish = () => {
+      controller.signal.removeEventListener("abort", onAbort);
+      resolve4();
+    };
+    if (opts.sleep)
+      opts.sleep(ms).then(finish);
+    else
+      timer = setTimeout(finish, ms);
+  });
+  const heartbeat = (async () => {
+    const every = Math.max(15000, opts.ttlMinutes * 60000 * 0.4);
+    while (!controller.signal.aborted) {
+      await pause(every);
+      if (controller.signal.aborted)
+        return;
+      try {
+        const t = await client.takeOverTenant(org, lease);
+        opts.onEvent({ type: "renewed", expiresAt: t.expiresAt });
+      } catch (e) {
+        if (e instanceof TakeoverConflictError) {
+          opts.onEvent({ type: "lost", holder: e.holder });
+          stopAll("lost");
+          return;
+        }
+        opts.onEvent({ type: "warning", message: `lease renew failed: ${e instanceof Error ? e.message : String(e)}` });
+      }
+    }
+  })();
+  const worker = async () => {
+    while (!controller.signal.aborted) {
+      if (opts.maxJobs > 0 && claimed >= opts.maxJobs)
+        return;
+      let job;
+      try {
+        job = await client.nextAgentJob(org, { wait: opts.pollWait, agent: opts.agent });
+      } catch (e) {
+        if (e instanceof TakeoverConflictError) {
+          opts.onEvent({ type: "lost", holder: e.holder });
+          stopAll("lost");
+          return;
+        }
+        opts.onEvent({ type: "warning", message: `poll failed: ${e instanceof Error ? e.message : String(e)}` });
+        await pause(5000);
+        continue;
+      }
+      if (!job) {
+        opts.onEvent({ type: "idle" });
+        await pause(opts.pollWait > 0 ? 0 : 250);
+        continue;
+      }
+      if (controller.signal.aborted || opts.maxJobs > 0 && claimed >= opts.maxJobs) {
+        await client.finishAgentJob(org, job.id, { error: "engine is shutting down" }).catch(() => {
+          return;
+        });
+        return;
+      }
+      claimed++;
+      const summary = summarizeJob(job);
+      opts.onEvent({ type: "claimed", job: summary });
+      const outcome = await runAgentJob(job, client, org, opts);
+      try {
+        await client.finishAgentJob(org, job.id, outcome.response ? { response: outcome.response } : { error: outcome.error ?? "unknown failure" });
+      } catch (e) {
+        opts.onEvent({ type: "warning", message: `could not post the result of job ${job.id}: ${e instanceof Error ? e.message : String(e)}` });
+      }
+      if (outcome.response)
+        served++;
+      else
+        failed++;
+      opts.onEvent({ type: "finished", job: summary, outcome: outcome.response ? { ...outcome, response: { ...outcome.response, content: `(${outcome.response.content.length} chars)` } } : outcome });
+      if (opts.maxJobs > 0 && claimed >= opts.maxJobs)
+        stopAll("max-jobs");
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, opts.concurrency) }, () => worker()));
+  stopAll(state.reason);
+  await heartbeat.catch(() => {
+    return;
+  });
+  const reason = state.reason;
+  if (reason !== "lost") {
+    await client.releaseTakeover(org).catch((e) => {
+      opts.onEvent({ type: "warning", message: `release failed (the lease lapses on its own in ${opts.ttlMinutes} min): ${e instanceof Error ? e.message : String(e)}` });
+    });
+  }
+  opts.onEvent({ type: "stopped", served, failed, reason });
+  return { served, failed, reason };
+}
+
+// src/commands/agent.ts
 init_client();
 init_helpers();
-import { hostname as hostname4 } from "node:os";
+var ENGINE_TTL_MINUTES = 5;
+var ENGINE_JOB_TIMEOUT_MINUTES = 15;
 var TAKEOVER_HELD_EXIT_CODE = 3;
 function describeTakeover(t, now = new Date) {
   const who = t.agent ? `@${t.actor} (${t.agent})` : `@${t.actor}`;
@@ -13208,9 +13683,41 @@ function describeTakeover(t, now = new Date) {
   const until = Number.isFinite(exp.getTime()) ? `until ${exp.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} (${mins} min)` : "";
   return `${who} ${until}`.trim();
 }
+function describeMode(mode) {
+  return mode === "engine" ? "local engine: this machine runs every model call of every workflow; the server keeps orchestrating and spends no AI credits for the tenant" : "local loop: the server hands this agent the issue triage, PR review and test-runner events (the loop does those itself); every other workflow keeps running server-side";
+}
+function formatEngineEvent(e, now = new Date) {
+  const ts = now.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const jobName = (j) => `${j.workflowType ?? "call"}${j.stage ? `/${j.stage}` : ""} (${j.kind}, ${j.id.slice(-6)})`;
+  switch (e.type) {
+    case "started":
+      return `[${ts}] Local engine ${e.agent} serving ${e.org}: ${e.claude}${e.model ? ` --model ${e.model}` : ""}, ${e.concurrency} job${e.concurrency === 1 ? "" : "s"} at a time. Every server workflow's model calls now run here. Ctrl-C releases the tenant.`;
+    case "claimed":
+      return `[${ts}] ▶ ${jobName(e.job)}`;
+    case "finished": {
+      const secs = (e.outcome.durationMs / 1000).toFixed(1);
+      if (e.outcome.response) {
+        const r = e.outcome.response;
+        const tools = e.outcome.toolCalls ? ` · ${e.outcome.toolCalls} tool call${e.outcome.toolCalls === 1 ? "" : "s"}` : "";
+        return `[${ts}] ✓ ${jobName(e.job)} in ${secs}s · ${r.tokensIn ?? 0} in / ${r.tokensOut ?? 0} out${tools}${r.model ? ` · ${r.model}` : ""}`;
+      }
+      return `[${ts}] ✗ ${jobName(e.job)} after ${secs}s: ${e.outcome.error ?? "unknown failure"}`;
+    }
+    case "idle":
+      return;
+    case "renewed":
+      return;
+    case "lost":
+      return `[${ts}] Lost the tenant: now taken over by ${e.holder ? `@${e.holder.actor}${e.holder.agent ? ` (${e.holder.agent})` : ""}` : "another member"}. Stopping.`;
+    case "warning":
+      return `[${ts}] ! ${e.message}`;
+    case "stopped":
+      return `[${ts}] Stopped (${e.reason}): ${e.served} served, ${e.failed} failed. ${e.reason === "lost" ? "" : "Tenant released; the server processes its own model calls again."}`.trim();
+  }
+}
 function registerAgentCommand(program2) {
   const agent = program2.command("agent").description("Local-agent takeover of the tenant (who processes its workflows: the server or your loop)");
-  agent.command("takeover").description("Take the tenant over for this machine's local agent, or renew the lease (exit 3 when someone else holds it)").option("--agent <name>", "Agent label recorded on the lease (default: $SHIPFLOW_AGENT or hostname)").option("--ttl-minutes <n>", "Lease lifetime without a renew (default 30, max 60)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  agent.command("takeover").description("Take the tenant over for this machine's local agent, or renew the lease (exit 3 when someone else holds it)").option("--agent <name>", "Agent label recorded on the lease (default: $SHIPFLOW_AGENT or hostname)").option("--mode <mode>", "What to take over: loop (the three loop events; default) or engine (every model call — prefer `agent serve`, which also runs them)").option("--ttl-minutes <n>", "Lease lifetime without a renew (default 30, max 60)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const { creds, client } = loadJwtCtx(program2);
     const label = opts.agent ?? process.env.SHIPFLOW_AGENT ?? hostname4();
     const ttl = opts.ttlMinutes === undefined ? undefined : Number(opts.ttlMinutes);
@@ -13218,11 +13725,16 @@ function registerAgentCommand(program2) {
       console.error(`--ttl-minutes must be a positive whole number of minutes, got ${JSON.stringify(opts.ttlMinutes)}`);
       process.exit(1);
     }
+    if (opts.mode !== undefined && opts.mode !== "loop" && opts.mode !== "engine") {
+      console.error(`--mode must be "loop" or "engine", got ${JSON.stringify(opts.mode)}`);
+      process.exit(1);
+    }
+    const mode = opts.mode;
     try {
-      const takeover = await client.takeOverTenant(creds.org, { agent: label, ttlMinutes: ttl });
+      const takeover = await client.takeOverTenant(creds.org, { agent: label, ttlMinutes: ttl, ...mode ? { mode } : {} });
       emit(opts, { org: creds.org, takeover }, () => {
-        console.log(`Tenant ${creds.org} taken over by ${describeTakeover(takeover)}.`);
-        console.log("While the lease is active the server hands this agent the issue triage, PR review and test-runner events (the loop does those itself); patch notes, summaries and the other workflows keep running server-side. Renew with the same command, release with `renaiss-shipflow agent release`.");
+        console.log(`Tenant ${creds.org} taken over by ${describeTakeover(takeover)} — ${describeMode(takeover.mode)}.`);
+        console.log(takeover.mode === "engine" ? "Nothing runs until an engine drains the queue: start `renaiss-shipflow agent serve` on this machine (it holds and renews this lease itself)." : "Renew with the same command, release with `renaiss-shipflow agent release`.");
       }, { pretty: true });
     } catch (e) {
       if (e instanceof TakeoverConflictError) {
@@ -13255,9 +13767,96 @@ function registerAgentCommand(program2) {
     const { creds, client } = loadJwtCtx(program2);
     const status = await client.getTakeover(creds.org);
     emit(opts, { org: creds.org, ...status }, () => {
-      console.log(status.active && status.takeover ? `${creds.org}: taken over by local agent ${describeTakeover(status.takeover)}.` : `${creds.org}: processed server-side (no local-agent takeover).`);
+      console.log(status.active && status.takeover ? `${creds.org}: taken over by local agent ${describeTakeover(status.takeover)} — ${describeMode(status.takeover.mode)}.` : `${creds.org}: processed server-side (no local-agent takeover).`);
+      console.log(status.engineEnabled ? "Engine mode: enabled for this org (owners/admins may run `renaiss-shipflow agent serve`)." : "Engine mode: off for this org — an owner/admin turns it on in Settings (engine_takeover_enabled) before `agent serve` is allowed.");
     }, { pretty: true });
   }));
+  agent.command("serve").description("Become the tenant's AI engine: hold it in engine mode and run every server workflow's model calls on this machine's Claude until Ctrl-C").option("--agent <name>", "Agent label recorded on the lease (default: $SHIPFLOW_AGENT or hostname)").option("--model <model>", "Run every job on this model instead of the one the server would have used").option("--claude-bin <path>", "Claude Code binary (default: $SHIPFLOW_CLAUDE_BIN or `claude` on PATH)").option("--concurrency <n>", `Jobs to run at once (default 1)`).option("--ttl-minutes <n>", `Lease lifetime without a renew (default ${ENGINE_TTL_MINUTES}; renewed automatically)`).option("--job-timeout-minutes <n>", `Kill a local run after this long (default ${ENGINE_JOB_TIMEOUT_MINUTES})`).option("--max-jobs <n>", "Stop after this many jobs (default: run until Ctrl-C)").option("--once", "Serve one job, then stop (same as --max-jobs 1)").option("--json", "One JSON line per event instead of the log").action(runAction(async (opts) => {
+    const { creds, client } = loadJwtCtx(program2);
+    const num2 = (flag, raw, fallback) => {
+      if (raw === undefined)
+        return fallback;
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n <= 0) {
+        console.error(`${flag} must be a positive whole number, got ${JSON.stringify(raw)}`);
+        process.exit(1);
+      }
+      return n;
+    };
+    const agentLabel = opts.agent ?? process.env.SHIPFLOW_AGENT ?? hostname4();
+    const claudeBin = opts.claudeBin ?? process.env.SHIPFLOW_CLAUDE_BIN ?? "claude";
+    const concurrency = num2("--concurrency", opts.concurrency, 1);
+    const ttlMinutes = num2("--ttl-minutes", opts.ttlMinutes, ENGINE_TTL_MINUTES);
+    const timeoutMinutes = num2("--job-timeout-minutes", opts.jobTimeoutMinutes, ENGINE_JOB_TIMEOUT_MINUTES);
+    const maxJobs = opts.once ? 1 : num2("--max-jobs", opts.maxJobs, 0);
+    const claude = await detectClaude(claudeBin);
+    const stop = new AbortController;
+    const onSignal = () => {
+      if (!stop.signal.aborted) {
+        if (!opts.json)
+          console.error("Stopping after the current poll/job; the tenant is released on exit (Ctrl-C again to abandon).");
+        stop.abort();
+      } else {
+        process.exit(130);
+      }
+    };
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    const onEvent = (e) => {
+      if (opts.json) {
+        const { ...rest } = e;
+        console.log(JSON.stringify({ at: new Date().toISOString(), ...rest }));
+        return;
+      }
+      const line = formatEngineEvent(e);
+      if (line)
+        console.log(line);
+    };
+    try {
+      const summary = await serveEngine(client, creds.org, {
+        claudeBin,
+        model: opts.model,
+        strictMcp: claude.strictMcp,
+        timeoutMs: timeoutMinutes * 60000,
+        agent: agentLabel,
+        ttlMinutes,
+        concurrency,
+        maxJobs,
+        pollWait: 20,
+        onEvent,
+        stop: stop.signal
+      });
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      if (summary.reason === "lost")
+        process.exit(TAKEOVER_HELD_EXIT_CODE);
+    } catch (e) {
+      if (e instanceof TakeoverConflictError) {
+        emit(opts, { org: creds.org, error: "tenant taken over", holder: e.holder ?? null }, () => {
+          console.error(`Tenant ${creds.org} is already taken over by ${e.holder ? describeTakeover(e.holder) : "another member's agent"}; only they can release it.`);
+        }, { pretty: true });
+        process.exit(TAKEOVER_HELD_EXIT_CODE);
+      }
+      if (e instanceof ApiError && e.status === 403) {
+        const reason = apiErrorMessage(e.body) ?? "engine mode is not allowed for you on this org";
+        emit(opts, { org: creds.org, error: "engine mode refused", reason }, () => {
+          console.error(`Engine mode refused for ${creds.org}: ${reason}`);
+        }, { pretty: true });
+        process.exit(1);
+      }
+      throw e;
+    }
+  }));
+}
+function apiErrorMessage(body) {
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed.error === "string")
+      return parsed.error;
+    return parsed.error?.message;
+  } catch {
+    return;
+  }
 }
 
 // src/commands/capability.ts
@@ -13314,7 +13913,7 @@ init_project();
 init_sh();
 init_helpers();
 import { existsSync as existsSync5, readFileSync as readFileSync7 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 function registerTestCommand(program2) {
   program2.command("test").description("Run the project's local test command (auto-detected)").option("--json", "Emit a machine-readable summary line (runner + exit code); test output still streams").option("--yaml", "Output YAML").allowUnknownOption().action((opts) => {
     const root = getCwdRepoRoot();
@@ -13357,32 +13956,32 @@ function runRunner(runner, root) {
 }
 function hasTestScript(root) {
   try {
-    const pkg = JSON.parse(readFileSync7(join6(root, "package.json"), "utf8"));
+    const pkg = JSON.parse(readFileSync7(join7(root, "package.json"), "utf8"));
     return typeof pkg?.scripts?.test === "string" && pkg.scripts.test.trim() !== "";
   } catch {
     return false;
   }
 }
 function detectRunner(root) {
-  if (existsSync5(join6(root, "package.json"))) {
+  if (existsSync5(join7(root, "package.json"))) {
     const bunArgs = hasTestScript(root) ? ["run", "test"] : ["test"];
-    if (existsSync5(join6(root, "bun.lockb")))
+    if (existsSync5(join7(root, "bun.lockb")))
       return { cmd: "bun", args: bunArgs, source: "bun.lockb" };
-    if (existsSync5(join6(root, "bun.lock")))
+    if (existsSync5(join7(root, "bun.lock")))
       return { cmd: "bun", args: bunArgs, source: "bun.lock" };
-    if (existsSync5(join6(root, "pnpm-lock.yaml")))
+    if (existsSync5(join7(root, "pnpm-lock.yaml")))
       return { cmd: "pnpm", args: ["test"], source: "pnpm-lock.yaml" };
-    if (existsSync5(join6(root, "yarn.lock")))
+    if (existsSync5(join7(root, "yarn.lock")))
       return { cmd: "yarn", args: ["test"], source: "yarn.lock" };
     return { cmd: "npm", args: ["test"], source: "package.json" };
   }
-  if (existsSync5(join6(root, "go.mod")))
+  if (existsSync5(join7(root, "go.mod")))
     return { cmd: "go", args: ["test", "./..."], source: "go.mod" };
-  if (existsSync5(join6(root, "Cargo.toml")))
+  if (existsSync5(join7(root, "Cargo.toml")))
     return { cmd: "cargo", args: ["test"], source: "Cargo.toml" };
-  if (existsSync5(join6(root, "pyproject.toml")))
+  if (existsSync5(join7(root, "pyproject.toml")))
     return { cmd: "pytest", args: [], source: "pyproject.toml" };
-  if (existsSync5(join6(root, "pytest.ini")))
+  if (existsSync5(join7(root, "pytest.ini")))
     return { cmd: "pytest", args: [], source: "pytest.ini" };
   return null;
 }
