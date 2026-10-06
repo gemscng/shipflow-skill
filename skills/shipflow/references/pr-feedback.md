@@ -9,18 +9,25 @@ then reply via `renaiss-shipflow pr note <n> --body …` (#603 — the marked pa
 `pr reviews --json` is a read-only query like `pr ready` — the worklist
 (unresolved threads block approval/merge). Parse JSON `blocking` +
 `unresolvedThreads`; rc is not the signal (always 0). Gates stay
-the approve gate (exit 7) and `pr automerge` (exit 5). `gh pr view --comments`
-misses line-level inline comments — fetch separately:
+the approve gate (exit 7) and `pr automerge` (exit 5). Start with the compact
+worklist, then read the full finding text for the threads you will address.
+Selection limits output, never the global blocker count. A missing/stale
+thread ID is an error: refresh the worklist instead of assuming it was fixed.
 
 ```bash
 renaiss-shipflow pr reviews <n> --json    # read-only query (like pr ready): parse blocking/unresolvedThreads — rc is not the signal
-gh pr view <n> --comments                 # general + review bodies
-gh pr view <n> --json reviews,statusCheckRollup,headRefName  # verdicts + CI + branch
-gh pr checks <n>                          # CI status
-# inline (code-line) review comments:
-gh api repos/<owner>/<repo>/pulls/<n>/comments \
-  --jq '.[] | "\(.path):\(.line) [@\(.user.login)] \(.body)"'
+renaiss-shipflow pr reviews <n> --thread <id> --full --json # complete first finding; one or several selected IDs
+gh pr view <n> --json comments,reviews,statusCheckRollup,headRefName # general discussion, verdicts, CI, branch — one read
 ```
+
+`bodyTruncated: true` means omitted text, not a complete finding. `--full`
+returns the first comment of each selected thread, not its reply history.
+If a finding references a reply or the discussion may already address it,
+read the inline conversation with
+`gh api --paginate repos/<owner>/<repo>/pulls/<n>/comments` and filter to that
+finding's reply chain before deciding. Do not routinely dump every inline
+comment as well as the focused finding bodies. Reuse the current packet's
+CI/branch facts during the same review; refresh after a push or state change.
 
 ## 2. Triage each comment (from someone other than you)
 

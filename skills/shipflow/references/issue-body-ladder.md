@@ -23,7 +23,8 @@ identifier. `issue create` warns (and returns the list as `lint` under
 | 3 | **Mermaid diagram** | the defect or design branches, races, or spans ≥3 interacting components — never for a linear restatement of one line | small `flowchart`/`sequenceDiagram`/`stateDiagram` — beats prose causality when the SHAPE is the point |
 | 4 | **Evidence table** | any `file:line` claim | `\| Claim \| Where \|` — every claim grounded in `path:line` / links / screenshots; a claim about a change adds Before / After columns (#960) |
 | 5 | **Acceptance checklist** | always | `- [ ]` items — the reviewer's coverage gate checks them 1:1 |
-| 6 | **`<details>` folds** | long logs, alt options, raw data | collapsed at the bottom, never unfolded |
+| 6 | **Deferred** | parent of a partial slice — remaining parts that failed the spin-off gate | `- [ ]` checklist on the parent; later promotion keeps `Part of #<n>` provenance |
+| 7 | **`<details>` folds** | long logs, alt options, raw data | collapsed at the bottom, never unfolded |
 
 Priority emoji: 🔴 P0 · 🟠 P1 · 🟡 P2 · 🟢 P3. Wave/source examples:
 `auto-qa sweep`, `Part of #N`, `wave 3`, `hand-filed`. All general rules

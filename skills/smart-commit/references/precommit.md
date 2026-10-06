@@ -19,7 +19,14 @@ test -f go.mod && echo "go"
 | Rust         | Clippy | rustfmt   | Built-in   |
 | Go           | golangci-lint | gofmt | Built-in |
 
+Prefer the repo's own scripts (`package.json` scripts, `Makefile`,
+CONTRIBUTING.md, CI config) over the generic commands below.
+
 ## Step 3: Run Pre-Commit Checks
+
+Scope checks to the packages the commits touch. In a monorepo, run the
+touched package's checks, not the whole repo's. Record each command and
+its exit code; the plan and the report cite them.
 
 **Node.js:**
 ```bash
@@ -69,7 +76,14 @@ go test -run=^$ ./...
 Would you like me to auto-fix these issues?
 ```
 
+If a failure also happens on the base branch without your changes, it is
+pre-existing: say so, and do not treat it as caused by this commit.
+
 ## Step 5: Auto-Fix (Optional)
+
+Only with the user's OK. Auto-fix may touch files outside the commit:
+stage only in-scope files and list any other changed files under
+**Left out**.
 
 ```bash
 # Node.js
@@ -88,6 +102,10 @@ gofmt -w .
 ```
 
 ## Step 6: Setup Git Hooks (Optional)
+
+Only when the user asks. If `.git/hooks/pre-commit` exists, or the repo
+uses a hook manager (husky, lefthook, pre-commit), do not overwrite it;
+show the user what you would add instead.
 
 ```bash
 cat > .git/hooks/pre-commit << 'EOF'

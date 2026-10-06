@@ -144,4 +144,7 @@ Pair/mix: `validateEvidenceSelection`
 (`apps/renaissshipflow-cli/src/evidence.ts`). `--pr` lands the comment on
 the PR (plus the reporter's chat thread; issue linked via `Fixes #<n>`);
 without it, an issue comment. `--file demo.mp4` adds a screen recording for
-flows that need motion.
+flows that need motion. A change with no UI surface (schema, persistence,
+API-only, test-only) has nothing to screenshot: attach the test-runner summary
+instead, `--file "$EV/issue-<n>-vitest.txt" --caption "Verified: <what the
+tests prove>"`. The server renders the text inline on the PR.

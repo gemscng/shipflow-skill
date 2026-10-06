@@ -182,6 +182,12 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    a red gap card for any touched feature lacking a proof pair.
    **One proof per touched feature** — the reviewer blocks multi-feature
    PRs with fewer proofs than touched features.
+   **No UI surface** (schema, persistence, API-only or test-only change) —
+   nothing to screenshot, so attach the test-runner summary instead:
+   `--file "$EV/issue-<n>-<runner>.txt"` (pass/fail totals per suite, not
+   the whole log) with `--caption "Verified: <what the tests prove>"`. The
+   server renders the text inline on the PR. A `Verified vitest N/N` line
+   in the PR body with no attachment is a claim, not evidence.
    **One claim per image** — a caption asserts only what its image shows;
    needs "and" → split into more labeled pairs.
    **Mark the change, don't cover it** — before each after-shot, outline the

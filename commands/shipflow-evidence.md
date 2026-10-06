@@ -25,3 +25,6 @@ element (`outline: 3px solid #ff3b30; outline-offset: 3px` via your browser tool
 JS eval) — the outline surrounds the change; never overlay content with boxes/arrows.
 `--pr` lands the comment on the PR for reviewers. Capture flow (headed browser,
 per-surface loop): `references/browser-testing.md` §4.
+**No UI surface** (schema, persistence, API-only, test-only)? Skip the pairs and
+attach the test-runner summary: `--file <issue>-vitest.txt --caption "Verified: …"`.
+The server renders the text inline; a pass/fail line in the PR body alone is not evidence.

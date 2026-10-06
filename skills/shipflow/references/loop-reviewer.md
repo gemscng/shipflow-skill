@@ -5,7 +5,13 @@ reviewer at intake, and every PR passes the reviewer before merge.** Review in
 your own context, grounded in ShipFlow's **feature map** — the whole system,
 not just the diff.
 
-## Always start by pulling the system map
+## Ground the review in the system map
+
+For PR review, start with `pr packet <n>` below: it includes the touched
+features and their neighbours. Fetch the full map only for issue intake or
+when that slice does not cover the question you are investigating. If the
+packet has no feature slice and no explicit `featureMapNotApplicable` note,
+fetch the map before reviewing; missing context is not evidence of no impact.
 ```bash
 renaiss-shipflow features --json
 ```
@@ -40,7 +46,10 @@ review threads, evidence/health caption, the relevant feature slice (touched +
 same-layer neighbors; `features --json` only for features outside it), and a
 noise-filtered, size-budgeted diff. Do NOT re-derive via `gh pr view` /
 `gh pr diff` / thread queries; raw `gh` only for a deeper look the packet
-flags (e.g. a truncated file).
+flags (e.g. a truncated file). Thread previews carry IDs and truncation
+markers; read a finding you will act on with
+`pr reviews <n> --thread <id> --full`. The packet reports omitted thread
+counts; `pr reviews <n>` lists the complete unresolved worklist.
 
 **Spec discipline:** the packet's *Spec / acceptance brief* section is the
 spec. A **"no linked issue/brief found"** warning is itself a finding — flag
@@ -233,9 +242,9 @@ mean "irrelevant", they stop meaning anything.
    criteria, must/should); judge each: implemented / partial / missing. A
    stated item not implemented = `request_changes` naming it — not a
    footnote. Partial-slice brief: PR links `Part of #N`, not a closing
-   keyword (`loop-worker.md` §5); out-of-slice items are out-of-scope only if
-   each has a follow-up sub-issue — untracked deferral is dropped scope: flag
-   it.
+   keyword (`loop-worker.md` §5); out-of-slice items are tracked if each has
+   a follow-up sub-issue or a Deferred checklist item on the parent —
+   untracked deferral is dropped scope: flag it.
 2. **Cross-feature impact** — paths owned by other features? Co-located /
    shared-layer regression risk? Call it out.
 3. **Correctness / safety** — obvious bugs, a missing regression test for the
@@ -321,7 +330,11 @@ mean "irrelevant", they stop meaning anything.
    Prefer the file form for large payloads or a kept artifact; the pipe form
    needs `--findings -` every time. Severity: `critical|high|medium|low`
    (`references/bug-taxonomy.md`); one finding per real point, most severe
-   first.
+   first. Optional `{findings, coverage:[{item,status,evidence}]}` wrapper
+   (server row schema) is accepted; array and `{findings:[...]}` stay valid.
+   Same-file similar findings collapse before anchors; coverage is first-item
+   wording + least-green status (unknown → partial). Invalid coverage refuses
+   before any GitHub write.
    **Fix-suggestion hygiene (issue #528)** — a suggested fix must fail CLOSED.
    Never suggest substituting a default for a failed operation
    (`.catch(() => ({}))`, `catch { return [] }`) unless the substituted value
@@ -433,9 +446,13 @@ cheap.
 { "target": "issue:42" | "pr:87", "verdict": "approve" | "request_changes" | "reject" | "close" | "blocked",
   "featuresImpacted": ["auth", "billing"],
   "brief": "intake mode: acceptance criteria + regression-check features",
+  "followUps": [{"title":"…","body":"Part of #42: …"}],
+  "parentDeferred": ["owner-out-of-scope part"],
   "decisionFile": "close verdict only: snapshot-bound JSON per loop-close.md",
   "findings": ["one line per required change"] }
 ```
+`followUps` / `parentDeferred` are intake-only (Phase B step 2). **Omitted
+`followUps` = file zero sub-issues**; cap is 2. PR reviews omit both.
 
 ## Optional — whole-system review
 On request ("review the system"), pull `features --json` and summarise health:

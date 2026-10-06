@@ -33,7 +33,7 @@ renaiss-shipflow version
 PLUGIN_DIR=$(ls -d ~/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/null | sort -V | tail -1)
 echo "plugin: $(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$PLUGIN_DIR/.claude-plugin/plugin.json" 2>/dev/null | head -1)"
 echo "cli: $(renaiss-shipflow --version 2>/dev/null || echo unknown)"
-echo "server: $(curl -fsSL --max-time 8 "${SHIPFLOW_API_URL:-https://renaiss-shipflow-api.zeabur.app}/api/v1/version" 2>/dev/null || echo unreachable)"
+echo "server: $(curl -fsSL --max-time 8 "${SHIPFLOW_API_URL:-https://shipflow-api.fooniemagus.com}/api/v1/version" 2>/dev/null || echo unreachable)"
 ```
 
 <!-- Codex CLI custom prompt (generated from .claude/commands/shipflow-version.md).

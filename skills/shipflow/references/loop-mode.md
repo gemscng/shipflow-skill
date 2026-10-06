@@ -449,23 +449,31 @@ human**` / evidence comments):
   reply stays escalated and keeps its claim. Bake answers into the brief as
   **settled**.
 - **Acknowledged within a tick, always** — the human must never wonder
-  whether the reply was read. The server webhook clears `needs-human` and
-  posts one line, `✅ **Reply received** — read as \`1: All\` · \`2: OK Me\`;
-  the loop resumes on its next pass.` (ending in `<!-- shipflow:loop -->`,
-  so it is machinery). Where the webhook never fires (#798), **`issue next`
-  heals it**: any needs-human issue whose latest 🚧 banner has a human
-  comment after it gets the label cleared, the same ack posted, and
-  competes that tick (`healed[]` in `--json`). A reply the loop cannot
-  parse into `N:` items is acknowledged as "a free-text decision" and
-  handled by the Trigger rule above.
-- **Act** — remove `needs-human`; **add the durable marker label
-  `loop-proceed`** (the persistent record a fresh-context reviewer reads on
-  a later re-pick). Reviewer's prior `reject` = **overruled**. Brief the
-  guidance as settled, hand to a worker (B step 3) — smallest sensible
-  slice if big; the reviewer gates the PR.
-- **Sticky** across re-picks/restarts: don't re-run intake validity,
-  **never re-escalate the answered question**; `loop-proceed` makes
-  reviewer intake (Mode 1) skip the validity-reject, straight to the brief.
+  whether the reply was read. **Webhook ACK is enough.** The server
+  webhook clears `needs-human`, upserts the Judge block to
+  `state=proceeding` (so a stale `state=waiting` cannot be re-read as
+  still waiting), **creates `loop-proceed` on demand** (`ghEnsureLabel` /
+  `EnsurePaletteLabel` — never assumed; adding `loop-proceed` failed
+  until the label existed), adds that label, and posts one line,
+  `✅ **Reply received** — read as \`1: All\` · \`2: OK Me\`; the loop
+  resumes on its next pass.` (ending in `<!-- shipflow:loop -->`, so it
+  is machinery). Where the webhook never fires (#798), **`issue next`
+  heals it** with the same stamp (label off, judge proceeding,
+  `loop-proceed` on, ack posted) and competes that tick (`healed[]` in
+  `--json`). A reply the loop cannot parse into `N:` items is
+  acknowledged as "a free-text decision" and handled by the Trigger
+  rule above.
+- **Act** — do not re-derive waiting from the body. **Never re-escalate
+  the answered question**; never re-apply `needs-human` off a stale
+  `state=waiting` block; never `issue escalate --update` an issue whose
+  judge is `proceeding` or that carries `loop-proceed`. A later NEW 🚧
+  packet (fresh escalate, not `--update` of the answered one) may
+  re-add `needs-human`. Reviewer's prior `reject` = **overruled**. Brief
+  the guidance as settled, hand to a worker (B step 3) — smallest
+  sensible slice if big; the reviewer gates the PR.
+- **Sticky** across re-picks/restarts: don't re-run intake validity;
+  `loop-proceed` makes reviewer intake (Mode 1) skip the validity-reject,
+  straight to the brief.
 
 ### B. Admit new work — under the WIP limit, every issue reviewed first
 
@@ -492,6 +500,16 @@ PRs-opened-THIS-PASS < `cap` — each step still a fresh subagent:
 **Cap is per pass, not per session** (#451): continuous mode RESETS the
 counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
 
+0. **Route** (serial, ONCE per tick, `pickup-scope=assigned` only) —
+   `renaiss-shipflow issue route --all --json`. Under `assigned` an
+   unassigned issue is invisible to `issue next` and waits for a human;
+   route names a developer for each open unassigned issue with the Issue
+   Triage picker (feature-map contributors over the access list) or leaves
+   it when nobody clearly fits (`no-fit`), and never replaces an existing
+   assignee. Every outcome is a normal answer — never escalate on
+   `no-fit` / `no-candidates` / `auto-assign-off`. Put `routed N` on the
+   summary line (omit when nothing was scanned). Under `pickup-scope=all`
+   skip it: unassigned issues are already pickable.
 1. **Pick** — `renaiss-shipflow issue next --json` (claims the next
    open/unclaimed issue **assigned to the account running the loop** —
    `pickup-scope` defaults to `assigned` (#600): assigning IS the queueing
@@ -600,12 +618,30 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    `needs-reporter-review`). `--owner` when the issue names one (else
    the CLI resolves `signoff-owner` → issue author).
    A merged slice that settles a decision → `issue escalate <parent>
-   --update` (remaining ask only). Escalation never ends the run. **Partial-slice brief → file
-   each deferred part as a follow-up sub-issue now** —
-   `renaiss-shipflow issue create
-   --title "…" --body "Part of #<n>: …" --json` — *before* dispatching the
-   worker; bodies per the **issue-body ladder** (`message-style.md`), status
-   header sourcing `Part of #<n>`.
+   --update` (remaining ask only). Escalation never ends the run.
+   **Partial-slice brief → spin-off gate, then file.** Intake may return
+   `followUps` (gated sub-issues, **max 2**) and `parentDeferred` (the
+   rest). **Omitted `followUps` = file zero sub-issues** — never invent
+   filings the payload did not name. File a sub-issue only when **all**
+   hold:
+
+   1. The part is greenlit or unambiguously in scope. A part the owner
+      put out of scope stays as a **Deferred** checklist item on the
+      parent — do not file it.
+   2. Independently shippable in one PR without a new decision. If the
+      first action would be an escalation, do not file; ask on the
+      parent, in one packet.
+   3. Cap: at most 2 spin-offs per parent per intake. The rest folds
+      into the parent's **Deferred** list.
+   4. The PR-reviewer untracked-deferral check accepts a **Deferred**
+      checklist on the parent as tracking; a sub-issue is not required
+      (`loop-reviewer.md` item 1).
+
+   Gated follow-ups: `renaiss-shipflow issue create --title "…" --body
+   "Part of #<n>: …" --json` — *before* dispatching the worker; bodies
+   per the **issue-body ladder** (`message-style.md`), status header
+   sourcing `Part of #<n>`. Later promotion of a Deferred item keeps
+   that same `Part of #<n>` provenance.
    **Handle exit 12 on every filing** — a bare non-zero exit read as
    "failed command" silently drops the deferred scope: on **12** read
    `{blocked: true, candidates: […]}`, link the existing issue or re-file
@@ -614,6 +650,19 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    DUPLICATE_SCAN_LIMIT)` — closed issues and merged PRs are never
    scored, so a restatement of a closed issue always files clean
    (defensible; a refile is often deliberate).
+   **Upsert parent Deferred** (ladder element 6) via
+   `gh issue edit <n> --body-file <path>` — never inline `--body`
+   (quoting). Read the current body, preserve the Judge block
+   (`<!-- shipflow:judge` … `<!-- shipflow:judge-end -->`) verbatim,
+   upsert a `**Deferred**` `- [ ]` checklist for remaining parts, write
+   the whole body back. **A non-zero `gh issue edit` exit drops the
+   deferred scope** — retry once; still failing → abort worker dispatch
+   and comment the unwritten parts with a `<!-- shipflow:loop -->`
+   marker (`gh issue comment <n> --body-file <path>`) — a marker-less
+   comment reads as a human reply and clears `needs-human`;
+   never dispatch the worker on an unconfirmed parent write.
+   Do **not** put Deferred in the issue brief
+   (`issue brief` is the Unknowns comment, not the body).
    **Post the brief's "Unknowns & assumptions" on the issue** via
    `renaiss-shipflow issue brief <n> --body-file <path|->` (#969) before
    dispatching — it appends `<!-- shipflow:loop -->` (never trips the
@@ -630,7 +679,9 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    test**, open the PR via `renaiss-shipflow pr create --json --lint=strict` (full fix →
    `Closes #N`; partial slice → `Part of #N`, never a closing keyword —
    `loop-worker.md` §5), attach evidence with the health delta
-   (`issue evidence <n> --pr <pr> --before … --after … --label … --caption …`).
+   (`issue evidence <n> --pr <pr> --before … --after … --label … --caption …`;
+   no UI surface → `--file <runner-summary>.txt` instead of pairs,
+   `loop-worker.md` §6).
    Returns `{pr, verified, regressionTest, healthDelta, blocked}`.
    Unverified/blocked → `issue escalate <n> --category <cat> --reason "..."`, no PR.
 4. **Reviewer — PR review** (mandatory). Dispatch on the new PR with the
@@ -686,6 +737,7 @@ change, never by hand:
 | parked on a dependency (`issue wait --on`) | `issue judge <n> --state blocked` — no `--blocker`: the ⏳ chain is walked to its root (`#1548 → #1544 → waits on you (…)`) |
 | gate can't run (no ⏳ marker) | `issue judge <n> --state blocked --blocker "<gate> → #<owner issue>"` |
 | escalated (right after the escalation posts) | `issue judge <n> --state waiting --pr <pr> --fan-out --decide "1: done → loop re-reviews" --decide "1: skip → loop parks this"` — one `--decide` per reply the footer accepts; `--fan-out` shows how many parked issues this decision unblocks |
+| human reply ACK'd | webhook / `issue next` heal stamps `proceeding` + `loop-proceed` (`ghEnsureLabel` before add-label); do **not** `issue judge --state waiting` off the old packet |
 | merged (A's automerge) | `issue judge <n> --state merged --pr <pr>` |
 
 `--json` returns `linesToAction`; > 4 means the block is missing or a

@@ -97,11 +97,17 @@ Input: issue + `triage`. Produce an **acceptance brief**:
 2. **Too big or ambiguous? — scope down, don't refuse.** Large / open-ended /
    ambiguous / contradictory is NOT grounds to escalate. Carve the smallest
    bounded, value-adding slice you can confidently accept; brief that slice.
-   Return deferred parts in your payload as follow-up sub-issues (the
-   orchestrator files them at admit time — `loop-mode.md`, Phase B step 2).
-   Mark a sliced brief partial — its PR links `Part of #N`, never a closing
-   keyword (`loop-worker.md` §5). `reject` only when no safe value-adding
-   slice exists.
+   Apply the spin-off gate (`loop-mode.md`, Phase B step 2) to every remaining
+   part: return only gated follow-ups in `followUps` (**max 2**). Remaining
+   parts go in `parentDeferred` (the orchestrator upserts them as a
+   **Deferred** checklist on the parent). **Omitted `followUps` = file zero
+   sub-issues** — never invent filings the payload did not name. If a part's
+   first action would be an escalation, do not file it; ask on the parent, in
+   one packet. Owner-out-of-scope parts stay parent Deferred; do not file
+   them. Do **not** put Deferred in the issue brief. Mark a sliced brief
+   partial — its PR links `Part of #N`, never a closing keyword
+   (`loop-worker.md` §5). `reject` only when no safe value-adding slice
+   exists.
 3. **Feature mapping** — feature(s) touched (path overlap with
    `triage.relatedFiles` + description); note cross-feature blast radius.
 4. **Acceptance criteria** — what "done" means + which features to
@@ -197,7 +203,9 @@ Input: issue + `triage`. Produce an **acceptance brief**:
 
 Intake returns the same compact shape as the PR gate — see `loop-reviewer.md`
 § "Return (compact)" (`target: "issue:<n>"`, `verdict`, `featuresImpacted`,
-`brief`; close additionally returns `decisionFile` per `loop-close.md`). Triage unavailable (`⚠️ triage unavailable — ShipFlow context and
+`brief`, optional `followUps` / `parentDeferred`; close additionally returns
+`decisionFile` per `loop-close.md`). **Omitted `followUps` = file zero
+sub-issues**; `followUps` is capped at 2. Triage unavailable (`⚠️ triage unavailable — ShipFlow context and
 relatedFiles NOT loaded`) blocks like any un-run gate — rule and marker table
 in `loop-reviewer.md` § "Degradation discipline". Message style for every
 GitHub write: `message-style.md`.

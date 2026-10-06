@@ -91,8 +91,12 @@ bound it.
    parallel fix workers each in its own worktree (#744) —
    `renaiss-shipflow issue next --json` claims only issues **assigned to the
    loop's account** (`pickup-scope` default `assigned`, #600; assign an issue
-   to queue it, `config set pickup-scope all` for repo-wide): § "B. Admit new
-   work — under the WIP limit, every issue reviewed first".
+   to queue it, `config set pickup-scope all` for repo-wide). **Route first**
+   (serial, once per tick, `pickup-scope=assigned` only): `renaiss-shipflow
+   issue route --all --json` names a dev for every open unassigned issue via
+   the Issue Triage picker, or leaves it when nobody fits — `routed N` on the
+   summary line: § "B. Admit new work — under the WIP limit, every issue
+   reviewed first", step 0.
 8. **C. Bug sweep** when B is empty and A is clean: § "C. Bug sweep — when
    there's nothing left to fix, hunt for new bugs".
 9. **D. Repeat** A→B→C to the cap or a truly empty queue; the cap counter

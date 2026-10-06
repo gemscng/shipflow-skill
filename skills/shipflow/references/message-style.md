@@ -33,7 +33,8 @@ Rules that hold for every format:
   edit to that file and nobody re-checks a comment.
 - Asking a human to choose? Render a **decision table** —
   `| # | Decision | Recommendation | If chosen |` — whose `#` matches the
-  `N: answer` reply protocol. Every option row carries the loop's
+  `N: answer` reply protocol (once per decision; continuation option rows
+  leave `#` blank). Every option row carries the loop's
   recommendation AND what happens when that option is picked (#969: 2 of
   25 live tables said; the lint now requires the column, or a `→` in every
   option cell); never a bare open question.
@@ -146,7 +147,7 @@ The comment the escalate command renders is now **≤ 8 visible lines**:
 
 | Line | Carries |
 |---|---|
-| 1 | `🚧 **Needs a human** — <category> · @<owner> decides` |
+| 1 | `🚧 **Needs a human** — \`<category>\` · @<owner> decides` (validated category is an inline-code badge) |
 | 2 (only when the reply belongs elsewhere) | `**Reply on PR #N, not here →** <PR comment-box URL>` — auto-added when the reason says "confirm … PR #N" |
 | 3–7 | the `### 👤 Action needed` section: steps and the decision table, **≤ 10 lines** (lint) |
 | 8 | ONE `<details>` holding every other section (`Why it's blocked · Ready once unblocked`) |
@@ -206,8 +207,8 @@ Pick the layout for the collection share card.
 | # | Decision | Recommendation | If chosen |
 |---|---|---|---|
 | 1 | approve — A, PnL toggle on the card (drawn) | yes: one tap, visible | loop builds A |
-| 1 | B — PnL toggle inside the Share menu | | loop builds B |
-| 1 | change — say what changes | | loop re-proposes |
+|   | B — PnL toggle inside the Share menu | | loop builds B |
+|   | change — say what changes | | loop re-proposes |
 
 ### Design notes
 States: empty (no cards → "Add your first card"), loading (skeleton row), error (retry link).
@@ -313,7 +314,8 @@ identifier. `issue create` warns (and returns the list as `lint` under
 | 3 | **Mermaid diagram** | the defect or design branches, races, or spans ≥3 interacting components — never for a linear restatement of one line | small `flowchart`/`sequenceDiagram`/`stateDiagram` — beats prose causality when the SHAPE is the point |
 | 4 | **Evidence table** | any `file:line` claim | `\| Claim \| Where \|` — every claim grounded in `path:line` / links / screenshots; a claim about a change adds Before / After columns (#960) |
 | 5 | **Acceptance checklist** | always | `- [ ]` items — the reviewer's coverage gate checks them 1:1 |
-| 6 | **`<details>` folds** | long logs, alt options, raw data | collapsed at the bottom, never unfolded |
+| 6 | **Deferred** | parent of a partial slice — remaining parts that failed the spin-off gate | `- [ ]` checklist on the parent; later promotion keeps `Part of #<n>` provenance |
+| 7 | **`<details>` folds** | long logs, alt options, raw data | collapsed at the bottom, never unfolded |
 
 Priority emoji: 🔴 P0 · 🟠 P1 · 🟡 P2 · 🟢 P3. Wave/source examples:
 `auto-qa sweep`, `Part of #N`, `wave 3`, `hand-filed`. All general rules
@@ -390,8 +392,10 @@ What the skill produces (sanity-check its output):
   test may ride with its fix (step 4).
 - **Pre-commit**: lint + format clean before committing (step 4's tests
   satisfy the skill's test gate).
-- **No AI-attribution trailer** — the skill's default; loop commits keep
-  it (owner decision, #279). Footer = issue reference only;
+- **No AI-attribution trailer** — the skill adds an `Assisted-by`
+  trailer by default; loop commits omit it (owner decision, #279) and
+  the skill honors a caller's "no AI attribution". Footer = issue
+  reference only;
   loop-authorship stays traceable via branch, PR, and account.
 
 **One autonomous adaptation** (the loop has no human; the skill assumes
