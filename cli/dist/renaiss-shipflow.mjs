@@ -2268,7 +2268,13 @@ class ShipFlowClient {
     return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/precedents/match`, body);
   }
   async signal(org, projectId, refKind, number, action, body) {
-    await this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/${refKind}/${number}/${action}`, body);
+    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/${refKind}/${number}/${action}`, body);
+  }
+  async reviewClaim(org, projectId, number, body) {
+    return this.signal(org, projectId, "prs", number, "review-claim", body);
+  }
+  async reviewRelease(org, projectId, number, body) {
+    return this.signal(org, projectId, "prs", number, "review-release", body);
   }
   async attachEvidence(org, projectId, number, opts) {
     const form = new FormData;
@@ -10050,605 +10056,110 @@ var REVIEW_CONTRACT = {
   ]
 };
 
-// src/packet.ts
-init_shipflow_contract_data();
-init_project();
-init_pr_state();
-var PACKET_PER_FILE_CAP = REVIEW_CONTRACT.budgets.perFileDiffCap;
-var PACKET_TOTAL_CAP = REVIEW_CONTRACT.budgets.packetTotalCap;
-var PACKET_BRIEF_CAP = REVIEW_CONTRACT.budgets.briefCap;
-function reviewThreadPreview(t) {
-  const body = t.body.replace(/\s+/g, " ");
-  return {
-    id: t.id,
-    path: t.path || null,
-    line: t.line ?? null,
-    author: t.author || "unknown",
-    body: body.slice(0, 140),
-    bodyTruncated: !!t.bodyTruncated || body.length > 140
-  };
-}
-var NOISE_SUBSTRINGS = REVIEW_CONTRACT.noise.substrings.map((s) => s.toLowerCase());
-var NOISE_SUFFIXES = [
-  ...REVIEW_CONTRACT.noise.suffixes,
-  ...REVIEW_CONTRACT.noise.extensions
-].map((s) => s.toLowerCase());
-var NOISE_BASENAMES = REVIEW_CONTRACT.noise.basenames.map((s) => s.toLowerCase());
-function matchesNoiseSegment(p, s) {
-  const token = s.replace(/^\/+|\/+$/g, "");
-  if (token === "")
-    return false;
-  return `/${p}/`.includes(`/${token}/`);
-}
-function isNoiseDiffPath(path) {
-  const p = path.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
-  const base = p.slice(p.lastIndexOf("/") + 1);
-  return NOISE_BASENAMES.includes(base) || NOISE_SUBSTRINGS.some((s) => matchesNoiseSegment(p, s)) || NOISE_SUFFIXES.some((s) => p.endsWith(s));
-}
-function splitUnifiedDiff(diff) {
-  const sections = [];
-  const lines = diff.split(`
-`);
-  let current = null;
-  for (const line of lines) {
-    const m = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-    if (m) {
-      if (current)
-        sections.push(current);
-      current = { path: m[2], body: line };
-    } else if (current) {
-      current.body += `
-` + line;
-    }
-  }
-  if (current)
-    sections.push(current);
-  return sections;
-}
-function filterDiffForPacket(diff) {
-  const out = [];
-  let shown = 0;
-  let omittedNoise = 0;
-  let omittedBudget = 0;
-  let truncatedFiles = 0;
-  let total = 0;
-  for (const s of splitUnifiedDiff(diff)) {
-    if (isNoiseDiffPath(s.path)) {
-      omittedNoise++;
-      continue;
-    }
-    if (total >= PACKET_TOTAL_CAP) {
-      omittedBudget++;
-      continue;
-    }
-    let body = s.body;
-    if (body.length > PACKET_PER_FILE_CAP) {
-      body = body.slice(0, PACKET_PER_FILE_CAP) + `
-… (file diff truncated)`;
-      truncatedFiles++;
-    }
-    out.push(body);
-    total += body.length;
-    shown++;
-  }
-  return { text: out.join(`
-`), shown, omittedNoise, omittedBudget, truncatedFiles };
-}
-var CI_NOTHING_VALIDATED = "nothing was validated — every reported check is NEUTRAL/SKIPPED";
-function summarizeChecks(checks) {
-  let passing = 0, failing = 0, pending = 0;
-  const failingChecks = [];
-  for (const c of checks) {
-    const state = ciStateOf([c]);
-    if (state === "passing")
-      passing++;
-    else if (state === "failing") {
-      failing++;
-      failingChecks.push(c.name ?? "unnamed");
-    } else if (state === "pending")
-      pending++;
-  }
-  return { passing, failing, pending, failingChecks, reported: checks.length > 0 };
-}
-function formatCiSummary(ci) {
-  if (!ci.reported)
-    return "no checks reported";
-  if (ci.passing === 0 && ci.failing === 0 && ci.pending === 0)
-    return CI_NOTHING_VALIDATED;
-  return `${ci.passing} passing · ${ci.failing} failing · ${ci.pending} pending${ci.failingChecks.length ? ` — failing: ${ci.failingChecks.join(", ")}` : ""}`;
-}
-function extractEvidenceLines(comments) {
-  const lines = [];
-  for (const c of comments) {
-    const body = c.body ?? "";
-    if (!body.includes("Test evidence") && !/health \d+/.test(body))
-      continue;
-    for (const line of body.split(`
-`)) {
-      if (line.includes("Test evidence") || /health \d+→\d+|health \d+ ?→/.test(line) || line.startsWith("Verified:") || line.trimStart().startsWith("- Verified")) {
-        lines.push(line.trim());
-      }
-    }
-  }
-  return lines.slice(0, 12);
-}
-function matchGlobSegment(pattern, s) {
-  let p = 0, i = 0, star = -1, mark = 0;
-  while (i < s.length) {
-    if (p < pattern.length && (pattern[p] === "?" || pattern[p] === s[i])) {
-      p++;
-      i++;
-    } else if (p < pattern.length && pattern[p] === "*") {
-      star = p++;
-      mark = i;
-    } else if (star >= 0) {
-      p = star + 1;
-      i = ++mark;
-    } else
-      return false;
-  }
-  while (p < pattern.length && pattern[p] === "*")
-    p++;
-  return p === pattern.length;
-}
-function matchGlobSegments(pat, seg) {
-  const p = [];
-  for (const s of pat)
-    if (!(s === "**" && p[p.length - 1] === "**"))
-      p.push(s);
-  const width = seg.length + 1;
-  const failed = new Set;
-  const walk = (pi, si) => {
-    const key = pi * width + si;
-    if (failed.has(key))
-      return false;
-    let a = pi, b = si;
-    while (a < p.length) {
-      if (p[a] === "**") {
-        if (a !== pi) {
-          if (walk(a, b))
-            return true;
-          failed.add(key);
-          return false;
-        }
-        for (let k = b;k <= seg.length; k++)
-          if (walk(a + 1, k))
-            return true;
-        failed.add(key);
-        return false;
-      }
-      if (b >= seg.length || !matchGlobSegment(p[a], seg[b])) {
-        failed.add(key);
-        return false;
-      }
-      a++;
-      b++;
-    }
-    if (b !== seg.length) {
-      failed.add(key);
-      return false;
-    }
-    return true;
-  };
-  return walk(0, 0);
-}
-function ownsPath(featurePath, filePath) {
-  const pattern = featurePath.replace(/^\.\//, "");
-  if (!pattern)
-    return false;
-  if (!/[*?]/.test(pattern)) {
-    return filePath === pattern || filePath.startsWith(pattern.endsWith("/") ? pattern : pattern + "/");
-  }
-  return matchGlobSegments(pattern.split("/"), filePath.split("/"));
-}
-function pathCandidates(path, repo) {
-  const out = [path];
-  if (!repo)
-    return out;
-  const parts = repo.split("/");
-  const shortName = parts[parts.length - 1];
-  if (shortName)
-    out.push(`${shortName}/${path}`);
-  if (parts.length === 2 && parts[0])
-    out.push(`${repo}/${path}`);
-  return out;
-}
-var CATCH_ALL_PROBE_PATH = "__shipflow_catch_all_probe__/__no_such_file__.probe";
-function isCatchAllFeaturePath(featurePath, repo) {
-  return pathCandidates(CATCH_ALL_PROBE_PATH, repo).some((c) => ownsPath(featurePath, c));
-}
-function resolveFeatureMatch(diffPaths, features, repo) {
-  const changed = diffPaths.filter((p) => !isNoiseDiffPath(p)).flatMap((p) => pathCandidates(p, repo));
-  const touched = [];
-  const catchAll = [];
-  for (const f of features) {
-    const owning = (f.paths ?? []).filter((fp) => changed.some((path) => ownsPath(fp, path)));
-    if (!owning.length)
-      continue;
-    const name = f.name || f.key;
-    touched.push(name);
-    if (owning.every((fp) => isCatchAllFeaturePath(fp, repo)))
-      catchAll.push(name);
-  }
-  return { touched, catchAll };
-}
-var FEATURE_MATCH_NULL_WARNING = "⚠️ Feature map matched NOTHING — the map has features and this diff has non-noise " + "files, but no feature path owns any changed path. `Features touched` is absent " + "because the MATCHER found nothing, not because the PR touches no feature: treat " + "per-feature evidence coverage as UNVERIFIED and suspect stale/mis-prefixed map paths.";
-function featureMatchCatchAllWarning(catchAll) {
-  return `⚠️ Feature map matched ONLY a catch-all entry (${catchAll.join(", ")}) — the map has ` + "features and this diff has non-noise files, but no NAMED feature path owns any " + "changed path. A catch-all matches every diff identically, so `Features touched` " + "identifies nothing: treat per-feature evidence coverage as UNVERIFIED and suspect " + "stale/mis-prefixed map paths.";
-}
-function featureMatchVerdict(features, diffPaths, match) {
-  if (!features?.length || !diffPaths.some((p) => !isNoiseDiffPath(p)))
-    return "matched";
-  if (match.touched.length === 0)
-    return "null";
-  if (match.catchAll.length === match.touched.length)
-    return "catch-all";
-  return "matched";
-}
-function assessEvidenceCoverage(touched, comments, opts) {
-  const evidenceItems = comments.filter((c) => {
-    const body = c.body ?? "";
-    return /^\s*🧪.*Test evidence/m.test(body) || /^\s*-?\s*\*{0,2}verified:/im.test(body);
-  }).length;
-  if (opts?.catchAllOnly && touched.length) {
-    return {
-      evidenceItems,
-      warning: `⚠️ Per-feature evidence coverage UNVERIFIED — the only match is a catch-all map ` + `entry, so the ${evidenceItems} evidence item(s) here cannot be attributed to any ` + `named feature; the per-feature proof count is unknown, not satisfied.`
-    };
-  }
-  if (touched.length <= 1 || evidenceItems >= touched.length) {
-    return { evidenceItems, warning: null };
-  }
-  return {
-    evidenceItems,
-    warning: `⚠️ ${touched.length} features touched, ${evidenceItems} evidence item(s) — ` + `need ≥1 proof per feature on a multi-feature PR; treat each unproven feature ` + `as an unresolved thread (request_changes) unless every touched feature maps ` + `to a proof.`
-  };
-}
-var DEVIATIONS_HEADING_ALIASES = [
-  "deviations from brief",
-  "deviations from the brief",
-  "deviations"
-];
-var HEADING_TEXT = /^ {0,3}(#{1,6})\s+(.*)$/;
-var BOLD_HEADING = /^ {0,3}\*\*(.+?)\*\*(.*)$/;
-var BOLD_TRAILING_ANNOTATION = /^[—–\-/&:(]|^and\b/;
-var BOLD_DEVIATIONS_HEADING_LEVEL = 2;
-function headingLevel(line) {
-  const m = HEADING_TEXT.exec(line);
-  if (m)
-    return m[1].length;
-  if (boldDeviationsHeadingText(line) !== null)
-    return BOLD_DEVIATIONS_HEADING_LEVEL;
-  return null;
-}
-function normalizeHeading(s) {
-  return s.toLowerCase().replace(/\s+/g, " ").replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "").trim();
-}
-var HEADING_ANNOTATION_SPLIT = /\s+[—–\-/&]\s+|:\s+|\s+and\s+|\s+\(/;
-function isDeviationAliasText(text2) {
-  const norm = normalizeHeading(text2);
-  if (DEVIATIONS_HEADING_ALIASES.includes(norm))
-    return true;
-  const head = normalizeHeading(norm.split(HEADING_ANNOTATION_SPLIT)[0] ?? "");
-  return DEVIATIONS_HEADING_ALIASES.includes(head);
-}
-function boldDeviationsHeadingText(line) {
-  if (HEADING_TEXT.test(line))
-    return null;
-  const m = BOLD_HEADING.exec(line);
-  if (!m)
-    return null;
-  const inner = m[1];
-  const trailing = (m[2] ?? "").trim();
-  if (trailing && !BOLD_TRAILING_ANNOTATION.test(trailing))
-    return null;
-  const text2 = trailing ? `${inner} ${trailing}` : inner;
-  return isDeviationAliasText(text2) ? text2 : null;
-}
-function isDeviationsHeading(line) {
-  const m = HEADING_TEXT.exec(line);
-  if (m)
-    return isDeviationAliasText(m[2]);
-  return boldDeviationsHeadingText(line) !== null;
-}
-function extractDeviations(prBody) {
-  return findDeviationsSection(prBody.split(`
-`))?.content ?? "";
-}
-function findDeviationsSection(lines) {
-  for (let start = 0;start < lines.length; start++) {
-    if (!isDeviationsHeading(lines[start]))
-      continue;
-    const openLevel = headingLevel(lines[start]) ?? 6;
-    const section = [];
-    let structured = false;
-    let end = lines.length;
-    for (let i = start + 1;i < lines.length; i++) {
-      const level = headingLevel(lines[i]);
-      if (level !== null) {
-        if (level <= openLevel) {
-          end = i;
-          break;
-        }
-        const empty = section.join("").trim() === "";
-        if (empty && openLevel >= 2)
-          structured = true;
-        else if (!structured) {
-          end = i;
-          break;
-        }
-      }
-      section.push(lines[i]);
-    }
-    const content = section.join(`
-`).trim();
-    if (content)
-      return { start, end, content };
-  }
-  return null;
-}
-function findNearMissDeviationHeadings(prBody) {
-  const lines = prBody.split(`
-`);
-  const parsed = findDeviationsSection(lines);
-  const out = [];
-  for (let i = 0;i < lines.length; i++) {
-    if (parsed && i >= parsed.start && i < parsed.end)
-      continue;
-    if (isDeviationsHeading(lines[i]))
-      continue;
-    const m = HEADING_TEXT.exec(lines[i]);
-    if (!m)
-      continue;
-    if (normalizeHeading(m[2]).includes("deviation"))
-      out.push(lines[i].trim());
-  }
-  return out;
-}
-var INTERPRETATION_NOTE_CALLOUT = /^[^\p{L}\n]*interpretation note/imu;
-function hasExplicitInterpretationSignal(prBody) {
-  if (!prBody)
-    return false;
-  if (prBody.includes(SHIPFLOW_CONTRACT.markers.interpretationNote))
-    return true;
-  return INTERPRETATION_NOTE_CALLOUT.test(prBody);
-}
-function hasInterpretationSignal(prBody) {
-  if (!prBody)
-    return false;
-  if (prBody.includes(SHIPFLOW_CONTRACT.markers.interpretationNote))
-    return true;
-  if (INTERPRETATION_NOTE_CALLOUT.test(prBody))
-    return true;
-  if (extractDeviations(prBody))
-    return true;
-  return false;
-}
-var REVIEW_THREADS_UNAVAILABLE_MARKER = "⚠️ review threads UNAVAILABLE — unresolved count NOT determined";
-function specUnavailableMarker(issueNumber) {
-  return `⚠️ **Brief NOT loaded — issue #${issueNumber} could not be read.** The brief is ` + `UNAVAILABLE, not absent: do NOT judge this PR without it, and do NOT hold the missing ` + `brief against the author. Re-run the packet, or read the issue directly.`;
-}
-function buildReviewPacket(input) {
-  const { pr, threads, diff, issue } = input;
-  const b = [];
-  b.push(`# Review packet — PR #${pr.number}: ${pr.title}`);
-  const meta = [];
-  if (pr.headRefName)
-    meta.push(`${pr.headRefName} → ${pr.baseRefName ?? "?"}`);
-  if (pr.isDraft)
-    meta.push("DRAFT");
-  if (pr.mergeable)
-    meta.push(`mergeable: ${pr.mergeable}`);
-  if (pr.labels?.length)
-    meta.push(`labels: ${pr.labels.map((l) => l.name).join(", ")}`);
-  b.push(meta.join(" · "));
-  b.push(`
-## Spec / acceptance brief`);
-  if (issue) {
-    b.push(`Issue #${issue.number} (${issue.linkKind}): ${issue.title}`);
-    const body = (issue.body ?? "").trim();
-    b.push(body.length > PACKET_BRIEF_CAP ? body.slice(0, PACKET_BRIEF_CAP) + `
-… (brief truncated)` : body || "_(issue has no body)_");
-  } else if (input.specUnavailable) {
-    b.push(specUnavailableMarker(input.specUnavailable));
-  } else if (input.specNotReadable) {
-    b.push(specNotReadableIssueNote(input.specNotReadable.number, input.specNotReadable.repo));
-  } else {
-    b.push("⚠️ **No linked issue/brief found.** Do NOT infer the spec from the diff — " + "reviewing against a self-derived spec is a known silent failure. Flag the missing brief in your verdict.");
-  }
-  const prBody = (pr.body ?? "").trim();
-  if (prBody) {
-    b.push(`
-## PR description`);
-    b.push(prBody.length > PACKET_BRIEF_CAP ? prBody.slice(0, PACKET_BRIEF_CAP) + `
-… (truncated)` : prBody);
-  }
-  const deviations = extractDeviations(pr.body ?? "");
-  if (deviations) {
-    b.push(`
-## Deviations from brief`);
-    b.push(deviations);
-    b.push("_Verify each deviation: conservative? justified? does the spec still hold?_");
-  }
-  const nearMisses = findNearMissDeviationHeadings(pr.body ?? "");
-  if (nearMisses.length) {
-    b.push(`
-## Deviation-like headings (not parsed)`);
-    for (const h of nearMisses.slice(0, 5))
-      b.push(`- \`${h}\``);
-    b.push("_Display only — these did NOT feed the intent gate and block nothing. " + "If one is a real deviation log, ask the author to retitle it " + `(\`${DEVIATIONS_HEADING_ALIASES[0]}\`, any heading level)._`);
-  }
-  b.push(`
-## CI`);
-  b.push(formatCiSummary(summarizeChecks(pr.statusCheckRollup ?? [])));
-  if (input.threadsUnavailable) {
-    b.push(`
-## External review threads (UNAVAILABLE)`);
-    b.push(REVIEW_THREADS_UNAVAILABLE_MARKER);
-    b.push("_The approve precondition (zero unresolved threads) could NOT be evaluated. " + "A gate that could not run is `request_changes`, never a footnote — re-run the packet, " + "or check with `renaiss-shipflow pr reviews <n>`._");
-  } else {
-    const unresolved = threads.filter((t) => !t.isResolved);
-    b.push(`
-## External review threads (unresolved: ${unresolved.length})`);
-    if (unresolved.length === 0) {
-      b.push("none");
-    } else {
-      for (const t of unresolved.slice(0, 20)) {
-        const preview = reviewThreadPreview(t);
-        const anchor = t.path ? `${t.path}${t.line ? `:${t.line}` : ""}` : "(top-level)";
-        b.push(`- ${t.id} ${anchor} @${preview.author} — ${preview.body}${preview.bodyTruncated ? "… [truncated]" : ""}`);
-      }
-      if (unresolved.length > 20)
-        b.push(`_${unresolved.length - 20} more unresolved threads; list all with \`pr reviews ${pr.number}\`._`);
-      b.push(`_Read full finding text before acting: \`pr reviews ${pr.number} --thread <id> --full\`._`);
-    }
-  }
-  const evidence = extractEvidenceLines(pr.comments ?? []);
-  const allDiffPaths = splitUnifiedDiff(diff).map((s) => s.path);
-  const match = input.features?.length ? resolveFeatureMatch(allDiffPaths, input.features, input.repo) : { touched: [], catchAll: [] };
-  const touchedAll = match.touched;
-  const verdict = featureMatchVerdict(input.features, allDiffPaths, match);
-  b.push(`
-## Evidence / health`);
-  if (input.featureMapSkipCause)
-    b.push(featureMapSkippedWarning(input.featureMapSkipCause));
-  else if (input.featureMapNotApplicable)
-    b.push(featureMapNotApplicableNote(input.featureMapNotApplicable));
-  if (input.features?.length) {
-    const mapMarkerAlreadyShown = Boolean(input.featureMapSkipCause || input.featureMapNotApplicable);
-    if (touchedAll.length) {
-      const catchAllOnly = verdict === "catch-all" && !mapMarkerAlreadyShown;
-      const suffix = catchAllOnly ? " — catch-all only, no named feature" : "";
-      b.push(`Features touched (${touchedAll.length}): ${touchedAll.join(", ")}${suffix}`);
-      if (catchAllOnly)
-        b.push(featureMatchCatchAllWarning(match.catchAll));
-      const cov = assessEvidenceCoverage(touchedAll, pr.comments ?? [], { catchAllOnly });
-      if (cov.warning)
-        b.push(cov.warning);
-    } else if (!mapMarkerAlreadyShown && verdict === "null") {
-      b.push(FEATURE_MATCH_NULL_WARNING);
-    }
-  }
-  b.push(evidence.length ? evidence.join(`
-`) : "no evidence caption posted");
-  if (input.features?.length) {
-    const touchedNames = new Set(touchedAll);
-    if (touchedNames.size) {
-      const touched = input.features.filter((f) => touchedNames.has(f.name || f.key)).slice(0, 12);
-      b.push(`
-## Features (relevant slice)`);
-      for (const f of touched) {
-        const layer = f.layer ? ` [${f.layer}]` : "";
-        const tp = f.testPriority ? ` · test_priority: ${f.testPriority}` : "";
-        const desc = f.description ? ` — ${f.description}` : "";
-        b.push(`- ${f.name || f.key}${layer}${tp}${desc}`);
-      }
-      const layers = new Set(touched.map((f) => f.layer).filter(Boolean));
-      const neighbors = input.features.filter((f) => !touchedNames.has(f.name || f.key) && f.layer && layers.has(f.layer)).map((f) => f.name || f.key).slice(0, 15);
-      if (neighbors.length)
-        b.push(`Same-layer neighbors: ${neighbors.join(", ")}`);
-      b.push("_This slice replaces the full map for most reviews — run `renaiss-shipflow features --json` only if you need beyond it._");
-    }
-  }
-  const filtered = filterDiffForPacket(diff);
-  b.push(`
-## Diff (${filtered.shown} file(s) shown` + (filtered.omittedNoise ? `, ${filtered.omittedNoise} noise file(s) omitted` : "") + (filtered.omittedBudget ? `, ${filtered.omittedBudget} over budget` : "") + (filtered.truncatedFiles ? `, ${filtered.truncatedFiles} truncated` : "") + ")");
-  b.push("```diff");
-  b.push(filtered.text);
-  b.push("```");
-  return b.join(`
-`);
-}
-function buildReviewPacketData(input) {
-  const { pr, threads, diff, issue } = input;
-  const trunc = (s, cap) => s.length > cap ? { text: s.slice(0, cap), truncated: true } : { text: s, truncated: false };
-  let spec;
-  if (issue) {
-    const t = trunc((issue.body ?? "").trim(), PACKET_BRIEF_CAP);
-    spec = { linked: true, issue: { number: issue.number, linkKind: issue.linkKind, title: issue.title, body: t.text, truncated: t.truncated } };
-  } else if (input.specUnavailable) {
-    spec = {
-      linked: false,
-      unavailable: true,
-      issueNumber: input.specUnavailable,
-      warning: specUnavailableMarker(input.specUnavailable)
-    };
-  } else if (input.specNotReadable) {
-    spec = {
-      linked: false,
-      notReadable: true,
-      issueNumber: input.specNotReadable.number,
-      notReadableNote: specNotReadableIssueNote(input.specNotReadable.number, input.specNotReadable.repo)
-    };
-  } else {
-    spec = {
-      linked: false,
-      warning: "No linked issue/brief found — do NOT infer the spec from the diff; flag the missing brief in your verdict."
-    };
-  }
-  const prBody = (pr.body ?? "").trim();
-  const prDescription = prBody ? trunc(prBody, PACKET_BRIEF_CAP) : undefined;
-  const deviations = extractDeviations(pr.body ?? "") || undefined;
-  const unresolved = threads.filter((t) => !t.isResolved);
-  const reviewThreads = input.threadsUnavailable ? { unresolved: null, unavailable: true, items: [] } : {
-    unresolved: unresolved.length,
-    omitted: Math.max(0, unresolved.length - 20),
-    items: unresolved.slice(0, 20).map(reviewThreadPreview)
-  };
-  const evidence = { lines: extractEvidenceLines(pr.comments ?? []) };
-  if (input.featureMapSkipCause)
-    evidence.featureMapSkipped = featureMapSkippedWarning(input.featureMapSkipCause);
-  else if (input.featureMapNotApplicable)
-    evidence.featureMapNotApplicable = featureMapNotApplicableNote(input.featureMapNotApplicable);
-  let features;
-  if (input.features?.length) {
-    const diffPaths = splitUnifiedDiff(diff).map((s) => s.path);
-    const match = resolveFeatureMatch(diffPaths, input.features, input.repo);
-    const touchedNames = match.touched;
-    const mapMarkerAlreadyShown = Boolean(input.featureMapSkipCause || input.featureMapNotApplicable);
-    const verdict = mapMarkerAlreadyShown ? "matched" : featureMatchVerdict(input.features, diffPaths, match);
-    if (verdict === "null")
-      evidence.featureMatchWarning = FEATURE_MATCH_NULL_WARNING;
-    else if (verdict === "catch-all") {
-      evidence.featureMatchWarning = featureMatchCatchAllWarning(match.catchAll);
-      evidence.featuresTouchedCatchAllOnly = true;
-    }
-    if (touchedNames.length) {
-      evidence.featuresTouched = touchedNames;
-      evidence.coverageWarning = assessEvidenceCoverage(touchedNames, pr.comments ?? [], { catchAllOnly: verdict === "catch-all" }).warning;
-      const touchedSet = new Set(touchedNames);
-      const touched = input.features.filter((f) => touchedSet.has(f.name || f.key)).slice(0, 12);
-      const layers = new Set(touched.map((f) => f.layer).filter(Boolean));
-      const sameLayerNeighbors = input.features.filter((f) => !touchedSet.has(f.name || f.key) && f.layer && layers.has(f.layer)).map((f) => f.name || f.key).slice(0, 15);
-      features = {
-        touched: touched.map((f) => ({ name: f.name || f.key, layer: f.layer, testPriority: f.testPriority, description: f.description })),
-        sameLayerNeighbors
-      };
-    }
-  }
-  return {
-    pr: {
-      number: pr.number,
-      title: pr.title,
-      headRefName: pr.headRefName,
-      baseRefName: pr.baseRefName,
-      isDraft: pr.isDraft,
-      mergeable: pr.mergeable,
-      labels: (pr.labels ?? []).map((l) => l.name)
-    },
-    spec,
-    prDescription,
-    deviations,
-    ci: summarizeChecks(pr.statusCheckRollup ?? []),
-    reviewThreads,
-    evidence,
-    features,
-    diff: filterDiffForPacket(diff)
-  };
-}
+// src/review-rubric-data.ts
+var REVIEW_RUBRIC_MD = `<!--
+Canonical code-review rubric: the single source of truth for the review sweeps
+BOTH ShipFlow reviewers apply. The server's pr_review finder embeds these
+sections in its system prompt (apps/renaissshipflow-server/internal/workflow/
+pr_review_rubric.go); the loop reviewer reads them from the "Code review rubric"
+section of \`renaiss-shipflow pr packet\` (skills/shipflow/references/
+loop-reviewer.md, step 3). Edit a sweep here and both reviewers change together.
+
+Mirrors: apps/renaissshipflow-server/internal/reviewcontract/review-rubric.md
+(go:embed, byte-identical) and apps/renaissshipflow-cli/src/review-rubric-data.ts
+(generated). Regenerate them with \`node scripts/sync-review-contract.mjs\`;
+parity tests on both sides fail on drift.
+
+Format: each section sits between a "rubric:<id>" opening marker and a
+"/rubric:<id>" closing marker, each an HTML comment on its own line. The text
+between the two marker lines is used verbatim, in file order. Anything outside
+the markers (this note included) is ignored.
+
+Surface-specific rules stay with each reviewer: the server's L-numbered diff
+format, its JSON output contract, committable "replace" fixes, probes, spec
+coverage rows and verdict vocabulary; the loop's \`pr post-review\` fields and
+its merge-gate steps.
+-->
+
+<!-- rubric:intro -->
+You are a senior code reviewer. Flag real problems only — bugs, security issues, performance regressions, race conditions, silent error swallowing, data loss, missing tests for changed behavior, drift from patterns visible in the context. No style nits, compliments, or diff restatements.
+<!-- /rubric:intro -->
+
+<!-- rubric:writing-style -->
+Writing style (every text field): write like a headline. Short sentences, <=14 words each, one clause per sentence. Concrete nouns and file/symbol names over abstractions. No filler, no em-dash chains, no nested subclauses.
+<!-- /rubric:writing-style -->
+
+<!-- rubric:risk-evidence -->
+Security and performance review (apply only to paths this change introduces, worsens, or makes reachable):
+- Security: trace untrusted input through validation to the sensitive operation. Check SQL/shell/template injection, path traversal, and secrets reaching logs or responses. Trace authentication AND authorization: object ownership, tenant scope, role checks, credential expiry/revocation, and fail-open error paths. A valid login alone does not authorize a requested object. Inspect the called handler, middleware, or query before alleging a missing guard.
+- HTTP/URL changes: check redirects, private-IP/SSRF protection, and whether validation constrains the address actually dialed. Internal client calls must forward the authentication their endpoint requires; otherwise authorized users can receive anonymous quotas or rejection. Read the endpoint contract when it is off-screen.
+- Performance: follow input size and call frequency through loops and helpers. Check per-item database/network calls (N+1), repeated scans or sorts, unbounded parallel work, whole-payload buffering, and retained resources. Inspect pagination, batching, concurrency limits, cancellation, and cleanup that could bound the cost. Quantify what the code proves: N serial round trips, N simultaneous requests, or quadratic work; do not invent timings, traffic, or index availability.
+- Evidence: name the reachable trigger, changed operation, existing guards or bounds, and observable impact. Quote a short decisive expression and cite related file/symbol evidence in why. Security needs a source-to-operation path and a concrete boundary failure; performance needs a demonstrated cost increase or resource limit violation at a supported input size. Missing guards in a hunk are not proof they are absent elsewhere. Honor effective upstream validation, parameter binding, ownership checks, batching, and bounded workloads. Do not request indexes, caching, parallelism, or hardening on speculation. Prioritize proven security and resource-exhaustion defects over cleanup suggestions. Report one finding per root cause; do not split the same exploit into separate input-validation and sink complaints.
+<!-- /rubric:risk-evidence -->
+
+<!-- rubric:ground-truth -->
+Ground-truth sweep: user-facing copy in the diff that states a quantitative fact about existing behavior (a time window, threshold, count, unit, limit, price basis) must match the code that produces that behavior. Locate the canonical constant or implementing module with repo tools before trusting the number; copy that misstates it is a finding EVEN WHEN it matches the linked issue — the issue states intent, the code is the ground truth for facts. When the spec and the code disagree on a fact, flag the contradiction as its own finding (stale spec) instead of scoring conformance in either direction. Scope discipline: this sweep checks facts the DIFF asserts — it never widens scope. Spec items outside a partial slice's stated scope stay not_in_scope and are never findings, even when their criteria are checkable against the diff.
+<!-- /rubric:ground-truth -->
+
+<!-- rubric:affordance-reachability -->
+Affordance-reachability sweep: a newly added or newly advertised interactive affordance — keyboard shortcut, keycap hint, click target, badge implying an action — must actually fire in every state where it is shown. Enumerate the states its guards create (focus inside an input/textarea/contenteditable, modal open, empty/loading, disabled) and trace each against the render condition. A state where the hint is visible but the handler returns early is a bug (medium minimum): the advertised action silently does nothing, or falls through to typing. Fix direction: gate the hint on the same condition as the handler, or widen the handler.
+<!-- /rubric:affordance-reachability -->
+
+<!-- rubric:data-corpus -->
+Data-corpus sweep: when the diff adds or changes a parser, formatter, normalization/casing rule, or regex over domain values (names, codes, identifiers), hunt for counterexamples in the repo's real data with repo tools — seeds, fixtures, test corpora, sample files. A repo-resident value the new rule visibly mangles or misses is a finding; cite the row as proof. Unit tests shipped in the same diff prove intent, not coverage: they contain the author's imagined inputs, not the data.
+<!-- /rubric:data-corpus -->
+
+<!-- rubric:why -->
+"why" (required): (1) the failure mechanism and its trigger, (2) the consequence, (3) why the fix is correct. Name the pattern when one exists (race condition, N+1, TOCTOU, mutable builder reuse). Never restate "issue" with more words.
+<!-- /rubric:why -->
+
+<!-- rubric:before-after -->
+"before"/"after" (required on every finding that requests a change — i.e. all of them): the OBSERVABLE pair a reader judges the change by. "before" = what happens now (the wrong status code, the NaN, the leaked value, the crash — with its trigger); "after" = what happens once the fix lands. Behavior, not code: the diff already shows the code — this pair shows the consequence. Concrete values beat descriptions ("returns 500" beats "errors"). Never restate "issue" or "fix"; if you cannot state an observable difference, the finding is probably a style nit — drop it.
+<!-- /rubric:before-after -->
+
+<!-- rubric:incomplete-fix -->
+Incomplete-fix sweep: when the PR fixes a hazard class (null/undefined guard, error swallowing, bounds check, injection, race), scan the VISIBLE surrounding code — hunk context lines and any full-file context — for other unguarded instances of the SAME hazard class on the same code path. An unfixed sibling hazard IS a finding (anchor it to the nearest L-numbered line; note it sits on existing code).
+<!-- /rubric:incomplete-fix -->
+
+<!-- rubric:consistency -->
+Consistency sweep (NEW code too, not only fixes — these are real defects, never style nits):
+- The diff defines the local pattern: a new line handling the same concern differently from its siblings in the same diff is a finding — cite the deviating line; the siblings are the proof.
+- Nullable flow: a value declared nullable in the diff or context, passed unguarded to a formatter/renderer/dereference that assumes presence, is a bug (wrong output like "Invalid Date", or a crash) — severity by blast radius, medium minimum.
+- Guard placement: optional chaining protects only the links after each "?.", and a bare "as T" cast of parsed JSON asserts, never checks. Trace the FIRST link of each chain to a real guard.
+- Single source of truth: a hardcoded literal union/list duplicating a canonical exported type or const visible in the diff or context is a medium finding — flag EACH duplicated copy as its own finding at its own line, naming the canonical symbol to use instead.
+- Redundant construct the callee already guarantees: a fallback, guard, or coercion duplicating the called API's documented handling of the same input — "cond ?? alwaysTrue" where the API omits the clause for absent input (e.g. Drizzle's .where), or re-validating what the callee validates — is a medium finding. STRICT bar: only literal redundancy, where removing the construct provably changes nothing, and only when the API's handling is certain from the visible context or the library's well-known contract. Uncertain semantics, behavior-changing alternatives, or "could be simpler" preferences are NOT this rule — do not report them. Name the API semantic as proof; flag each occurrence.
+- Input hygiene: new code that parses env/config/user input into pools, account lists, or maps must dedupe entries and survive gaps/blank items — a pool member minted with no backing resource, or duplicates that alias one underlying resource, is a bug (severity by blast radius). A JSON.parse/unmarshal result dereferenced with no null-or-non-object guard is a bug, not defensive style: JSON.parse accepts "null" and bare primitives. When a sibling parser in the same diff applies stricter hygiene, cite the sibling as proof.
+- Boundary values on collections: any computation over a collection must handle the EMPTY (and singleton) boundary. Division by a collection's length, an empty reduce with no initial value, [0]/[i] indexing, Math.max/min(...spread), slicing/last-element access — each yields NaN, undefined, -Infinity, or a throw on empty input. An unguarded such computation is a bug (NaN silently corrupts every downstream number), not a nit. DISTINCT from nullable flow: the collection is present, just empty. Flag the missing empty-guard at the computation's line.
+- Extraction widens the input domain: when the diff HOISTS/EXTRACTS inline code into a standalone function, method, or helper, review it at its NEW call surface — it can now receive inputs (empty arrays, null, out-of-range) the original inline site never produced. A guard that was unnecessary inline because the caller guaranteed non-empty becomes REQUIRED once the logic is reusable. Apply every sweep above to the extracted body.
+- Not in scope: only a PURE rename/reformat with an IDENTICAL call surface and no new reachable inputs warrants zero findings — a line such a change merely re-emits is not reviewable for its pre-existing behavior. Extraction, hoisting, signature changes, and moves that widen who-can-call-it are NOT exempt; every sweep applies in full to code the PR adds, modifies, OR makes newly reachable.
+<!-- /rubric:consistency -->
+
+<!-- rubric:fix-hygiene -->
+Fix-suggestion hygiene — your suggested fixes must fail CLOSED. Never suggest substituting a default value for a failed operation (".catch(() => ({}))", "catch { return [] }", coercing a parse failure into a usable value) unless the substituted value CANNOT be accepted downstream. The test is the downstream contract, not the catch: "null" into a z.object schema always rejects (fail-closed, acceptable); "{}" into an ALL-OPTIONAL schema validates, so the client's failed intent silently becomes a different successful operation — that is the silent error swallowing you exist to flag, introduced by your own suggestion. Prefer an explicit typed error that preserves the cause (throw the framework's 400-equivalent naming the parse failure). Sibling consistency NEVER justifies a fail-open pattern: when the sibling your suggestion would match is itself fail-open, flag the sibling as a finding instead of propagating it.
+<!-- /rubric:fix-hygiene -->
+`;
 
 // src/review-contract.ts
 init_shipflow_contract_data();
+function parseReviewRubric(md) {
+  const re = /<!-- rubric:([a-z0-9-]+) -->\n([\s\S]*?)\n<!-- \/rubric:([a-z0-9-]+) -->/g;
+  const out = [];
+  const seen = new Set;
+  for (const [, id, text2, closeId] of md.matchAll(re)) {
+    if (id !== closeId)
+      throw new Error(`review rubric section "${id}" is closed by "${closeId}"`);
+    if (seen.has(id))
+      throw new Error(`review rubric section "${id}" appears twice`);
+    if (!text2)
+      throw new Error(`review rubric section "${id}" is empty`);
+    seen.add(id);
+    out.push({ id, text: text2 });
+  }
+  if (!out.length)
+    throw new Error("review rubric has no sections");
+  return out;
+}
+var REVIEW_RUBRIC = parseReviewRubric(REVIEW_RUBRIC_MD);
 var LOOP_VERDICTS = REVIEW_CONTRACT.verdicts.loop;
 var LOOP_ROLE = REVIEW_CONTRACT.roles.loop;
 var SEVERITIES = REVIEW_CONTRACT.severities;
@@ -11070,6 +10581,612 @@ function buildReviewPayload(opts) {
   };
 }
 
+// src/packet.ts
+init_shipflow_contract_data();
+init_project();
+init_pr_state();
+var PACKET_PER_FILE_CAP = REVIEW_CONTRACT.budgets.perFileDiffCap;
+var PACKET_TOTAL_CAP = REVIEW_CONTRACT.budgets.packetTotalCap;
+var PACKET_BRIEF_CAP = REVIEW_CONTRACT.budgets.briefCap;
+function reviewThreadPreview(t) {
+  const body = t.body.replace(/\s+/g, " ");
+  return {
+    id: t.id,
+    path: t.path || null,
+    line: t.line ?? null,
+    author: t.author || "unknown",
+    body: body.slice(0, 140),
+    bodyTruncated: !!t.bodyTruncated || body.length > 140
+  };
+}
+var NOISE_SUBSTRINGS = REVIEW_CONTRACT.noise.substrings.map((s) => s.toLowerCase());
+var NOISE_SUFFIXES = [
+  ...REVIEW_CONTRACT.noise.suffixes,
+  ...REVIEW_CONTRACT.noise.extensions
+].map((s) => s.toLowerCase());
+var NOISE_BASENAMES = REVIEW_CONTRACT.noise.basenames.map((s) => s.toLowerCase());
+function matchesNoiseSegment(p, s) {
+  const token = s.replace(/^\/+|\/+$/g, "");
+  if (token === "")
+    return false;
+  return `/${p}/`.includes(`/${token}/`);
+}
+function isNoiseDiffPath(path) {
+  const p = path.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+  const base = p.slice(p.lastIndexOf("/") + 1);
+  return NOISE_BASENAMES.includes(base) || NOISE_SUBSTRINGS.some((s) => matchesNoiseSegment(p, s)) || NOISE_SUFFIXES.some((s) => p.endsWith(s));
+}
+function splitUnifiedDiff(diff) {
+  const sections = [];
+  const lines = diff.split(`
+`);
+  let current = null;
+  for (const line of lines) {
+    const m = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+    if (m) {
+      if (current)
+        sections.push(current);
+      current = { path: m[2], body: line };
+    } else if (current) {
+      current.body += `
+` + line;
+    }
+  }
+  if (current)
+    sections.push(current);
+  return sections;
+}
+function filterDiffForPacket(diff) {
+  const out = [];
+  let shown = 0;
+  let omittedNoise = 0;
+  let omittedBudget = 0;
+  let truncatedFiles = 0;
+  let total = 0;
+  for (const s of splitUnifiedDiff(diff)) {
+    if (isNoiseDiffPath(s.path)) {
+      omittedNoise++;
+      continue;
+    }
+    if (total >= PACKET_TOTAL_CAP) {
+      omittedBudget++;
+      continue;
+    }
+    let body = s.body;
+    if (body.length > PACKET_PER_FILE_CAP) {
+      body = body.slice(0, PACKET_PER_FILE_CAP) + `
+… (file diff truncated)`;
+      truncatedFiles++;
+    }
+    out.push(body);
+    total += body.length;
+    shown++;
+  }
+  return { text: out.join(`
+`), shown, omittedNoise, omittedBudget, truncatedFiles };
+}
+var CI_NOTHING_VALIDATED = "nothing was validated — every reported check is NEUTRAL/SKIPPED";
+function summarizeChecks(checks) {
+  let passing = 0, failing = 0, pending = 0;
+  const failingChecks = [];
+  for (const c of checks) {
+    const state = ciStateOf([c]);
+    if (state === "passing")
+      passing++;
+    else if (state === "failing") {
+      failing++;
+      failingChecks.push(c.name ?? "unnamed");
+    } else if (state === "pending")
+      pending++;
+  }
+  return { passing, failing, pending, failingChecks, reported: checks.length > 0 };
+}
+function formatCiSummary(ci) {
+  if (!ci.reported)
+    return "no checks reported";
+  if (ci.passing === 0 && ci.failing === 0 && ci.pending === 0)
+    return CI_NOTHING_VALIDATED;
+  return `${ci.passing} passing · ${ci.failing} failing · ${ci.pending} pending${ci.failingChecks.length ? ` — failing: ${ci.failingChecks.join(", ")}` : ""}`;
+}
+function extractEvidenceLines(comments) {
+  const lines = [];
+  for (const c of comments) {
+    const body = c.body ?? "";
+    if (!body.includes("Test evidence") && !/health \d+/.test(body))
+      continue;
+    for (const line of body.split(`
+`)) {
+      if (line.includes("Test evidence") || /health \d+→\d+|health \d+ ?→/.test(line) || line.startsWith("Verified:") || line.trimStart().startsWith("- Verified")) {
+        lines.push(line.trim());
+      }
+    }
+  }
+  return lines.slice(0, 12);
+}
+function matchGlobSegment(pattern, s) {
+  let p = 0, i = 0, star = -1, mark = 0;
+  while (i < s.length) {
+    if (p < pattern.length && (pattern[p] === "?" || pattern[p] === s[i])) {
+      p++;
+      i++;
+    } else if (p < pattern.length && pattern[p] === "*") {
+      star = p++;
+      mark = i;
+    } else if (star >= 0) {
+      p = star + 1;
+      i = ++mark;
+    } else
+      return false;
+  }
+  while (p < pattern.length && pattern[p] === "*")
+    p++;
+  return p === pattern.length;
+}
+function matchGlobSegments(pat, seg) {
+  const p = [];
+  for (const s of pat)
+    if (!(s === "**" && p[p.length - 1] === "**"))
+      p.push(s);
+  const width = seg.length + 1;
+  const failed = new Set;
+  const walk = (pi, si) => {
+    const key = pi * width + si;
+    if (failed.has(key))
+      return false;
+    let a = pi, b = si;
+    while (a < p.length) {
+      if (p[a] === "**") {
+        if (a !== pi) {
+          if (walk(a, b))
+            return true;
+          failed.add(key);
+          return false;
+        }
+        for (let k = b;k <= seg.length; k++)
+          if (walk(a + 1, k))
+            return true;
+        failed.add(key);
+        return false;
+      }
+      if (b >= seg.length || !matchGlobSegment(p[a], seg[b])) {
+        failed.add(key);
+        return false;
+      }
+      a++;
+      b++;
+    }
+    if (b !== seg.length) {
+      failed.add(key);
+      return false;
+    }
+    return true;
+  };
+  return walk(0, 0);
+}
+function ownsPath(featurePath, filePath) {
+  const pattern = featurePath.replace(/^\.\//, "");
+  if (!pattern)
+    return false;
+  if (!/[*?]/.test(pattern)) {
+    return filePath === pattern || filePath.startsWith(pattern.endsWith("/") ? pattern : pattern + "/");
+  }
+  return matchGlobSegments(pattern.split("/"), filePath.split("/"));
+}
+function pathCandidates(path, repo) {
+  const out = [path];
+  if (!repo)
+    return out;
+  const parts = repo.split("/");
+  const shortName = parts[parts.length - 1];
+  if (shortName)
+    out.push(`${shortName}/${path}`);
+  if (parts.length === 2 && parts[0])
+    out.push(`${repo}/${path}`);
+  return out;
+}
+var CATCH_ALL_PROBE_PATH = "__shipflow_catch_all_probe__/__no_such_file__.probe";
+function isCatchAllFeaturePath(featurePath, repo) {
+  return pathCandidates(CATCH_ALL_PROBE_PATH, repo).some((c) => ownsPath(featurePath, c));
+}
+function resolveFeatureMatch(diffPaths, features, repo) {
+  const changed = diffPaths.filter((p) => !isNoiseDiffPath(p)).flatMap((p) => pathCandidates(p, repo));
+  const touched = [];
+  const catchAll = [];
+  for (const f of features) {
+    const owning = (f.paths ?? []).filter((fp) => changed.some((path) => ownsPath(fp, path)));
+    if (!owning.length)
+      continue;
+    const name = f.name || f.key;
+    touched.push(name);
+    if (owning.every((fp) => isCatchAllFeaturePath(fp, repo)))
+      catchAll.push(name);
+  }
+  return { touched, catchAll };
+}
+var FEATURE_MATCH_NULL_WARNING = "⚠️ Feature map matched NOTHING — the map has features and this diff has non-noise " + "files, but no feature path owns any changed path. `Features touched` is absent " + "because the MATCHER found nothing, not because the PR touches no feature: treat " + "per-feature evidence coverage as UNVERIFIED and suspect stale/mis-prefixed map paths.";
+function featureMatchCatchAllWarning(catchAll) {
+  return `⚠️ Feature map matched ONLY a catch-all entry (${catchAll.join(", ")}) — the map has ` + "features and this diff has non-noise files, but no NAMED feature path owns any " + "changed path. A catch-all matches every diff identically, so `Features touched` " + "identifies nothing: treat per-feature evidence coverage as UNVERIFIED and suspect " + "stale/mis-prefixed map paths.";
+}
+function featureMatchVerdict(features, diffPaths, match) {
+  if (!features?.length || !diffPaths.some((p) => !isNoiseDiffPath(p)))
+    return "matched";
+  if (match.touched.length === 0)
+    return "null";
+  if (match.catchAll.length === match.touched.length)
+    return "catch-all";
+  return "matched";
+}
+function assessEvidenceCoverage(touched, comments, opts) {
+  const evidenceItems = comments.filter((c) => {
+    const body = c.body ?? "";
+    return /^\s*🧪.*Test evidence/m.test(body) || /^\s*-?\s*\*{0,2}verified:/im.test(body);
+  }).length;
+  if (opts?.catchAllOnly && touched.length) {
+    return {
+      evidenceItems,
+      warning: `⚠️ Per-feature evidence coverage UNVERIFIED — the only match is a catch-all map ` + `entry, so the ${evidenceItems} evidence item(s) here cannot be attributed to any ` + `named feature; the per-feature proof count is unknown, not satisfied.`
+    };
+  }
+  if (touched.length <= 1 || evidenceItems >= touched.length) {
+    return { evidenceItems, warning: null };
+  }
+  return {
+    evidenceItems,
+    warning: `⚠️ ${touched.length} features touched, ${evidenceItems} evidence item(s) — ` + `need ≥1 proof per feature on a multi-feature PR; treat each unproven feature ` + `as an unresolved thread (request_changes) unless every touched feature maps ` + `to a proof.`
+  };
+}
+var DEVIATIONS_HEADING_ALIASES = [
+  "deviations from brief",
+  "deviations from the brief",
+  "deviations"
+];
+var HEADING_TEXT = /^ {0,3}(#{1,6})\s+(.*)$/;
+var BOLD_HEADING = /^ {0,3}\*\*(.+?)\*\*(.*)$/;
+var BOLD_TRAILING_ANNOTATION = /^[—–\-/&:(]|^and\b/;
+var BOLD_DEVIATIONS_HEADING_LEVEL = 2;
+function headingLevel(line) {
+  const m = HEADING_TEXT.exec(line);
+  if (m)
+    return m[1].length;
+  if (boldDeviationsHeadingText(line) !== null)
+    return BOLD_DEVIATIONS_HEADING_LEVEL;
+  return null;
+}
+function normalizeHeading(s) {
+  return s.toLowerCase().replace(/\s+/g, " ").replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "").trim();
+}
+var HEADING_ANNOTATION_SPLIT = /\s+[—–\-/&]\s+|:\s+|\s+and\s+|\s+\(/;
+function isDeviationAliasText(text2) {
+  const norm = normalizeHeading(text2);
+  if (DEVIATIONS_HEADING_ALIASES.includes(norm))
+    return true;
+  const head = normalizeHeading(norm.split(HEADING_ANNOTATION_SPLIT)[0] ?? "");
+  return DEVIATIONS_HEADING_ALIASES.includes(head);
+}
+function boldDeviationsHeadingText(line) {
+  if (HEADING_TEXT.test(line))
+    return null;
+  const m = BOLD_HEADING.exec(line);
+  if (!m)
+    return null;
+  const inner = m[1];
+  const trailing = (m[2] ?? "").trim();
+  if (trailing && !BOLD_TRAILING_ANNOTATION.test(trailing))
+    return null;
+  const text2 = trailing ? `${inner} ${trailing}` : inner;
+  return isDeviationAliasText(text2) ? text2 : null;
+}
+function isDeviationsHeading(line) {
+  const m = HEADING_TEXT.exec(line);
+  if (m)
+    return isDeviationAliasText(m[2]);
+  return boldDeviationsHeadingText(line) !== null;
+}
+function extractDeviations(prBody) {
+  return findDeviationsSection(prBody.split(`
+`))?.content ?? "";
+}
+function findDeviationsSection(lines) {
+  for (let start = 0;start < lines.length; start++) {
+    if (!isDeviationsHeading(lines[start]))
+      continue;
+    const openLevel = headingLevel(lines[start]) ?? 6;
+    const section = [];
+    let structured = false;
+    let end = lines.length;
+    for (let i = start + 1;i < lines.length; i++) {
+      const level = headingLevel(lines[i]);
+      if (level !== null) {
+        if (level <= openLevel) {
+          end = i;
+          break;
+        }
+        const empty = section.join("").trim() === "";
+        if (empty && openLevel >= 2)
+          structured = true;
+        else if (!structured) {
+          end = i;
+          break;
+        }
+      }
+      section.push(lines[i]);
+    }
+    const content = section.join(`
+`).trim();
+    if (content)
+      return { start, end, content };
+  }
+  return null;
+}
+function findNearMissDeviationHeadings(prBody) {
+  const lines = prBody.split(`
+`);
+  const parsed = findDeviationsSection(lines);
+  const out = [];
+  for (let i = 0;i < lines.length; i++) {
+    if (parsed && i >= parsed.start && i < parsed.end)
+      continue;
+    if (isDeviationsHeading(lines[i]))
+      continue;
+    const m = HEADING_TEXT.exec(lines[i]);
+    if (!m)
+      continue;
+    if (normalizeHeading(m[2]).includes("deviation"))
+      out.push(lines[i].trim());
+  }
+  return out;
+}
+var INTERPRETATION_NOTE_CALLOUT = /^[^\p{L}\n]*interpretation note/imu;
+function hasExplicitInterpretationSignal(prBody) {
+  if (!prBody)
+    return false;
+  if (prBody.includes(SHIPFLOW_CONTRACT.markers.interpretationNote))
+    return true;
+  return INTERPRETATION_NOTE_CALLOUT.test(prBody);
+}
+function hasInterpretationSignal(prBody) {
+  if (!prBody)
+    return false;
+  if (prBody.includes(SHIPFLOW_CONTRACT.markers.interpretationNote))
+    return true;
+  if (INTERPRETATION_NOTE_CALLOUT.test(prBody))
+    return true;
+  if (extractDeviations(prBody))
+    return true;
+  return false;
+}
+var REVIEW_THREADS_UNAVAILABLE_MARKER = "⚠️ review threads UNAVAILABLE — unresolved count NOT determined";
+function specUnavailableMarker(issueNumber) {
+  return `⚠️ **Brief NOT loaded — issue #${issueNumber} could not be read.** The brief is ` + `UNAVAILABLE, not absent: do NOT judge this PR without it, and do NOT hold the missing ` + `brief against the author. Re-run the packet, or read the issue directly.`;
+}
+var REVIEW_RUBRIC_HEADING = "Code review rubric (shared with the server reviewer)";
+var REVIEW_RUBRIC_NOTE = "_The server's pr_review finder applies these sweeps verbatim (`contracts/review-rubric.md`). " + "Apply every one to the diff below, and read past the diff with repo tools where a sweep says to. " + 'Where a sweep says "L-number", cite the new-file line as `line` (and `startLine` for a span) in ' + "`pr post-review`. The server's JSON contract, probes, coverage rows and verdict words stay with the server._";
+function buildReviewPacket(input) {
+  const { pr, threads, diff, issue } = input;
+  const b = [];
+  b.push(`# Review packet — PR #${pr.number}: ${pr.title}`);
+  const meta = [];
+  if (pr.headRefName)
+    meta.push(`${pr.headRefName} → ${pr.baseRefName ?? "?"}`);
+  if (pr.isDraft)
+    meta.push("DRAFT");
+  if (pr.mergeable)
+    meta.push(`mergeable: ${pr.mergeable}`);
+  if (pr.labels?.length)
+    meta.push(`labels: ${pr.labels.map((l) => l.name).join(", ")}`);
+  b.push(meta.join(" · "));
+  b.push(`
+## Spec / acceptance brief`);
+  if (issue) {
+    b.push(`Issue #${issue.number} (${issue.linkKind}): ${issue.title}`);
+    const body = (issue.body ?? "").trim();
+    b.push(body.length > PACKET_BRIEF_CAP ? body.slice(0, PACKET_BRIEF_CAP) + `
+… (brief truncated)` : body || "_(issue has no body)_");
+  } else if (input.specUnavailable) {
+    b.push(specUnavailableMarker(input.specUnavailable));
+  } else if (input.specNotReadable) {
+    b.push(specNotReadableIssueNote(input.specNotReadable.number, input.specNotReadable.repo));
+  } else {
+    b.push("⚠️ **No linked issue/brief found.** Do NOT infer the spec from the diff — " + "reviewing against a self-derived spec is a known silent failure. Flag the missing brief in your verdict.");
+  }
+  const prBody = (pr.body ?? "").trim();
+  if (prBody) {
+    b.push(`
+## PR description`);
+    b.push(prBody.length > PACKET_BRIEF_CAP ? prBody.slice(0, PACKET_BRIEF_CAP) + `
+… (truncated)` : prBody);
+  }
+  const deviations = extractDeviations(pr.body ?? "");
+  if (deviations) {
+    b.push(`
+## Deviations from brief`);
+    b.push(deviations);
+    b.push("_Verify each deviation: conservative? justified? does the spec still hold?_");
+  }
+  const nearMisses = findNearMissDeviationHeadings(pr.body ?? "");
+  if (nearMisses.length) {
+    b.push(`
+## Deviation-like headings (not parsed)`);
+    for (const h of nearMisses.slice(0, 5))
+      b.push(`- \`${h}\``);
+    b.push("_Display only — these did NOT feed the intent gate and block nothing. " + "If one is a real deviation log, ask the author to retitle it " + `(\`${DEVIATIONS_HEADING_ALIASES[0]}\`, any heading level)._`);
+  }
+  b.push(`
+## CI`);
+  b.push(formatCiSummary(summarizeChecks(pr.statusCheckRollup ?? [])));
+  if (input.threadsUnavailable) {
+    b.push(`
+## External review threads (UNAVAILABLE)`);
+    b.push(REVIEW_THREADS_UNAVAILABLE_MARKER);
+    b.push("_The approve precondition (zero unresolved threads) could NOT be evaluated. " + "A gate that could not run is `request_changes`, never a footnote — re-run the packet, " + "or check with `renaiss-shipflow pr reviews <n>`._");
+  } else {
+    const unresolved = threads.filter((t) => !t.isResolved);
+    b.push(`
+## External review threads (unresolved: ${unresolved.length})`);
+    if (unresolved.length === 0) {
+      b.push("none");
+    } else {
+      for (const t of unresolved.slice(0, 20)) {
+        const preview = reviewThreadPreview(t);
+        const anchor = t.path ? `${t.path}${t.line ? `:${t.line}` : ""}` : "(top-level)";
+        b.push(`- ${t.id} ${anchor} @${preview.author} — ${preview.body}${preview.bodyTruncated ? "… [truncated]" : ""}`);
+      }
+      if (unresolved.length > 20)
+        b.push(`_${unresolved.length - 20} more unresolved threads; list all with \`pr reviews ${pr.number}\`._`);
+      b.push(`_Read full finding text before acting: \`pr reviews ${pr.number} --thread <id> --full\`._`);
+    }
+  }
+  const evidence = extractEvidenceLines(pr.comments ?? []);
+  const allDiffPaths = splitUnifiedDiff(diff).map((s) => s.path);
+  const match = input.features?.length ? resolveFeatureMatch(allDiffPaths, input.features, input.repo) : { touched: [], catchAll: [] };
+  const touchedAll = match.touched;
+  const verdict = featureMatchVerdict(input.features, allDiffPaths, match);
+  b.push(`
+## Evidence / health`);
+  if (input.featureMapSkipCause)
+    b.push(featureMapSkippedWarning(input.featureMapSkipCause));
+  else if (input.featureMapNotApplicable)
+    b.push(featureMapNotApplicableNote(input.featureMapNotApplicable));
+  if (input.features?.length) {
+    const mapMarkerAlreadyShown = Boolean(input.featureMapSkipCause || input.featureMapNotApplicable);
+    if (touchedAll.length) {
+      const catchAllOnly = verdict === "catch-all" && !mapMarkerAlreadyShown;
+      const suffix = catchAllOnly ? " — catch-all only, no named feature" : "";
+      b.push(`Features touched (${touchedAll.length}): ${touchedAll.join(", ")}${suffix}`);
+      if (catchAllOnly)
+        b.push(featureMatchCatchAllWarning(match.catchAll));
+      const cov = assessEvidenceCoverage(touchedAll, pr.comments ?? [], { catchAllOnly });
+      if (cov.warning)
+        b.push(cov.warning);
+    } else if (!mapMarkerAlreadyShown && verdict === "null") {
+      b.push(FEATURE_MATCH_NULL_WARNING);
+    }
+  }
+  b.push(evidence.length ? evidence.join(`
+`) : "no evidence caption posted");
+  if (input.features?.length) {
+    const touchedNames = new Set(touchedAll);
+    if (touchedNames.size) {
+      const touched = input.features.filter((f) => touchedNames.has(f.name || f.key)).slice(0, 12);
+      b.push(`
+## Features (relevant slice)`);
+      for (const f of touched) {
+        const layer = f.layer ? ` [${f.layer}]` : "";
+        const tp = f.testPriority ? ` · test_priority: ${f.testPriority}` : "";
+        const desc = f.description ? ` — ${f.description}` : "";
+        b.push(`- ${f.name || f.key}${layer}${tp}${desc}`);
+      }
+      const layers = new Set(touched.map((f) => f.layer).filter(Boolean));
+      const neighbors = input.features.filter((f) => !touchedNames.has(f.name || f.key) && f.layer && layers.has(f.layer)).map((f) => f.name || f.key).slice(0, 15);
+      if (neighbors.length)
+        b.push(`Same-layer neighbors: ${neighbors.join(", ")}`);
+      b.push("_This slice replaces the full map for most reviews — run `renaiss-shipflow features --json` only if you need beyond it._");
+    }
+  }
+  b.push(`
+## ${REVIEW_RUBRIC_HEADING}`);
+  b.push(REVIEW_RUBRIC_NOTE);
+  b.push(REVIEW_RUBRIC.map((s) => s.text).join(`
+
+`));
+  const filtered = filterDiffForPacket(diff);
+  b.push(`
+## Diff (${filtered.shown} file(s) shown` + (filtered.omittedNoise ? `, ${filtered.omittedNoise} noise file(s) omitted` : "") + (filtered.omittedBudget ? `, ${filtered.omittedBudget} over budget` : "") + (filtered.truncatedFiles ? `, ${filtered.truncatedFiles} truncated` : "") + ")");
+  b.push("```diff");
+  b.push(filtered.text);
+  b.push("```");
+  return b.join(`
+`);
+}
+function buildReviewPacketData(input) {
+  const { pr, threads, diff, issue } = input;
+  const trunc = (s, cap) => s.length > cap ? { text: s.slice(0, cap), truncated: true } : { text: s, truncated: false };
+  let spec;
+  if (issue) {
+    const t = trunc((issue.body ?? "").trim(), PACKET_BRIEF_CAP);
+    spec = { linked: true, issue: { number: issue.number, linkKind: issue.linkKind, title: issue.title, body: t.text, truncated: t.truncated } };
+  } else if (input.specUnavailable) {
+    spec = {
+      linked: false,
+      unavailable: true,
+      issueNumber: input.specUnavailable,
+      warning: specUnavailableMarker(input.specUnavailable)
+    };
+  } else if (input.specNotReadable) {
+    spec = {
+      linked: false,
+      notReadable: true,
+      issueNumber: input.specNotReadable.number,
+      notReadableNote: specNotReadableIssueNote(input.specNotReadable.number, input.specNotReadable.repo)
+    };
+  } else {
+    spec = {
+      linked: false,
+      warning: "No linked issue/brief found — do NOT infer the spec from the diff; flag the missing brief in your verdict."
+    };
+  }
+  const prBody = (pr.body ?? "").trim();
+  const prDescription = prBody ? trunc(prBody, PACKET_BRIEF_CAP) : undefined;
+  const deviations = extractDeviations(pr.body ?? "") || undefined;
+  const unresolved = threads.filter((t) => !t.isResolved);
+  const reviewThreads = input.threadsUnavailable ? { unresolved: null, unavailable: true, items: [] } : {
+    unresolved: unresolved.length,
+    omitted: Math.max(0, unresolved.length - 20),
+    items: unresolved.slice(0, 20).map(reviewThreadPreview)
+  };
+  const evidence = { lines: extractEvidenceLines(pr.comments ?? []) };
+  if (input.featureMapSkipCause)
+    evidence.featureMapSkipped = featureMapSkippedWarning(input.featureMapSkipCause);
+  else if (input.featureMapNotApplicable)
+    evidence.featureMapNotApplicable = featureMapNotApplicableNote(input.featureMapNotApplicable);
+  let features;
+  if (input.features?.length) {
+    const diffPaths = splitUnifiedDiff(diff).map((s) => s.path);
+    const match = resolveFeatureMatch(diffPaths, input.features, input.repo);
+    const touchedNames = match.touched;
+    const mapMarkerAlreadyShown = Boolean(input.featureMapSkipCause || input.featureMapNotApplicable);
+    const verdict = mapMarkerAlreadyShown ? "matched" : featureMatchVerdict(input.features, diffPaths, match);
+    if (verdict === "null")
+      evidence.featureMatchWarning = FEATURE_MATCH_NULL_WARNING;
+    else if (verdict === "catch-all") {
+      evidence.featureMatchWarning = featureMatchCatchAllWarning(match.catchAll);
+      evidence.featuresTouchedCatchAllOnly = true;
+    }
+    if (touchedNames.length) {
+      evidence.featuresTouched = touchedNames;
+      evidence.coverageWarning = assessEvidenceCoverage(touchedNames, pr.comments ?? [], { catchAllOnly: verdict === "catch-all" }).warning;
+      const touchedSet = new Set(touchedNames);
+      const touched = input.features.filter((f) => touchedSet.has(f.name || f.key)).slice(0, 12);
+      const layers = new Set(touched.map((f) => f.layer).filter(Boolean));
+      const sameLayerNeighbors = input.features.filter((f) => !touchedSet.has(f.name || f.key) && f.layer && layers.has(f.layer)).map((f) => f.name || f.key).slice(0, 15);
+      features = {
+        touched: touched.map((f) => ({ name: f.name || f.key, layer: f.layer, testPriority: f.testPriority, description: f.description })),
+        sameLayerNeighbors
+      };
+    }
+  }
+  return {
+    pr: {
+      number: pr.number,
+      title: pr.title,
+      headRefName: pr.headRefName,
+      baseRefName: pr.baseRefName,
+      isDraft: pr.isDraft,
+      mergeable: pr.mergeable,
+      labels: (pr.labels ?? []).map((l) => l.name)
+    },
+    spec,
+    prDescription,
+    deviations,
+    ci: summarizeChecks(pr.statusCheckRollup ?? []),
+    reviewThreads,
+    evidence,
+    features,
+    rubric: { source: "contracts/review-rubric.md", note: REVIEW_RUBRIC_NOTE, sections: REVIEW_RUBRIC.map((s) => ({ ...s })) },
+    diff: filterDiffForPacket(diff)
+  };
+}
+
 // src/commands/pr.ts
 init_shipflow_contract_data();
 init_sh();
@@ -11077,6 +11194,9 @@ init_pr_state();
 init_helpers();
 init_project();
 var LINT_MODES = ["warn", "strict"];
+function claimLoopReview(ctx, number, body) {
+  return ctx.client.reviewClaim(ctx.creds.org, ctx.project.projectId, number, { ...body, agent: "shipflow-loop" });
+}
 function lintNearMissDeviationHeadings(body) {
   const hits = findNearMissDeviationHeadings(body);
   if (hits.length === 0)
@@ -11542,7 +11662,7 @@ async function automergeOnce(ctx, repo, number, opts) {
 }
 function registerPRCommand(program2) {
   const pr = program2.command("pr").description("Pull request actions");
-  pr.command("create").description("Open a PR; prepends ShipFlow context to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (added under ShipFlow header)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").addOption(new Option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR). Anything else is REFUSED (exit 1, no PR) — never treated as warn (issue #648)").choices([...LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  pr.command("create").description("Open a PR; prepends ShipFlow context to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (added under ShipFlow header)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--loop-review", "The ShipFlow loop reviews this PR itself: claim its review so the server's pr_review workflow skips it (see `pr review-claim`)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").addOption(new Option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR). Anything else is REFUSED (exit 1, no PR) — never treated as warn (issue #648)").choices([...LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const rawLint = opts.lint ?? "";
     if (!LINT_MODES.includes(rawLint)) {
       console.error(`Unknown lint mode "${opts.lint ?? ""}" — valid: ${LINT_MODES.join(", ")}. Nothing was created.`);
@@ -11588,10 +11708,18 @@ function registerPRCommand(program2) {
 
 ${opts.body ?? ""}`;
     const created = ghPRCreate({ repo: ctx.project.repoFullName, body, title: opts.title, base: opts.base, head: branch, draft: opts.draft });
+    const headSha = execSync6("git rev-parse HEAD").toString().trim();
+    if (opts.loopReview) {
+      try {
+        await claimLoopReview(ctx, created.number, { repo: ctx.project.repoFullName, headSha });
+      } catch (e) {
+        console.warn(`PR opened but the loop review claim failed, so the server will review it too: ${flattenCause(e)}`);
+      }
+    }
     await signalBestEffort(ctx, "prs", created.number, "opened", {
       repo: ctx.project.repoFullName,
       branch,
-      headSha: execSync6("git rev-parse HEAD").toString().trim(),
+      headSha,
       issueRefs: issueNumber ? [issueNumber] : [],
       previewUrl: opts.previewUrl ?? ""
     }, "PR opened but ShipFlow signal failed");
@@ -12213,6 +12341,26 @@ ${t.body}`);
     }
     ghIssueComment(repo, number, renderPrNoteBody(body, opts.reworkFrom));
     emit(opts, { number, noted: true, marked: true, ...degradedField(ctx) }, () => console.log(`\uD83D\uDCDD marked note posted on PR #${number}`), { pretty: true });
+  }));
+  pr.command("review-claim <number>").description("Tell ShipFlow this loop reviews the PR itself: the server's pr_review workflow skips the PR until the claim lapses (default 2h) or is released").option("--release", "Drop the claim so the server reviews the PR's next push").option("--ttl-minutes <n>", "Claim lifetime in minutes (server default 120, capped at 1440)").option("--head <sha>", "Head SHA the loop is reviewing (informational)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").action(runAction(async (numberStr, opts) => {
+    const ctx = await loadCtx(program2);
+    const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    const ttlMinutes = opts.ttlMinutes === undefined ? undefined : Number(opts.ttlMinutes);
+    const invalid = Number.isNaN(number) ? `"${numberStr}" is not a PR number` : ttlMinutes !== undefined && !(Number.isInteger(ttlMinutes) && ttlMinutes > 0) ? `--ttl-minutes must be a positive whole number, got "${opts.ttlMinutes}"` : null;
+    if (invalid) {
+      if (opts.json)
+        console.log(JSON.stringify({ error: `pr review-claim: ${invalid}` }));
+      else
+        console.error(`⛔ pr review-claim: ${invalid}`);
+      process.exit(1);
+    }
+    if (opts.release) {
+      await ctx.client.reviewRelease(ctx.creds.org, ctx.project.projectId, number, { repo });
+      emit(opts, { number, repo, released: true }, () => console.log(`\uD83D\uDD13 Released the loop review claim on PR #${number}; the server reviews its next push.`));
+      return;
+    }
+    const { claim } = await claimLoopReview(ctx, number, { repo, headSha: opts.head, ttlMinutes });
+    emit(opts, { number, repo, claim }, () => console.log(`\uD83D\uDD12 PR #${number} is claimed for loop review until ${claim.expiresAt}; the server skips its webhook reviews until then.`));
   }));
   pr.command("resolve <number>").description("Resolve review threads the loop has addressed (all unresolved, or specific --thread ids)").option("--thread <id...>", "Specific thread node-id(s) to resolve (default: all unresolved)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);

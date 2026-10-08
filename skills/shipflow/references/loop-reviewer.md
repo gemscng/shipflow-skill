@@ -32,19 +32,32 @@ Mode 1 (issue intake) lives in `loop-reviewer-intake.md` — load THAT file
 for intake dispatches; this file is the PR gate (Mode 2).
 
 ## Mode 2 — PR review (before merge)
-Input: PR number + acceptance brief. **Pull ONE thing** — the pre-baked packet:
+Input: PR number + acceptance brief. **Claim the review first**, so the
+server's pr_review workflow skips this PR and it gets one review, not two:
+
+```bash
+renaiss-shipflow pr review-claim <n>
+```
+
+The claim lasts 2h and every reviewer dispatch renews it. Best-effort: a
+failed claim only means the server reviews too. When the loop hands the PR to
+a human (escalation, owner decision) or stops working it, release it so the
+server reviews the next push: `renaiss-shipflow pr review-claim <n> --release`.
+
+Then **pull ONE thing** — the pre-baked packet:
 
 ```bash
 renaiss-shipflow pr packet <n>
 ```
 
 Read the markdown yourself — it is written for you; `--json` (same content,
-structured: `spec`, `ci`, `reviewThreads`, `evidence`, `features`, `diff`, …)
-only when a program consumes it. One call carries the spec/brief (linked
-issue), PR description, deviations from brief, CI status, unresolved external
-review threads, evidence/health caption, the relevant feature slice (touched +
-same-layer neighbors; `features --json` only for features outside it), and a
-noise-filtered, size-budgeted diff. Do NOT re-derive via `gh pr view` /
+structured: `spec`, `ci`, `reviewThreads`, `evidence`, `features`, `rubric`,
+`diff`, …) only when a program consumes it. One call carries the spec/brief
+(linked issue), PR description, deviations from brief, CI status, unresolved
+external review threads, evidence/health caption, the relevant feature slice
+(touched + same-layer neighbors; `features --json` only for features outside
+it), the shared code review rubric, and a noise-filtered, size-budgeted diff.
+Do NOT re-derive via `gh pr view` /
 `gh pr diff` / thread queries; raw `gh` only for a deeper look the packet
 flags (e.g. a truncated file). Thread previews carry IDs and truncation
 markers; read a finding you will act on with
@@ -247,21 +260,13 @@ mean "irrelevant", they stop meaning anything.
    untracked deferral is dropped scope: flag it.
 2. **Cross-feature impact** — paths owned by other features? Co-located /
    shared-layer regression risk? Call it out.
-3. **Correctness / safety** — obvious bugs, a missing regression test for the
-   bug fixed, missing tests for `test_priority: high` features,
-   security/trust-boundary issues.
-   - **Boundary values on collections:** handle the EMPTY (and singleton)
-     boundary — division by `length` (mean/average/vwap), empty `reduce`
-     with no initial, `[0]`/`[i]` on a possibly-empty array,
-     `Math.max/min(...arr)`, last-element access — each yields NaN /
-     undefined / -Infinity / a throw on empty. Unguarded = finding (NaN
-     silently corrupts downstream) — DISTINCT from nullable flow: the
-     collection is present, just empty.
-   - **Extraction widens the input domain:** hoisted inline code is reviewed
-     at its NEW call surface — inputs (empty, null, out-of-range) the inline
-     site never produced make a formerly-unneeded guard required. Not a
-     "pure refactor"; only a rename/reformat with an identical call surface
-     is exempt.
+3. **Correctness / safety — apply the packet's *Code review rubric* in
+   full.** It is the server reviewer's rubric (`contracts/review-rubric.md`),
+   so both reviewers judge code by the same sweeps. Run every sweep the diff
+   triggers, including the ones that send you past the diff. Also flag a
+   missing regression test for the bug fixed and missing tests for
+   `test_priority: high` features. Do not copy sweeps into this file; edit
+   the rubric and both reviewers change together.
 4. **Health delta** — from the PR evidence caption (`health <a>→<b> (Δ)`,
    `references/qa-report.md`). Negative delta = regression signal: block like
    an open thread unless an intentional, explained tradeoff.

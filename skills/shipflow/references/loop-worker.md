@@ -112,8 +112,9 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    (plugin-qualified — a bare name can resolve to another plugin's copy,
    #544; message-style.md § "Commit messages": no AI-attribution trailer, skip
    the human-confirm gate). Push, then
-   `renaiss-shipflow pr create --json --lint=strict` — MANDATORY; never drop
-   `--lint`. `lintMessageBody`
+   `renaiss-shipflow pr create --json --lint=strict --loop-review` — MANDATORY;
+   never drop `--lint`. `--loop-review` claims the PR's review for the loop
+   reviewer, so the server's pr_review workflow skips it. `lintMessageBody`
    (`apps/renaissshipflow-cli/src/message-lint.ts`) exits 2 on a rejected
    body — restructure and re-run. Never bump versions in the PR or state
    them in the body — auto-bump versions main after merge (#548).
