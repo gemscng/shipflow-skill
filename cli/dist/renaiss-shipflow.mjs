@@ -9970,6 +9970,14 @@ var REVIEW_CONTRACT = {
       header: "⏸ BLOCKED — a review gate could not run (not a code verdict)",
       githubEvent: "request_changes",
       emitsFindings: false
+    },
+    headers: {
+      $comment: "Verdict header text for every verdict in either vocabulary except blocked (which uses blocked.header). Both renderers print `**<header>** · <role>`, so a loop review and a server review read the same way. An unknown verdict renders the comment header.",
+      looks_good: "✅ ShipFlow PR review — looks good",
+      approve: "✅ ShipFlow PR review — approved",
+      comment: "\uD83D\uDCAC ShipFlow PR review — comments",
+      request_changes: "\uD83D\uDD34 ShipFlow PR review — needs changes",
+      reject: "⛔ ShipFlow PR review — rejected"
     }
   },
   roles: {
@@ -10364,28 +10372,21 @@ function renderCoverageSection(cov) {
   if (partial)
     gaps.push(`${partial} partial`);
   const summary = gaps.length ? `${head} — ${gaps.join(", ")}` : `${head} — ${implemented}/${cov.length} implemented`;
+  return renderDetails(summary, lines.join(`
+`));
+}
+function renderDetails(summary, body) {
   return `<details>
 <summary><b>${summary}</b></summary>
 
-${lines.join(`
-`)}
+${body.trim()}
 
 </details>`;
 }
-function verdictHeader(verdict) {
-  const role = REVIEW_CONTRACT.roles.loop;
-  switch (verdict) {
-    case "approve":
-      return `**✅ APPROVE — ShipFlow review** · ${role}`;
-    case "request_changes":
-      return `**\uD83D\uDD34 CHANGES REQUESTED — ShipFlow review** · ${role}`;
-    case "reject":
-      return `**⛔ REJECT — ShipFlow review** · ${role}`;
-    case "blocked":
-      return `**${REVIEW_CONTRACT.verdicts.blocked.header}** · ${role}`;
-    default:
-      return `**\uD83D\uDCAC ShipFlow review — comments** · ${role}`;
-  }
+function verdictHeader(verdict, role = REVIEW_CONTRACT.roles.loop) {
+  const headers = REVIEW_CONTRACT.verdicts.headers;
+  const text2 = verdict === "blocked" ? REVIEW_CONTRACT.verdicts.blocked.header : !verdict.startsWith("$") && headers[verdict] || headers.comment;
+  return `**${text2}** · ${role}`;
 }
 function verdictAllowsFindings(verdict) {
   if (verdict !== "blocked")
@@ -10418,21 +10419,22 @@ function renderBeforeAfter(before, after) {
 | ${b} | ${a} |`;
 }
 function renderFindingBody(f) {
-  let b = `${severityBadge(f.severity)}${effortTag(f.effort)} ${f.issue}`;
+  return `${renderFindingCore(f)}
+
+${REVIEW_MARKER}`;
+}
+function renderFindingCore(f) {
+  let b = `${severityBadge(f.severity)}${effortTag(f.effort)}${suspectedTag(f)} ${f.issue}`;
   const ba = renderBeforeAfter(f.before, f.after);
   if (ba)
     b += `
 
 ${ba}`;
-  if (f.why?.trim())
-    b += `
-
-${f.why.trim()}`;
   if (f.fix?.trim())
     b += `
 
 **Fix:** ${f.fix.trim()}`;
-  const sug = (f.suggestion ?? "").replace(/\n+$/, "");
+  const sug = sanitizeSuggestion((f.suggestion ?? "").replace(/\n+$/, ""));
   const code = (f.code ?? "").replace(/\n+$/, "");
   if (sug.trim())
     b += `
@@ -10441,12 +10443,182 @@ ${sug}
 \`\`\``;
   else if (code.trim())
     b += `
-\`\`\`
+\`\`\`${codeFenceLang(f.path)}
 ${code}
 \`\`\``;
-  return `${b}
+  if (f.why?.trim())
+    b += `
 
-${REVIEW_MARKER}`;
+${renderDetails("Why this matters", f.why.trim())}`;
+  return b;
+}
+function suspectedTag(f) {
+  return f.suspected ? " · ⚠️ suspected (unconfirmed)" : "";
+}
+function severityLabel(f) {
+  const s = String(f.severity ?? "").trim().toLowerCase();
+  const label = REVIEW_CONTRACT.severities.includes(s) ? s : REVIEW_CONTRACT.defaultSeverity;
+  return f.suspected ? `${label}, suspected` : label;
+}
+function renderBeforeAfterLine(before, after) {
+  const b = beforeAfterCell(before ?? "");
+  const a = beforeAfterCell(after ?? "");
+  if (!b || !a)
+    return "";
+  return `before → after: ${b} → ${a}`;
+}
+function codeFenceLang(path) {
+  const p = String(path ?? "");
+  if (p.endsWith(".go"))
+    return "go";
+  if (p.endsWith(".ts") || p.endsWith(".tsx"))
+    return "typescript";
+  if (p.endsWith(".js") || p.endsWith(".jsx") || p.endsWith(".mjs"))
+    return "javascript";
+  if (p.endsWith(".py"))
+    return "python";
+  if (p.endsWith(".sql"))
+    return "sql";
+  if (p.endsWith(".sh"))
+    return "bash";
+  if (p.endsWith(".yaml") || p.endsWith(".yml"))
+    return "yaml";
+  if (p.endsWith(".json"))
+    return "json";
+  return "";
+}
+function sanitizeSuggestion(s) {
+  return s.split(`
+`).map((ln) => ln.replace(/^L\d+ [+\- ]/, "")).join(`
+`);
+}
+function findingAnchor(f) {
+  const p = normPath(f.path);
+  if (!p)
+    return "";
+  if (!(f.line > 0))
+    return p;
+  const start = startLineOf(f);
+  return start > 0 && start < f.line ? `${p}:${start}-${f.line}` : `${p}:${f.line}`;
+}
+function buildFindingsOverview(findings) {
+  if (!findings.length)
+    return "";
+  const lines = [`**${findings.length} finding(s):**`];
+  for (const f of findings) {
+    const anchor = findingAnchor(f);
+    lines.push(`- ${severityBadge(f.severity)}${suspectedTag(f)} ${anchor ? `\`${anchor}\` — ` : ""}${f.issue}`);
+  }
+  return lines.join(`
+`) + `
+`;
+}
+function renderFindingBullets(findings) {
+  let b = "";
+  for (const f of findings) {
+    const anchor = findingAnchor(f);
+    b += `- ${anchor ? `\`${anchor}\` — ` : ""}${f.issue} [${severityLabel(f)}]
+`;
+    const ba = renderBeforeAfterLine(f.before, f.after);
+    if (ba)
+      b += `  - ${ba}
+`;
+    if (f.why?.trim())
+      b += `  - why: ${f.why.trim()}
+`;
+    if (f.fix?.trim())
+      b += `  - fix: ${f.fix.trim()}
+`;
+  }
+  return b;
+}
+function renderUnanchoredFindings(unanchored) {
+  return renderDetails(`Further findings — ${unanchored.length} outside the annotated diff lines`, renderFindingBullets(unanchored));
+}
+function buildWalkthroughTable(files, isNoise = () => false) {
+  let rows = "";
+  let shown = 0;
+  for (const f of files) {
+    if (!f.patch || isNoise(f.filename))
+      continue;
+    rows += `| \`${f.filename}\` | ${f.status} | +${f.additions} −${f.deletions} |
+`;
+    if (++shown >= 50)
+      break;
+  }
+  if (!shown)
+    return "";
+  const table = `| File | Status | Δ |
+|---|---|---|
+${rows}`;
+  const heading = `\uD83D\uDCCB Walkthrough — ${shown} file(s)`;
+  return shown >= 3 ? `<details>
+<summary>${heading}</summary>
+
+${table}
+</details>
+` : `${heading}
+
+${table}
+`;
+}
+function diffFileStats(diff) {
+  const out = [];
+  let cur = null;
+  let inHunk = false;
+  for (const raw of diff.split(/\r?\n/)) {
+    const head = /^diff --git a\/(.+?) b\/(.+)$/.exec(raw);
+    if (head) {
+      cur = { filename: head[2], status: "modified", additions: 0, deletions: 0, patch: "" };
+      out.push(cur);
+      inHunk = false;
+      continue;
+    }
+    if (!cur)
+      continue;
+    if (!inHunk) {
+      if (raw.startsWith("new file mode"))
+        cur.status = "added";
+      else if (raw.startsWith("deleted file mode"))
+        cur.status = "removed";
+      else if (raw.startsWith("rename from "))
+        cur.status = "renamed";
+      else if (raw.startsWith("+++ b/"))
+        cur.filename = raw.slice(6);
+      else if (raw.startsWith("--- a/") && cur.status === "removed")
+        cur.filename = raw.slice(6);
+    }
+    if (raw.startsWith("@@")) {
+      inHunk = true;
+      cur.patch += raw + `
+`;
+      continue;
+    }
+    if (!inHunk)
+      continue;
+    cur.patch += raw + `
+`;
+    if (raw.startsWith("+"))
+      cur.additions++;
+    else if (raw.startsWith("-"))
+      cur.deletions++;
+  }
+  return out;
+}
+function assembleReviewBody(p) {
+  const blocks = [
+    p.header,
+    p.summary ?? "",
+    renderCoverageSection(p.coverage ?? []),
+    buildFindingsOverview(p.findings ?? []),
+    p.walkthrough ?? ""
+  ];
+  if (p.unanchored?.length)
+    blocks.push(renderUnanchoredFindings(p.unanchored));
+  blocks.push(p.artifact ?? "", p.tail);
+  return blocks.map((b) => b.replace(/\n+$/, "")).filter((b) => b.trim() !== "").join(`
+
+`);
 }
 function normPath(p) {
   return String(p ?? "").replace(/\\/g, "/").replace(/^\.\//, "").trim();
@@ -10543,32 +10715,18 @@ function splitAnchorable(findings, anchors) {
 function buildReviewPayload(opts) {
   const findings = verdictAllowsFindings(opts.verdict) ? opts.findings : [];
   const { inline, body: unanchored } = splitAnchorable(findings, opts.anchors);
-  const lines = [verdictHeader(opts.verdict)];
-  if (opts.summary.trim())
-    lines.push("", opts.summary.trim());
-  const cov = renderCoverageSection(opts.coverage ?? []);
-  if (cov)
-    lines.push("", cov);
-  if (unanchored.length) {
-    lines.push("", "**Further findings (outside the annotated diff lines):**");
-    for (const f of unanchored) {
-      const p = normPath(f.path);
-      const fs = startLineOf(f);
-      const anchor = f.line > 0 ? fs > 0 && fs < f.line ? `${p}:${fs}-${f.line}` : `${p}:${f.line}` : p;
-      const fbLines = renderFindingBody(f).split(`
-
-` + REVIEW_MARKER)[0].split(`
-`);
-      lines.push(`- \`${anchor}\` — ${fbLines[0]}`);
-      for (let i = 1;i < fbLines.length; i++)
-        lines.push(fbLines[i] ? `  ${fbLines[i]}` : "");
-    }
-  }
-  lines.push("", REVIEW_MARKER);
+  const body = assembleReviewBody({
+    header: verdictHeader(opts.verdict),
+    summary: opts.summary.trim(),
+    coverage: opts.coverage ?? [],
+    findings,
+    unanchored,
+    walkthrough: opts.walkthrough ?? "",
+    tail: REVIEW_MARKER
+  });
   return {
     event: "COMMENT",
-    body: lines.join(`
-`),
+    body,
     comments: inline.map((f) => {
       const [start, line] = findingSpan(f, opts.anchors, opts.hunks);
       const c = { path: normPath(f.path), line, side: "RIGHT", body: renderFindingBody(f) };
@@ -12183,7 +12341,15 @@ ${opts.body ?? ""}`;
     ].filter(Boolean).join(`
 
 `);
-    const payload = buildReviewPayload({ summary, verdict, findings, anchors, hunks, coverage: verdictAllowsFindings(verdict) ? coverage : [] });
+    const payload = buildReviewPayload({
+      summary,
+      verdict,
+      findings,
+      anchors,
+      hunks,
+      coverage: verdictAllowsFindings(verdict) ? coverage : [],
+      walkthrough: buildWalkthroughTable(diffFileStats(diffText), isNoiseDiffPath)
+    });
     if (stdinWatch && await stdinWatch.sawBytes())
       refuseUnflaggedPipe(number);
     stdinWatch?.release();

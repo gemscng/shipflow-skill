@@ -317,6 +317,12 @@ mean "irrelevant", they stop meaning anything.
    finding is probably a style nit — drop it (`message-style.md` § Before →
    after).
 
+   **A finding is a code defect in a file; gate checks are not findings.**
+   Missing design sign-off, missing screenshots or per-feature evidence, red
+   CI, open threads, and a negative health delta go in `--summary` and decide
+   the verdict. They have no file or line, so as findings they post with no
+   anchor and a made-up before/after pair. Every finding needs a `path`.
+
    ⛔ **`--findings -` is not optional on the pipe form (issue #427).** stdin
    is read only on an explicit `--findings -` (the `!isTTY` fallback was
    removed in #219 so a headless approve couldn't hang on an inherited pipe).
