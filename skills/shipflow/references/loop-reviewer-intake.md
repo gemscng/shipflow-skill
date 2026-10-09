@@ -53,9 +53,11 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    remains open, mark settled "resolved by #N". One live escalation per
    issue — a second plain escalate while `needs-human` is on is REFUSED
    (#969), so re-escalate with `--update`. Shape (`message-style.md`
-   § Escalation comment): Action-needed ≤ 10 lines, decision table
-   `| # | Decision | Recommendation | If chosen |`, everything else in
-   `### Why it's blocked` (it folds). When the answer must land on a PR
+   § Escalation comment): Action-needed ≤ 10 lines — **one short context
+   line** (what's stuck / who decides what), then the decision table
+   `| # | Decision | Recommendation | If chosen |` (one `#` per decision;
+   continuation option rows leave `#` blank — never repeat `1` on every
+   row), everything else in `### Why it's blocked` (it folds). When the answer must land on a PR
    ("confirm on PR #N"), say so in the reason — the banner links the
    PR's comment box.
 1b. **Product priority — check before any "worth building now?" escalation.**
@@ -130,23 +132,23 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    - **Propose, then stop.** Write the design proposal and escalate it —
      `issue escalate <n> --category design --reason-file <path>` — in the
      🚧 shape (`message-style.md` § Design proposal). Action-needed
-     (≤ 10 non-blank lines, so no fence) carries the ask, the
-     **structure** as an ASCII wireframe (≤ 4 rows: boxes, labels, order
-     — readable in GitHub, no image required) and the decision table,
-     one row per reply — `approve` (the drawn option, recommended), **one
-     alternative** with its tradeoff, `change` — each with an If chosen
-     cell. A `### Design notes`
-     section (it folds) carries the **states** (empty · loading · error
-     · success), **where it lives** (route, nav entry, trigger) and the
-     style source: the repo's `DESIGN.md` (or design-system doc) binds
-     tokens, type and spacing — cite it; no doc → name the existing
-     screen that sets the style. A rendered mock helps when cheap: write
-     a static HTML page, screenshot it with the ShipFlow browser, attach
-     with `issue evidence <n> --image <shot.png> --image-caption "design
-     proposal A"` — supplementary, never a substitute for the wireframe.
-     Decisions: `1: approve → loop builds A as drawn` · `1: B → loop
-     builds B` · `1: change → reply with what changes; loop re-proposes`.
-     Then `issue judge <n> --state waiting --decide "1: approve → loop
+     (≤ 10 non-blank lines) leads with **one short context line**, then
+     the decision table — one row per reply (`approve` recommended · **one
+     alternative** · `change`), each with an If chosen cell; **one `#` on
+     the first option row, blank `#` on continuations** (never all rows
+     `1`). Put the ASCII wireframe (≤ 4 rows: boxes, labels, order — no
+     fence) in `### Design notes` with the **states** (empty · loading ·
+     error · success), **where it lives** (route, nav entry, trigger) and
+     the style source: the repo's `DESIGN.md` (or design-system doc)
+     binds tokens, type and spacing — cite it; no doc → name the existing
+     screen that sets the style. That section folds so Action-needed stays
+     scannable. A rendered mock helps when cheap: write a static HTML
+     page, screenshot it with the ShipFlow browser, attach with `issue
+     evidence <n> --image <shot.png> --image-caption "design proposal A"`
+     — supplementary, never a substitute for the wireframe. Decisions:
+     `1: approve → loop builds A as drawn` · `1: B → loop builds B` ·
+     `1: change → reply with what changes; loop re-proposes`. Then
+     `issue judge <n> --state waiting --decide "1: approve → loop
      builds A" --decide "1: change → loop re-proposes"`.
    - **Unconfirmed = blocker.** No worker until the reporter picks; the
      issue parks under `needs-human` like 4b. A `change` reply →

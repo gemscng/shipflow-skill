@@ -33,11 +33,27 @@ Rules that hold for every format:
   edit to that file and nobody re-checks a comment.
 - Asking a human to choose? Render a **decision table** —
   `| # | Decision | Recommendation | If chosen |` — whose `#` matches the
-  `N: answer` reply protocol (once per decision; continuation option rows
-  leave `#` blank). Every option row carries the loop's
-  recommendation AND what happens when that option is picked (#969: 2 of
-  25 live tables said; the lint now requires the column, or a `→` in every
-  option cell); never a bare open question.
+  `N: answer` reply protocol (**one `#` per decision**; continuation option
+  rows leave `#` blank). Do not rename those columns — the decision-panel
+  parser keys on them. Every option row carries the loop's recommendation
+  AND what happens when that option is picked (#969: 2 of 25 live tables
+  said; the lint now requires the column, or a `→` in every option cell);
+  never a bare open question.
+
+  **BAD** (every option numbered `1` — humans can't tell it's one decision;
+  measured on renaiss-os-index #2263):
+  ```
+  | 1 | approve A — drawn, no email merge | yes | loop admits that slice |
+  | 1 | B — also merge on Apple email | | loop admits email-link |
+  | 1 | no — not worth doing now | | loop parks this |
+  ```
+  **GOOD** (first row carries `1`, continuations blank `#`):
+  ```
+  | 1 | approve A — drawn, no email merge | yes | loop admits that slice |
+  |   | B — also merge on Apple email | | loop admits email-link |
+  |   | no — not worth doing now | | loop parks this |
+  ```
+  `formatEscalationBody` normalizes BAD→GOOD on render; write GOOD.
 - An option that hands the loop production access (`DATABASE_URL`, prod
   secrets, prod API keys) is never on the table — the choices for prod
   data work are "operator runs it" or "reproduce on a local DB first"
@@ -149,7 +165,7 @@ The comment the escalate command renders is now **≤ 8 visible lines**:
 |---|---|
 | 1 | `🚧 **Needs a human** — \`<category>\` · @<owner> decides` (validated category is an inline-code badge) |
 | 2 (only when the reply belongs elsewhere) | `**Reply on PR #N, not here →** <PR comment-box URL>` — auto-added when the reason says "confirm … PR #N" |
-| 3–7 | the `### 👤 Action needed` section: steps and the decision table, **≤ 10 lines** (lint) |
+| 3–7 | the `### 👤 Action needed` section: **one short context line** (what's stuck / who decides what), then the decision table — no vague ask, no wireframe jammed between ask and table; **≤ 10 lines** (lint) |
 | 8 | ONE `<details>` holding every other section (`Why it's blocked · Ready once unblocked`) |
 | footer | one `<sub>` line: reply protocol + the category rationale's first sentence |
 
@@ -165,10 +181,14 @@ footer code spans are generated after lint and remain unchanged. The explicit
 sources, unreadable files, category or once-key checks. The loop fixes its
 reason instead of using that bypass.
 
-For structured reasons, keep Action-needed present and ≤ 10 lines. Advertise
-at least **two distinct complete reply choices**, each with an answer and a
-nonempty consequence; repeating a choice does not count twice, and an extra
-incomplete choice fails. Alternatives may share a decision number. Tables need
+For structured reasons, keep Action-needed present and ≤ 10 lines. Lead
+Action-needed with **one short context line** (what's stuck / who decides
+what), then the decision table — context buried under a wireframe or a vague
+ask is a scan failure. Advertise at least **two distinct complete reply
+choices**, each with an answer and a nonempty consequence; repeating a choice
+does not count twice, and an extra incomplete choice fails. Alternatives may
+share a decision number (**one `#` on the first option row; continuation rows
+leave `#` blank** — never repeat the same numeric `#` on every row). Tables need
 populated options and an **If chosen**, Consequence, Outcome, Then or Result
 column (or an arrow in each option). A header alone is insufficient.
 A `**Recommendation:**` line never doubles a table column; no option hands
@@ -190,20 +210,17 @@ The repository check cannot finish without the App installation.
 
 A design-bearing issue is escalated BEFORE it is built
 (`loop-reviewer-intake.md` 4c). Same 🚧 shape, category `design`;
-Action-needed IS the proposal: the ask, a fenced ASCII wireframe of ≤ 4
-rows, and the decision table (one row per reply: approve · the alternative
-· change) — every non-blank line counts toward the 10-line cap, so no
-fence around the wireframe. States, placement and the style source
-go in a `### Design notes` section, which folds with the rest. Reply
-grammar is the usual `N: answer`:
+Action-needed IS the proposal: **one short context line**, then the decision
+table (one row per reply: approve · the alternative · change — first `#`
+only; continuations blank). The ASCII wireframe (≤ 4 rows: boxes, labels,
+order — no fence; every non-blank line counts toward the 10-line cap) lives
+in `### Design notes` with states, placement and the style source — that
+section folds, so Action-needed stays scannable. Reply grammar is the usual
+`N: answer`:
 
 ```text
 ### Action needed
-Pick the layout for the collection share card.
-    +-----------------------------------+
-    | [avatar] Name           [Share ▾] |
-    | 12 cards · est. $1,240   (PnL ▢)  |
-    | [card][card][card][card]   +8     |
+Pick the layout for the collection share card — reporter chooses A, B, or change.
 | # | Decision | Recommendation | If chosen |
 |---|---|---|---|
 | 1 | approve — A, PnL toggle on the card (drawn) | yes: one tap, visible | loop builds A |
@@ -211,6 +228,10 @@ Pick the layout for the collection share card.
 |   | change — say what changes | | loop re-proposes |
 
 ### Design notes
+    +-----------------------------------+
+    | [avatar] Name           [Share ▾] |
+    | 12 cards · est. $1,240   (PnL ▢)  |
+    | [card][card][card][card]   +8     |
 States: empty (no cards → "Add your first card"), loading (skeleton row), error (retry link).
 Lives at /collections/:id, Share button in the header. Tokens and type per DESIGN.md.
 

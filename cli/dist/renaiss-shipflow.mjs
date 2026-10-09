@@ -3614,8 +3614,47 @@ function isRecommendationCell(cell) {
   }
   return runs.every((run) => run.size === 0);
 }
+function normalizeDecisionTableHashes(reason) {
+  const isDecisionHeader = (cols) => cols.some((c) => /^(decision|option|answer|choice|recommendation)$/.test(c));
+  const cellText = (value) => value.trim().replace(/^[*_]+|[*_]+$/g, "").trim();
+  const lines = reason.split(`
+`);
+  let active = false;
+  let lastN;
+  return lines.map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("|")) {
+      active = false;
+      lastN = undefined;
+      return line;
+    }
+    const cells = trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|");
+    const texts = cells.map(cellText);
+    if (texts[0] === "#") {
+      active = isDecisionHeader(texts.map((c) => c.toLowerCase()));
+      lastN = undefined;
+      return line;
+    }
+    if (!active)
+      return line;
+    if (texts.every((c) => !c || /^:?-+:?$/.test(c)))
+      return line;
+    const number = texts[0];
+    if (!number)
+      return line;
+    if (!/^\d+$/.test(number))
+      return line;
+    if (lastN === number) {
+      const rebuilt = cells.map((c, i) => i === 0 ? "   " : c).join("|");
+      return `|${rebuilt}|`;
+    }
+    lastN = number;
+    return line;
+  }).join(`
+`);
+}
 function lintEscalationReason(reason) {
-  const r = reason.trim();
+  const r = normalizeDecisionTableHashes(reason).trim();
   const problems = [];
   if (!r)
     return ["no reason given — state the decision or action the human must take"];
@@ -3866,7 +3905,8 @@ function formatEscalationBody(reason, opts = {}) {
   if (opts.category && !(opts.category in ESCALATION_CATEGORIES)) {
     throw new Error(`Unknown escalation category "${opts.category}" — valid: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`);
   }
-  const why = foldSecondarySections(bulletizeReason(neutralizeMarkers(reason.trim()))) || "_No reason given._";
+  const rawReason = reason.trim();
+  const why = foldSecondarySections(bulletizeReason(neutralizeMarkers(normalizeDecisionTableHashes(rawReason)))) || "_No reason given._";
   const owner = normalizeOwner(opts.owner);
   const tail = [
     ...opts.category ? [`\`${neutralizeInline(opts.category)}\``] : [],
@@ -3885,7 +3925,7 @@ function formatEscalationBody(reason, opts = {}) {
     "",
     "---",
     `<sub>Reply \`1: <answer>\` per numbered item (\`1.\` / \`1)\` work too) — the **\`${SHIPFLOW_CONTRACT.labels.names.needsHuman}\`** label clears automatically, the loop acknowledges and resumes.` + (rationale ? ` Why a human — ${opts.category}: ${rationale}` : "") + "</sub>",
-    ...opts.category ? [encodePrecedentContext(opts.category, reason.trim())] : [],
+    ...opts.category ? [encodePrecedentContext(opts.category, rawReason)] : [],
     ...opts.once ? [renderEscalateOnceMarker(opts.once.pr, opts.once.reason)] : [],
     ...stamp ? [stamp] : []
   ].join(`
