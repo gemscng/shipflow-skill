@@ -4170,7 +4170,11 @@ var INTAKE_APPROVAL_MODES, DEFAULT_BASE, configFile = () => join(configDir(), "c
   try {
     unlinkSync(configFile());
   } catch {}
-}, loadCredentials = () => readJsonOr(credsFile(), null), saveCredentials = (c) => writeJson(credsFile(), c), loadProjectCache = () => readJsonOr(projectsFile(), {}), saveProjectCache = (c) => writeJson(projectsFile(), c), BOOL_TRUE_WORDS, BOOL_FALSE_WORDS, APP_SLUG_RE, DEFAULT_API_URL = "https://shipflow-api.fooniemagus.com";
+}, loadCredentials = () => readJsonOr(credsFile(), null), saveCredentials = (c) => writeJson(credsFile(), c), clearCredentials = () => {
+  try {
+    unlinkSync(credsFile());
+  } catch {}
+}, loadProjectCache = () => readJsonOr(projectsFile(), {}), saveProjectCache = (c) => writeJson(projectsFile(), c), BOOL_TRUE_WORDS, BOOL_FALSE_WORDS, APP_SLUG_RE, DEFAULT_API_URL = "https://shipflow-api.fooniemagus.com";
 var init_config = __esm(() => {
   init_escalation_format();
   init_shipflow_contract_data();
@@ -5473,6 +5477,7 @@ function registerAuthCommands(program2) {
   }));
   auth.command("logout").description("Clear stored credentials").action(runAction(() => {
     clearConfig();
+    clearCredentials();
     console.log("Logged out. Stored credentials cleared.");
   }));
   auth.command("status").description("Show current authentication status").action(runAction(() => {
