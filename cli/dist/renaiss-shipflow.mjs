@@ -4272,8 +4272,8 @@ function cwdRepoFullName() {
   const r = getCwdRemote();
   return r ? `${r.owner}/${r.repo}` : null;
 }
-async function resolveProject(client, creds) {
-  const r = await resolveProjectDegradable(client, creds);
+async function resolveProject(client, creds, opts = {}) {
+  const r = await resolveProjectDegradable(client, creds, opts);
   if (!r.project)
     throw new Error(r.cause ?? "ShipFlow project resolution failed");
   return r.project;
@@ -4288,7 +4288,7 @@ function flattenCause(e, max = 300) {
   const one = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").trim();
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 }
-async function resolveProjectDegradable(client, creds) {
+async function resolveProjectDegradable(client, creds, opts = {}) {
   const root = getCwdRepoRoot();
   if (!root) {
     throw new Error("Not in a git repository.");
@@ -4301,8 +4301,12 @@ async function resolveProjectDegradable(client, creds) {
   const cacheKey = projectCacheKeyForRepoPath(resolve(root));
   const cache = loadProjectCache();
   const cached = cache[cacheKey];
-  if (cached && cached.tenantId === creds.tenantId && cached.org === creds.org) {
+  if (!opts.forceRefresh && cached && cached.tenantId === creds.tenantId && cached.org === creds.org) {
     return { repoFullName, project: { ...cached, repoFullName }, degraded: [], warning: null };
+  }
+  if (opts.forceRefresh && cache[cacheKey]) {
+    delete cache[cacheKey];
+    saveProjectCache(cache);
   }
   let lookup;
   try {
@@ -4327,6 +4331,7 @@ async function resolveProjectDegradable(client, creds) {
     const idx = await promptSelect(`Repo ${repoFullName} is in multiple ShipFlow projects. Pick one:`, lookup.projects.map((p) => p.name));
     chosen = lookup.projects[idx];
   }
+  const staleId = opts.forceRefresh && cached && cached.tenantId === creds.tenantId && cached.org === creds.org ? cached.projectId : null;
   const entry = {
     projectId: chosen.id,
     projectName: chosen.name,
@@ -4335,10 +4340,41 @@ async function resolveProjectDegradable(client, creds) {
   };
   cache[cacheKey] = entry;
   saveProjectCache(cache);
-  return { repoFullName, project: { ...entry, repoFullName }, degraded: [], warning: null };
+  const warning = staleId && staleId !== chosen.id ? staleProjectCacheWarning(repoFullName, staleId, chosen.id) : null;
+  if (warning)
+    console.error(warning);
+  return {
+    repoFullName,
+    project: { ...entry, repoFullName },
+    degraded: [],
+    warning
+  };
+}
+function isProjectNotFoundError(e) {
+  if (!(e instanceof ApiError) || e.status !== 404)
+    return false;
+  if (e.code === "PROJECT_NOT_FOUND")
+    return true;
+  return /project not found/i.test(e.message);
+}
+async function refreshStaleProject(client, creds) {
+  const before = loadProjectCache();
+  const root = getCwdRepoRoot();
+  const staleId = root ? before[projectCacheKeyForRepoPath(resolve(root))]?.projectId : undefined;
+  const r = await resolveProjectDegradable(client, creds, { forceRefresh: true });
+  if (!r.project)
+    throw new Error(r.cause ?? "ShipFlow project resolution failed");
+  if (staleId && staleId !== r.project.projectId && !r.warning) {
+    const line = staleProjectCacheWarning(r.repoFullName, staleId, r.project.projectId);
+    console.error(line);
+  }
+  return r.project;
 }
 function degradedProjectWarning(repoFullName, cause) {
   return `⚠️ WARNING ${SHIPFLOW_API_DEP} unavailable — ShipFlow project resolution NOT performed; ` + `repo ${repoFullName} read from the git remote, project-scoped steps (feature map, ShipFlow signals) skipped: ${cause}`;
+}
+function staleProjectCacheWarning(repoFullName, staleProjectId, newProjectId) {
+  return `⚠️ WARNING stale project cache for ${repoFullName} — ${staleProjectId} → ${newProjectId}`;
 }
 function featureMapSkippedWarning(cause) {
   return `⚠️ WARNING ${SHIPFLOW_API_DEP} feature map unavailable — per-feature evidence coverage NOT checked; ` + `packet omits the coverage lines: ${cause}`;
@@ -5296,8 +5332,32 @@ function loadJwtCtx(program2) {
 }
 async function loadCtx(program2) {
   const { auth, creds, client } = loadJwtCtx(program2);
-  const project = await resolveProject(client, creds);
-  return { auth, creds, client, project };
+  let project = await resolveProject(client, creds);
+  let healAttempted = false;
+  const unlocked = client;
+  const inner = unlocked.request.bind(client);
+  unlocked.request = async (method, path, body) => {
+    try {
+      return await inner(method, path, body);
+    } catch (e) {
+      const staleId = project.projectId;
+      const touchesStale = path.includes(`/projects/${encodeURIComponent(staleId)}`) || path.includes(`/projects/${staleId}`);
+      if (healAttempted || !touchesStale || !isProjectNotFoundError(e))
+        throw e;
+      healAttempted = true;
+      project = await refreshStaleProject(client, creds);
+      const rewritten = path.split(staleId).join(project.projectId);
+      return await inner(method, rewritten, body);
+    }
+  };
+  return {
+    auth,
+    creds,
+    client,
+    get project() {
+      return project;
+    }
+  };
 }
 function repoOverrideBypassesProject(repoOverride, cwdRepo) {
   const target = repoOverride?.trim();
