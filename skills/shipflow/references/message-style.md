@@ -166,8 +166,8 @@ The comment the escalate command renders is now **≤ 8 visible lines**:
 | 1 | `🚧 **Needs a human** — \`<category>\` · @<owner> decides` (validated category is an inline-code badge) |
 | 2 (only when the reply belongs elsewhere) | `**Reply on PR #N, not here →** <PR comment-box URL>` — auto-added when the reason says "confirm … PR #N" |
 | 3–7 | the `### 👤 Action needed` section: **one short context line** (what's stuck / who decides what), then the decision table — no vague ask, no wireframe jammed between ask and table; **≤ 10 lines** (lint) |
-| 8 | ONE `<details>` holding every other section (`Why it's blocked · Ready once unblocked`) |
-| footer | one `<sub>` line: reply protocol + the category rationale's first sentence |
+| 8 | ONE `<details>` holding every other section (`Why it's blocked · Ready once unblocked`) — each **≤ 60 words of prose, ≤ 30 a line** (lint) |
+| footer | one `<sub>` line: the reply protocol, 14 words — the category is the badge on line 1, never repeated here |
 
 Pass multiline source text with `issue escalate <n> --reason-file reason.md`;
 `--reason-file -` reads UTF-8 stdin to EOF. Inline `--reason "..."` remains
@@ -194,6 +194,29 @@ column (or an arrow in each option). A header alone is insufficient.
 A `**Recommendation:**` line never doubles a table column; no option hands
 the loop production access. Plain one-line dependency reasons remain valid.
 
+**The fold is capped too** — it hides a section until it is opened, it does
+not shorten it (measured on 81 folded sections of 132 live banners: median
+42 prose words, 23 over 100, longest 395). Per folded section: **≤ 60 words
+of prose**, one point per line, **≤ 30 words a line** (lint). Three or more
+parallel facts — measurements, per-width or per-language results — are a
+table (per-cell cap, not counted). Detail the reader does not need in order
+to choose stays on the PR or issue.
+
+**BAD** (rental-portal #996 — this line is 104 words; the fold held 292):
+```text
+What A costs, measured with the compiled stylesheet: a row is 44px tall
+today. Under A it is 62px on two lines when the list is about 700px or
+wider, 84px on three lines at a typical desktop window, and 103 to 106px …
+```
+**GOOD** (the same numbers):
+```text
+| List width | Row under A (44px today) |
+|---|---|
+| 700px or wider | 62px, 2 lines |
+| typical desktop window | 84px, 3 lines |
+| 444px, the narrowest | 103 to 106px, 4 lines |
+```
+
 Example contents of reason.md (the Markdown fence is not part of the file):
 
 ```text
@@ -214,8 +237,10 @@ Action-needed IS the proposal: **one short context line**, then the decision
 table (one row per reply: approve · the alternative · change — first `#`
 only; continuations blank). The ASCII wireframe (≤ 4 rows: boxes, labels,
 order — no fence; every non-blank line counts toward the 10-line cap) lives
-in `### Design notes` with states, placement and the style source — that
-section folds, so Action-needed stays scannable. Reply grammar is the usual
+in `### Design notes` with states, placement and the style source, **one
+line each** — that section folds, so Action-needed stays scannable, and the
+fold cap above applies: what an option costs (heights, widths, per-language
+results) is a table, never a sentence of numbers. Reply grammar is the usual
 `N: answer`:
 
 ```text

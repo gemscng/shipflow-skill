@@ -3512,6 +3512,40 @@ function overlongActionLines(reason) {
   }
   return offenders;
 }
+function foldedSectionProse(reason) {
+  const sections = [];
+  let current;
+  let inFence = false;
+  for (const line of reason.split(`
+`)) {
+    const t = line.trim();
+    if (/^```/.test(t)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence)
+      continue;
+    if (/^###\s/.test(line)) {
+      current = isActionHeading(line) ? undefined : { heading: line.replace(/^#+\s*/, "").trim(), words: 0, overlong: [] };
+      if (current)
+        sections.push(current);
+      continue;
+    }
+    if (!current || !t || /^(?: {4}|\t)/.test(line))
+      continue;
+    if (t.startsWith("|")) {
+      const cells = t.replace(/^\|/, "").replace(/\|$/, "").split("|");
+      if (cells.some((cell) => proseWordCount(cell) > ACTION_LINE_WORD_LIMIT))
+        current.overlong.push(t);
+      continue;
+    }
+    const words = proseWordCount(line);
+    current.words += words;
+    if (words > ACTION_LINE_WORD_LIMIT)
+      current.overlong.push(t);
+  }
+  return sections;
+}
 function hasCompleteReplyChoices(reason) {
   const choices = new Set;
   let complete = true;
@@ -3674,7 +3708,7 @@ function lintEscalationReason(reason) {
   }
   const actionLines = actionSectionLineCount(r);
   if (actionLines > ACTION_SECTION_LINE_CAP) {
-    problems.push(`"Action needed" section is ${actionLines} visible lines — cap ${ACTION_SECTION_LINE_CAP}: one line per step or option, move detail into a "### Why it's blocked" section (it folds)`);
+    problems.push(`"Action needed" section is ${actionLines} visible lines — cap ${ACTION_SECTION_LINE_CAP}: one line per step or option, move detail into a "### Why it's blocked" section (it folds; ${FOLDED_SECTION_WORD_CAP} words of prose at most)`);
   }
   if (r.includes(`
 `) && !r.split(`
@@ -3689,7 +3723,15 @@ function lintEscalationReason(reason) {
     problems.push("needs at least two distinct enumerated reply choices, each with a nonempty answer and consequence — use 1: done → loop re-reviews / 1: skip → loop parks this; tables need an If chosen column (or an arrow in each option)");
   }
   for (const line of overlongActionLines(r)) {
-    problems.push(`"Action needed" line over ${ACTION_LINE_WORD_LIMIT} words ("${line.slice(0, 60)}…") — ` + `a step (or table cell) must read in one breath; move the detail to "### Why it's blocked" (it renders folded)`);
+    problems.push(`"Action needed" line over ${ACTION_LINE_WORD_LIMIT} words ("${line.slice(0, 60)}…") — ` + `a step (or table cell) must read in one breath; move the detail to "### Why it's blocked" (it renders folded; ${FOLDED_SECTION_WORD_CAP} words of prose at most)`);
+  }
+  for (const section of foldedSectionProse(r)) {
+    if (section.words > FOLDED_SECTION_WORD_CAP) {
+      problems.push(`"${section.heading}" section is ${section.words} words of prose — cap ${FOLDED_SECTION_WORD_CAP}: keep what the reader needs in order to choose, ` + "put three or more parallel facts (measurements, per-case results) in a table (tables are not counted), leave the rest on the PR or issue");
+    }
+    for (const line of section.overlong) {
+      problems.push(`"${section.heading}" line over ${ACTION_LINE_WORD_LIMIT} words ("${line.slice(0, 60)}…") — ` + "one point per line (or table cell); split it into bullets or cut it");
+    }
   }
   return problems;
 }
@@ -3915,7 +3957,6 @@ function formatEscalationBody(reason, opts = {}) {
   const banner = tail.length ? `${SHIPFLOW_CONTRACT.markers.escalationBannerHeading} — ${tail.join(" · ")}` : ESCALATION_BANNER;
   const replyOnPr = opts.repo ? detectReplyOnPr(reason) : undefined;
   const replyOn = replyOnPr ? [`**Reply on PR #${replyOnPr}, not here →** https://github.com/${neutralizeInline(opts.repo)}/pull/${replyOnPr}#new_comment_field`, ""] : [];
-  const rationale = opts.category ? ESCALATION_CATEGORIES[opts.category].split(/(?<=\.)\s/)[0] : "";
   const stamp = opts.updatedAt && !Number.isNaN(opts.updatedAt.getTime()) ? renderEscalationUpdatedMarker(opts.updatedAt) : undefined;
   return [
     banner,
@@ -3924,7 +3965,7 @@ function formatEscalationBody(reason, opts = {}) {
     why,
     "",
     "---",
-    `<sub>Reply \`1: <answer>\` per numbered item (\`1.\` / \`1)\` work too) — the **\`${SHIPFLOW_CONTRACT.labels.names.needsHuman}\`** label clears automatically, the loop acknowledges and resumes.` + (rationale ? ` Why a human — ${opts.category}: ${rationale}` : "") + "</sub>",
+    `<sub>Reply \`1: <answer>\` per numbered item — the **\`${SHIPFLOW_CONTRACT.labels.names.needsHuman}\`** label clears and the loop resumes.</sub>`,
     ...opts.category ? [encodePrecedentContext(opts.category, rawReason)] : [],
     ...opts.once ? [renderEscalateOnceMarker(opts.once.pr, opts.once.reason)] : [],
     ...stamp ? [stamp] : []
@@ -3942,7 +3983,7 @@ function rfc3339UTC(at) {
     return null;
   return at.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
-var ESCALATION_CATEGORIES, ACTION_SECTION_LINE_CAP = 10, ACTION_LINE_WORD_LIMIT, STANDALONE_RECOMMENDATION_RE, DECISION_LOOSE_LINE, CONFIRMATION_POINTER_REASONS, POINTER_REPO, RE_ESCAPE, ESCALATION_BANNER;
+var ESCALATION_CATEGORIES, ACTION_SECTION_LINE_CAP = 10, ACTION_LINE_WORD_LIMIT, FOLDED_SECTION_WORD_CAP = 60, STANDALONE_RECOMMENDATION_RE, DECISION_LOOSE_LINE, CONFIRMATION_POINTER_REASONS, POINTER_REPO, RE_ESCAPE, ESCALATION_BANNER;
 var init_escalation_format = __esm(() => {
   init_shipflow_contract_data();
   init_pr_state();
@@ -9482,7 +9523,7 @@ ${section}` : section;
       ghIssueComment(repo, number, body);
     emit(opts, { number, pr: once.pr, pointed: !alreadyNotified, alreadyNotified, once }, () => console.log(alreadyNotified ? `#${number}: PR #${once.pr} already notified for ${once.reason}.` : body));
   }));
-  issue.command("escalate <number>").description("Hand an issue to a human: label needs-human + comment why. Keeps the work lock so the loop skips it this run.").option("--reason <reason>", "Why it's blocked / what a human must decide; no literal backticks").option("--reason-file <path>", "UTF-8 reason file; '-' reads stdin; mutually exclusive with --reason").option("--category <key>", `Why this class of work is gated on a human — appends the standard rationale. One of: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`).option("--owner <login>", "Accountable human named on the comment (default: signoff-owner config, else the issue author)").option("--update", "Edit the loop's latest \uD83D\uDEA7 escalation comment in place instead of stacking a new one").option("--force", "Skip the reason lint (open question without recommendation / not self-contained / no action section)").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for needs-human)").option("--release", "Also release the ShipFlow claim (default: keep it so the loop won't re-pick it this run)").option("--for-pr <number>", "The PR whose inbox row owed this escalation — stamps the permanent once-key. Use WITH --once-reason (issue #488)").option("--once-reason <token>", `The escalate-once reason from the inbox row (\`escalateOnceReason\`). One of: ${ESCALATE_ONCE_REASONS.join(", ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  issue.command("escalate <number>").description("Hand an issue to a human: label needs-human + comment why. Keeps the work lock so the loop skips it this run.").option("--reason <reason>", "Why it's blocked / what a human must decide; no literal backticks").option("--reason-file <path>", "UTF-8 reason file; '-' reads stdin; mutually exclusive with --reason").option("--category <key>", `Why this class of work is gated on a human — shown as a badge on the comment's first line. One of: ${Object.keys(ESCALATION_CATEGORIES).join(", ")}`).option("--owner <login>", "Accountable human named on the comment (default: signoff-owner config, else the issue author)").option("--update", "Edit the loop's latest \uD83D\uDEA7 escalation comment in place instead of stacking a new one").option("--force", "Skip the reason lint (open question without recommendation / not self-contained / no action section)").option("--repo <fullname>", "Override target repo").option("--keep-in-progress", "Keep the \uD83E\uDD16 in-progress label (default: swap it for needs-human)").option("--release", "Also release the ShipFlow claim (default: keep it so the loop won't re-pick it this run)").option("--for-pr <number>", "The PR whose inbox row owed this escalation — stamps the permanent once-key. Use WITH --once-reason (issue #488)").option("--once-reason <token>", `The escalate-once reason from the inbox row (\`escalateOnceReason\`). One of: ${ESCALATE_ONCE_REASONS.join(", ")}`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     if (opts.reason !== undefined && opts.reasonFile !== undefined) {
       throw new UsageError("issue escalate: --reason and --reason-file are mutually exclusive — pass one or the other.");
     }

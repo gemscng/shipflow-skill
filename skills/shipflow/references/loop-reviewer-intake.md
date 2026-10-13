@@ -57,7 +57,9 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    line** (what's stuck / who decides what), then the decision table
    `| # | Decision | Recommendation | If chosen |` (one `#` per decision;
    continuation option rows leave `#` blank — never repeat `1` on every
-   row), everything else in `### Why it's blocked` (it folds). When the answer must land on a PR
+   row), everything else in `### Why it's blocked` (it folds; every folded
+   section ≤ 60 words of prose, ≤ 30 a line — numbers go in a table, the
+   rest stays on the PR or issue). When the answer must land on a PR
    ("confirm on PR #N"), say so in the reason — the banner links the
    PR's comment box.
 1b. **Product priority — check before any "worth building now?" escalation.**
@@ -93,9 +95,8 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    escalate. WIP share steers the admit mix, not a per-issue gate. A sign-off
    escalation is a **product-priority** call: its Action-needed line must
    say so ("worth doing now?"), never read as a validity or duplicate
-   question — `invalid` is the closest category the CLI has, and its stock
-   rationale ("closing someone's issue is a judgment call") misleads the
-   reader unless your first line corrects it.
+   question — `invalid` is the closest category the CLI has, and that badge
+   misleads the reader unless your first line corrects it.
 2. **Too big or ambiguous? — scope down, don't refuse.** Large / open-ended /
    ambiguous / contradictory is NOT grounds to escalate. Carve the smallest
    bounded, value-adding slice you can confidently accept; brief that slice.
@@ -141,8 +142,10 @@ Input: issue + `triage`. Produce an **acceptance brief**:
      error · success), **where it lives** (route, nav entry, trigger) and
      the style source: the repo's `DESIGN.md` (or design-system doc)
      binds tokens, type and spacing — cite it; no doc → name the existing
-     screen that sets the style. That section folds so Action-needed stays
-     scannable. A rendered mock helps when cheap: write a static HTML
+     screen that sets the style. One line each: the section folds so
+     Action-needed stays scannable, and is itself capped at 60 words of
+     prose (lint) — what an option costs (heights, widths, per-language
+     results) is a table. A rendered mock helps when cheap: write a static HTML
      page, screenshot it with the ShipFlow browser, attach with `issue
      evidence <n> --image <shot.png> --image-caption "design proposal A"`
      — supplementary, never a substitute for the wireframe. Decisions:
