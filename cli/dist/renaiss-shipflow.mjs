@@ -9118,6 +9118,7 @@ var ROUTE_OUTCOME_TEXT = {
   "no-ai": "server has no AI backend",
   closed: "not open",
   "repo-inactive": "repo inactive in ShipFlow — no GitHub writes",
+  "repo-unreachable": "GitHub App cannot reach this repo (404) — skipped",
   "already-assigned": "already assigned",
   error: "route call failed"
 };
@@ -9217,12 +9218,23 @@ ${section}` : section;
         targets = [{ number }];
       }
     }
+    let repoUnreachable = false;
     for (const t of targets) {
+      if (repoUnreachable) {
+        results.push({ number: t.number, title: t.title, outcome: "repo-unreachable" });
+        continue;
+      }
       try {
         const r = await ctx.client.routeIssue(ctx.creds.org, ctx.project.projectId, t.number, { repo });
         results.push({ number: t.number, title: t.title, outcome: r.outcome, assignee: r.assignee });
+        if (r.outcome === "repo-unreachable")
+          repoUnreachable = true;
       } catch (e) {
-        results.push({ number: t.number, title: t.title, outcome: "error", error: e.message });
+        const msg = e.message;
+        results.push({ number: t.number, title: t.title, outcome: "error", error: msg });
+        if (/GITHUB_REPO_UNREACHABLE|repo unreachable|not reachable by this installation/i.test(msg)) {
+          repoUnreachable = true;
+        }
       }
     }
     const routed = results.filter((r) => r.outcome === "assigned").length;
