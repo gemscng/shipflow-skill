@@ -153,3 +153,19 @@ flows that need motion. A change with no UI surface (schema, persistence,
 API-only, test-only) has nothing to screenshot: attach the test-runner summary
 instead, `--file "$EV/issue-<n>-vitest.txt" --caption "Verified: <what the
 tests prove>"`. The server renders the text inline on the PR.
+
+**If the upload fails** (issue #1366), read the error first:
+
+- **Usage error** (a bad flag, a file over 8 MB, `API error 4xx` with a
+  reason): fix the command and run it again.
+- **Server or network error** (`API error 5xx`, including Cloudflare's 530,
+  or `fetch failed`): the API or its media store is down. Keep the files in `$EV`, add
+  `⚠ no screenshot — evidence upload failed: <error> (<request id>)` to the
+  PR's Testing list, and run the same `issue evidence` command again once
+  the API answers: later in the session, or on the PR's next loop pass.
+  Recapture if `$EV` is gone. Until then the reviewer's evidence gate
+  holds the PR.
+- **Never host the shots anywhere else**: no `evidence/*` side branch, no
+  commit of the images to any repo, no third-party image host. A side
+  branch puts the images in every clone of the repo, and its links break
+  when the branch is deleted.

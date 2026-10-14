@@ -67,7 +67,7 @@ are identical across harnesses.
 | "set the default sign-off owner" | `renaiss-shipflow config set signoff-owner <github-login>` |
 | "unmatched commit email" | `renaiss-shipflow git-identity --fix` |
 | "I'm done with #42" | `renaiss-shipflow issue done 42` |
-| "attach test evidence to #42" | `renaiss-shipflow issue evidence 42 --pr <pr> --before … --after … --label … --caption …` — one labeled pair per changed surface; `--file` for a recording, or the test-runner summary (`.txt`) when there is no UI surface; bug w/o fix → `--actual` |
+| "attach test evidence to #42" | `renaiss-shipflow issue evidence 42 --pr <pr> --before … --after … --label … --caption …` — one labeled pair per changed surface; `--file` for a recording, or the test-runner summary (`.txt`) when there is no UI surface; bug w/o fix → `--actual`; upload fails → `⚠ no screenshot` line + re-run later, never a side branch (`references/browser-testing.md` §6) |
 | "open a PR" | `renaiss-shipflow pr create --json --lint=strict` (after committing) |
 | "is PR 87 mergeable" | `renaiss-shipflow pr ready 87 --json` |
 | "open review threads on 87" | `renaiss-shipflow pr reviews 87 --json` (read-only query like `pr ready`; parse `blocking`/`unresolvedThreads` — rc is not the signal) |

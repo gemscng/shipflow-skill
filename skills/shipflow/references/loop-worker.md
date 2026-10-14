@@ -197,6 +197,13 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    browser-service `screenshot` `highlight` param). The outline renders
    OUTSIDE the element; never opaque overlays, arrows, or boxes across the
    content.
+   **Upload fails** (`API error 5xx` or `fetch failed`; issue #1366) — add
+   `⚠ no screenshot — evidence upload failed: <error> (<request id>)` to
+   the PR's Testing list and re-run the same `issue evidence` command once
+   the API answers. **Never** push the shots to an `evidence/*` side
+   branch, commit them to any repo, or use another image host. A usage
+   error (bad flag, file over 8 MB) is yours to fix and re-run.
+   Full rule: `references/browser-testing.md` §6.
 
 Too risky / ambiguous / unreproducible / unverifiable → do **not** open a PR;
 report `blocked` with the reason (the orchestrator will escalate).

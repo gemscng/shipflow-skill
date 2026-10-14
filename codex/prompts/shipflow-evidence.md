@@ -29,6 +29,12 @@ per-surface loop): `references/browser-testing.md` §4.
 **No UI surface** (schema, persistence, API-only, test-only)? Skip the pairs and
 attach the test-runner summary: `--file <issue>-vitest.txt --caption "Verified: …"`.
 The server renders the text inline; a pass/fail line in the PR body alone is not evidence.
+**Upload fails** (`API error 5xx` or `fetch failed`): add
+`⚠ no screenshot — evidence upload failed: <error> (<request id>)` to the PR's
+Testing list and re-run the same command once the API answers. Never push the
+shots to an `evidence/*` side branch, commit them to a repo, or use another image
+host. A usage error (bad flag, file over 8 MB): fix it and re-run.
+Details: `references/browser-testing.md` §6.
 
 <!-- Codex CLI custom prompt (generated from .claude/commands/shipflow-evidence.md).
      Install per codex/README.md; harness adaptation: skills/shipflow/references/codex.md -->
