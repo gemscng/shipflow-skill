@@ -23,6 +23,7 @@ needs "and" or lists surfaces/viewports, split into more labeled pairs.
 **Mark the change without covering it**: before each after-shot, outline the changed
 element (`outline: 3px solid #ff3b30; outline-offset: 3px` via your browser tool's
 JS eval) — the outline surrounds the change; never overlay content with boxes/arrows.
+A defect capture (`--actual`, no fix yet) outlines the broken element the same way.
 `--pr` lands the comment on the PR for reviewers. Capture flow (headed browser,
 per-surface loop): `references/browser-testing.md` §4.
 **No UI surface** (schema, persistence, API-only, test-only)? Skip the pairs and

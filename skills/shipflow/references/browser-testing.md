@@ -113,6 +113,11 @@ $BROWSE screenshot "$EV/<surface>-after.png" # the fix working, change outlined
   intends.
 - A surface only reachable via interaction (a result card, an open overlay) is
   still a surface — drive to it and capture its pair.
+- The same outline goes on a defect capture (`issue evidence --actual`,
+  `issue create --screenshot`): outline the broken element.
+- A PR's `### Verification manifest` evidence line gets it from the server:
+  `evidence: <url> highlight "<css selector>"`. A selector that matches
+  nothing marks the check ⚠️ Error.
 - Optional layout check: `$BROWSE responsive "$EV/layout"` (mobile/tablet/desktop).
 
 ## 5. Make the screenshots visible, score, then gate

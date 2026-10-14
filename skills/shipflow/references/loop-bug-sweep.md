@@ -22,7 +22,8 @@ refills the queue:
    click everything, fill forms, empty/error states, console after each
    interaction, responsive, auth boundaries). Compute the **health score**,
    diff against the stored baseline (`references/qa-report.md`) — a drop =
-   regression. Screenshot anything broken.
+   regression. Screenshot anything broken, the broken element outlined
+   (`references/browser-testing.md` §4).
 2. **File genuine bugs as issues** — each **actually reproduced** (retry
    once), severity + category from the taxonomy, not already open (dedupe
    is enforced by `issue create` itself — below; skip `auto-qa` items you
