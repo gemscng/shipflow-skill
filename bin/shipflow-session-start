@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# ShipFlow SessionStart hook — install a pending plugin update so it's live with
-# zero manual action.
+# ShipFlow SessionStart hook. Two jobs, one JSON reply:
+#
+#   1. Install a pending plugin update so it's live with zero manual action
+#      (session startup only). Opt out with SHIPFLOW_AUTO_UPDATE=false.
+#   2. Tell the agent to read the repo's ShipFlow feature map before changing
+#      code (skills/shipflow/references/feature-map-first.md, issue #1364),
+#      when the session runs in a git repo with a GitHub origin. hooks.json
+#      also runs `--context-only` on /clear and after compaction, which drop
+#      the earlier context. Opt out with SHIPFLOW_FEATURE_MAP_HINT=false.
 #
 # Claude Code pins the plugin VERSION at session start (before hooks run), so a
 # `claude plugin update` can't swap the loaded version mid-session. Two modes:
@@ -12,62 +19,82 @@
 #                        skills/commands apply in THIS session. Leaves the version
 #                        label stale until next session; may not pick up command
 #                        changes depending on Claude Code's reload scope.
-#
-# Opt out entirely with SHIPFLOW_AUTO_UPDATE=false.
 set -euo pipefail
 
-[ "${SHIPFLOW_AUTO_UPDATE:-}" = "false" ] && exit 0
-
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+MODE="${1:-}"
 
-# Refresh the npm-channel CLI in the background (issue #307): throttled +
-# fail-silent inside the script, backgrounded here so session start never
-# waits on the network. The launcher picks the new version up on its next run.
-( "$ROOT/bin/shipflow-cli-update" >/dev/null 2>&1 & ) 2>/dev/null || true
+ctx=""
+reload=""
 
-UPD="$("$ROOT/bin/shipflow-update-check" 2>/dev/null || true)"
+if [ "$MODE" != "--context-only" ] && [ "${SHIPFLOW_AUTO_UPDATE:-}" != "false" ]; then
+  # Refresh the npm-channel CLI in the background (issue #307): throttled +
+  # fail-silent inside the script, backgrounded here so session start never
+  # waits on the network. The launcher picks the new version up on its next run.
+  ( "$ROOT/bin/shipflow-cli-update" >/dev/null 2>&1 & ) 2>/dev/null || true
 
-case "$UPD" in
-  UPGRADE_AVAILABLE*)
-    # shellcheck disable=SC2086
-    set -- $UPD
-    NEW="${3:-}"
-    claude plugin marketplace update renaissshipflow >/dev/null 2>&1 || true
-    claude plugin update shipflow@renaissshipflow >/dev/null 2>&1 || true
-    rm -f "${SHIPFLOW_STATE_DIR:-$HOME/.shipflow}/last-update-check" 2>/dev/null || true
+  UPD="$("$ROOT/bin/shipflow-update-check" 2>/dev/null || true)"
 
-    # Live-reload preference (tri-state): env SHIPFLOW_LIVE_RELOAD wins, else the
-    # stored CLI config (renaiss-shipflow config set live-reload …), else unset.
-    PREF="${SHIPFLOW_LIVE_RELOAD:-}"
-    if [ -z "$PREF" ]; then
-      # `|| true`: no config file, or no liveReload key in it, is the UNDECIDED
-      # case — grep exits non-zero there, and under `set -euo pipefail` that
-      # killed the hook before it could ask (issue #676).
-      PREF="$(grep -o '"liveReload"[[:space:]]*:[[:space:]]*\(true\|false\)' "$HOME/.config/renaissshipflow/config.json" 2>/dev/null | grep -oE 'true|false' | head -1 || true)"
-    fi
-    case "$PREF" in 1|true|yes|on|TRUE) PREF=true ;; 0|false|no|off|FALSE) PREF=false ;; *) PREF="" ;; esac
+  case "$UPD" in
+    UPGRADE_AVAILABLE*)
+      # shellcheck disable=SC2086
+      set -- $UPD
+      NEW="${3:-}"
+      claude plugin marketplace update renaissshipflow >/dev/null 2>&1 || true
+      claude plugin update shipflow@renaissshipflow >/dev/null 2>&1 || true
+      rm -f "${SHIPFLOW_STATE_DIR:-$HOME/.shipflow}/last-update-check" 2>/dev/null || true
 
-    reload=""
-    note="active from your next session"
-    if [ "$PREF" = "true" ]; then
-      # Refresh the loaded dir in place from the freshly-installed version so a
-      # skills re-scan picks up the new content this session.
-      newdir="$(ls -d "$HOME"/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/null | sort -V | tail -1)"
-      if [ -n "$newdir" ] && [ "${newdir%/}" != "${ROOT%/}" ] && [ -d "${newdir}skills" ]; then
-        cp -R "${newdir}skills/." "$ROOT/skills/" 2>/dev/null || true
-        [ -d "${newdir}commands" ] && cp -R "${newdir}commands/." "$ROOT/commands/" 2>/dev/null || true
-        reload=',"reloadSkills":true'
-        note="applied to this session (live reload)"
+      # Live-reload preference (tri-state): env SHIPFLOW_LIVE_RELOAD wins, else the
+      # stored CLI config (renaiss-shipflow config set live-reload …), else unset.
+      PREF="${SHIPFLOW_LIVE_RELOAD:-}"
+      if [ -z "$PREF" ]; then
+        # `|| true`: no config file, or no liveReload key in it, is the UNDECIDED
+        # case — grep exits non-zero there, and under `set -euo pipefail` that
+        # killed the hook before it could ask (issue #676).
+        PREF="$(grep -o '"liveReload"[[:space:]]*:[[:space:]]*\(true\|false\)' "$HOME/.config/renaissshipflow/config.json" 2>/dev/null | grep -oE 'true|false' | head -1 || true)"
       fi
-    elif [ -z "$PREF" ]; then
-      # Undecided: ask the user once whether to auto-apply updates in-session.
-      note="active from your next session. ONE-TIME SETUP: ask the user whether to apply future ShipFlow updates in-session automatically (experimental in-place reload) — persist their choice with: renaiss-shipflow config set live-reload true (or false). Offer /reload-plugins to apply this update now"
-    fi
+      case "$PREF" in 1|true|yes|on|TRUE) PREF=true ;; 0|false|no|off|FALSE) PREF=false ;; *) PREF="" ;; esac
 
-    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart"%s,"additionalContext":"ShipFlow plugin auto-updated to %s — %s."}}\n' "$reload" "$NEW" "$note"
-    ;;
-  *)
-    : # up to date / disabled / offline — emit nothing
-    ;;
-esac
+      note="active from your next session"
+      if [ "$PREF" = "true" ]; then
+        # Refresh the loaded dir in place from the freshly-installed version so a
+        # skills re-scan picks up the new content this session.
+        newdir="$(ls -d "$HOME"/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/null | sort -V | tail -1)"
+        if [ -n "$newdir" ] && [ "${newdir%/}" != "${ROOT%/}" ] && [ -d "${newdir}skills" ]; then
+          cp -R "${newdir}skills/." "$ROOT/skills/" 2>/dev/null || true
+          [ -d "${newdir}commands" ] && cp -R "${newdir}commands/." "$ROOT/commands/" 2>/dev/null || true
+          reload=',"reloadSkills":true'
+          note="applied to this session (live reload)"
+        fi
+      elif [ -z "$PREF" ]; then
+        # Undecided: ask the user once whether to auto-apply updates in-session.
+        note="active from your next session. ONE-TIME SETUP: ask the user whether to apply future ShipFlow updates in-session automatically (experimental in-place reload) — persist their choice with: renaiss-shipflow config set live-reload true (or false). Offer /reload-plugins to apply this update now"
+      fi
+
+      ctx="ShipFlow plugin auto-updated to $NEW — $note."
+      ;;
+    *)
+      : # up to date / disabled / offline — nothing to add
+      ;;
+  esac
+fi
+
+# The feature-map instruction, as the body of a JSON string: escape \ " and
+# tabs, join the lines with \n.
+json_text() {
+  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g' "$1" | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
+}
+
+HINT="$ROOT/skills/shipflow/references/feature-map-first.md"
+if [ "${SHIPFLOW_FEATURE_MAP_HINT:-}" != "false" ] && [ -f "$HINT" ]; then
+  # A GitHub origin is the cheap local test; whether ShipFlow tracks the repo
+  # needs the network, so step 1 of the instruction settles that instead.
+  origin="$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" config --get remote.origin.url 2>/dev/null || true)"
+  case "$origin" in
+    *github.com[:/]*) ctx="${ctx:+$ctx\\n\\n}$(json_text "$HINT")" ;;
+  esac
+fi
+
+[ -n "$ctx" ] || exit 0
+printf '{"hookSpecificOutput":{"hookEventName":"SessionStart"%s,"additionalContext":"%s"}}\n' "$reload" "$ctx"
 exit 0

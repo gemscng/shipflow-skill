@@ -12,8 +12,10 @@ codex plugin add shipflow@shipflow                    # installs the plugin: shi
 npx -y @renaiss-shipflow/cli login                    # sign in once (rides on gh auth)
 ```
 
-Optional, from the installed plugin: put the bundled CLI on PATH and install
-the `/shipflow-*` custom prompts (the plugin itself carries skills only):
+Optional, from the installed plugin: put the bundled CLI on PATH, install
+the `/shipflow-*` custom prompts (the plugin itself carries skills only), and
+write the "read the feature map before changing code" instruction into
+`~/.codex/AGENTS.md`:
 
 ```bash
 bash "$(ls -d ~/.codex/plugins/cache/shipflow/shipflow/*/ | sort -V | tail -1)codex/install.sh"
@@ -26,7 +28,7 @@ again; start a new Codex thread to pick up the new version.
 
 ```bash
 git clone https://github.com/gemscng/shipflow-skill ~/.shipflow-skill
-bash ~/.shipflow-skill/codex/install.sh   # CLI on PATH, /shipflow-* prompts, skills into ~/.codex/skills
+bash ~/.shipflow-skill/codex/install.sh   # CLI on PATH, /shipflow-* prompts, skills into ~/.codex/skills, feature-map note into ~/.codex/AGENTS.md
 renaiss-shipflow login
 ```
 
@@ -34,7 +36,8 @@ Update later with `git -C ~/.shipflow-skill pull --ff-only`; the skills are
 symlinked into the clone, so they refresh with it. Re-run `codex/install.sh`
 when the prompt set changes (it is idempotent). `SHIPFLOW_CODEX_LINK=copy`
 copies the skills instead of linking; `CODEX_HOME` and `SHIPFLOW_BIN_DIR`
-override the install locations. Do not combine A and B: Codex would list each
+override the install locations; `SHIPFLOW_FEATURE_MAP_HINT=false` leaves
+`AGENTS.md` alone. Do not combine A and B: Codex would list each
 skill twice.
 
 ## Looping (continuous mode)

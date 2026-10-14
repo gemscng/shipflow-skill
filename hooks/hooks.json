@@ -10,6 +10,26 @@
             "timeout": 60
           }
         ]
+      },
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/shipflow-session-start\" --context-only",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/shipflow-session-start\" --context-only",
+            "timeout": 10
+          }
+        ]
       }
     ]
   }

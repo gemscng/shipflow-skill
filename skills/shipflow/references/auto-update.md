@@ -20,7 +20,10 @@ continue).
 
 A **SessionStart hook** (`hooks/hooks.json` → `bin/shipflow-session-start`)
 silently installs any pending update at each session start, so updates load
-**automatically next session** — you run nothing.
+**automatically next session** — you run nothing. The same hook also adds
+`references/feature-map-first.md` to the session context in a GitHub repo
+(again after `/clear` and compaction); `SHIPFLOW_FEATURE_MAP_HINT=false` turns
+that off.
 
 **Opt-in same-session apply (asked once):** live-reload is tri-state —
 `renaiss-shipflow config get live-reload` is `true`, `false`, or `unset` (env

@@ -16,7 +16,8 @@ never both, or Codex lists each skill twice:
 codex plugin marketplace add gemscng/shipflow-skill
 codex plugin add shipflow@shipflow
 
-# Route B — clone + installer (CLI on PATH, /shipflow-* prompts, skills linked into ~/.codex/skills)
+# Route B — clone + installer (CLI on PATH, /shipflow-* prompts, skills linked into ~/.codex/skills,
+# the feature-map instruction written into ~/.codex/AGENTS.md)
 git clone https://github.com/gemscng/shipflow-skill ~/.shipflow-skill
 bash ~/.shipflow-skill/codex/install.sh
 ```
