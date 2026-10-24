@@ -113,12 +113,57 @@ $BROWSE screenshot "$EV/<surface>-after.png" # the fix working, change outlined
   intends.
 - A surface only reachable via interaction (a result card, an open overlay) is
   still a surface — drive to it and capture its pair.
-- The same outline goes on a defect capture (`issue evidence --actual`,
-  `issue create --screenshot`): outline the broken element.
-- A PR's `### Verification manifest` evidence line gets it from the server:
-  `evidence: <url> highlight "<css selector>"`. A selector that matches
-  nothing marks the check ⚠️ Error.
 - Optional layout check: `$BROWSE responsive "$EV/layout"` (mobile/tablet/desktop).
+
+### Mark what changed — every image (#1375)
+
+Every after-shot and every defect shot shows a red outline (`3px solid
+#ff3b30`, offset 3px) AROUND the region its caption names. Never draw boxes,
+arrows or overlays across the content. A before-shot needs no mark.
+
+- **Live web page** — the CSS outline before the capture (the `$BROWSE js`
+  line above). A defect capture (`issue evidence --actual`, `issue create
+  --screenshot`) outlines the broken element the same way. A PR's
+  `### Verification manifest` evidence line gets the outline from the
+  server: `evidence: <url> highlight "<css selector>"`. A selector that
+  matches nothing marks the check ⚠️ Error.
+- **An image that is not a live page** — a before/after composite, a
+  simulator, device or native-app screenshot, a design mock (`--image`),
+  terminal output, an image captured earlier. CSS cannot reach it: draw the
+  outline onto the image with the browser (recipe below) and upload the
+  marked copy.
+- **Composite before/after** — mark the after panel. Mark the same region on
+  the before panel too when that helps the comparison.
+- **Whole-screen or layout change** — outline the 1–3 regions that differ
+  most (a new rail, a moved edge, an empty-pane message), not the whole
+  frame.
+- **Caption** — name each marked region ("rail on the right edge, 'Pick a
+  card' pane").
+
+Recipe for an image that is not a live page: `mark.html` next to the image
+(`src` set to its file name), one `.m` box per region.
+
+```bash
+cat > "$EV/mark.html" <<'EOF'
+<!doctype html><meta charset="utf-8">
+<style>body{margin:0;background:#0d0d10}#shot{display:inline-block;padding:8px}
+#img{position:relative}#img img{display:block}
+.m{position:absolute;outline:3px solid #ff3b30;outline-offset:3px;border-radius:6px}</style>
+<div id="shot"><div id="img"><img src="after.png">
+<div class="m" style="left:878px;top:190px;width:48px;height:300px"></div>
+</div></div>
+EOF
+$BROWSE viewport 3000x1600                        # at least the image size + 16px
+$BROWSE goto "file://$EV/mark.html"
+$BROWSE screenshot '#shot' "$EV/after-marked.png" # the image plus 8px padding each side
+```
+
+A box's `left` / `top` / `width` / `height` are the region's pixels in the
+image itself (`file after.png` prints the image size; scale what you measure
+on a downscaled view). Read the marked PNG and move any box that misses its
+region before you upload it. The loop reviewer blocks an after-shot or defect
+shot with no mark on the region its caption names
+(`references/loop-reviewer.md` Mode 2, item 4).
 
 ## 5. Make the screenshots visible, score, then gate
 

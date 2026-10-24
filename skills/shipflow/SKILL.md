@@ -51,7 +51,7 @@ are identical across harnesses.
 | "what's my status" | `renaiss-shipflow status --json` |
 | "list issues" | `renaiss-shipflow issues list --json` |
 | "export issues to excel" | `renaiss-shipflow issues export` (gh-style filters; `--out <file.xlsx>`) |
-| "file an issue about X" | `renaiss-shipflow issue create --title "X" --body "..."` — body: `references/loop-mode.md` § "Message style"; visible bug → `--screenshot <path...>`, broken element outlined (`references/browser-testing.md` §4). **Exit 12 = duplicate, nothing created** (#580) → `references/feature-issue-detection.md` |
+| "file an issue about X" | `renaiss-shipflow issue create --title "X" --body "..."` — body: `references/loop-mode.md` § "Message style"; visible bug → `--screenshot <path...>`, broken element outlined (`references/browser-testing.md` § Mark what changed). **Exit 12 = duplicate, nothing created** (#580) → `references/feature-issue-detection.md` |
 | ↳ who it lands on | Under `pickup-scope=assigned` (the default) it **auto-assigns the current gh login** (#673) — assignment is the queueing gesture, so an unassigned filing is invisible to `issue next`. `--assignee <login...>` overrides; **`--no-assign`** files it unassigned so the loop does NOT pick it up |
 | feature work with no issue / PR without `Fixes #N` | → `references/feature-issue-detection.md` |
 | "auto-create issues" | `renaiss-shipflow config set auto-issue true` |
@@ -67,7 +67,7 @@ are identical across harnesses.
 | "set the default sign-off owner" | `renaiss-shipflow config set signoff-owner <github-login>` |
 | "unmatched commit email" | `renaiss-shipflow git-identity --fix` |
 | "I'm done with #42" | `renaiss-shipflow issue done 42` |
-| "attach test evidence to #42" | `renaiss-shipflow issue evidence 42 --pr <pr> --before … --after … --label … --caption …` — one labeled pair per changed surface; `--file` for a recording, or the test-runner summary (`.txt`) when there is no UI surface; bug w/o fix → `--actual`; upload fails → `⚠ no screenshot` line + re-run later, never a side branch (`references/browser-testing.md` §6) |
+| "attach test evidence to #42" | `renaiss-shipflow issue evidence 42 --pr <pr> --before … --after … --label … --caption …` — one labeled pair per changed surface, each after-shot outlined around the region its caption names (`references/browser-testing.md` § Mark what changed); `--file` for a recording, or the test-runner summary (`.txt`) when there is no UI surface; bug w/o fix → `--actual`; upload fails → `⚠ no screenshot` line + re-run later, never a side branch (`references/browser-testing.md` §6) |
 | "open a PR" | `renaiss-shipflow pr create --json --lint=strict` (after committing) |
 | "is PR 87 mergeable" | `renaiss-shipflow pr ready 87 --json` |
 | "open review threads on 87" | `renaiss-shipflow pr reviews 87 --json` (read-only query like `pr ready`; parse `blocking`/`unresolvedThreads` — rc is not the signal) |

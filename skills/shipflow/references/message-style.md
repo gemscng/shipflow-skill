@@ -137,7 +137,9 @@ visual or structural (then it lands in the evidence table).
 PR body template (sections, all visual-first, blank line between each):
 `Closes #N` (full fix) / `Part of #N` (slice) · **Root cause** ≤3 bullets, `mermaid`
 if the failure is a flow · **Changed** table (file → before → after) · **Testing**
-checklist with numbers · **Evidence** images/links.
+checklist with numbers · **Evidence** images/links, each after-shot and defect
+shot outlined around the region its caption names (`browser-testing.md`
+§ Mark what changed).
 
 ### Confirmation-only notification — one PR reply surface (#975)
 

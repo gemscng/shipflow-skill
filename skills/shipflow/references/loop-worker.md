@@ -196,7 +196,10 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    (`$BROWSE js '…'`, recipe in `references/browser-testing.md` §4, or the
    browser-service `screenshot` `highlight` param). The outline renders
    OUTSIDE the element; never opaque overlays, arrows, or boxes across the
-   content.
+   content. A composite, simulator/native shot, mock or terminal output
+   gets the outline drawn onto the image, and a layout change outlines the
+   1–3 regions that differ most: `references/browser-testing.md` § Mark
+   what changed. The reviewer blocks an unmarked after-shot.
    **Upload fails** (`API error 5xx` or `fetch failed`; issue #1366) — add
    `⚠ no screenshot — evidence upload failed: <error> (<request id>)` to
    the PR's Testing list and re-run the same `issue evidence` command once

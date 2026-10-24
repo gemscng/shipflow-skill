@@ -277,6 +277,13 @@ mean "irrelevant", they stop meaning anything.
      thread); the worker attaches proof via `issue evidence`, not arguments.
      Pure-refactor features with no observable surface may be excused
      explicitly — never silently.
+   - **Marked evidence (#1375):** the packet carries captions, not images.
+     Open the PR's `🧪 Test evidence` comment, download each after-shot and
+     defect shot it links, and Read it. One with no red outline on the
+     region its caption names counts as missing evidence: `request_changes`,
+     named in `--summary` by label and caption; the worker marks it
+     (`browser-testing.md` § Mark what changed) and re-attaches it via
+     `issue evidence`. Before-shots need no mark.
    - **Preview-deploy regression gate (when available):** preview deploy
      (deploy-bot comment / GitHub deployment) + test_runner
      `previewUrlPatterns` configured → run
@@ -318,10 +325,11 @@ mean "irrelevant", they stop meaning anything.
    after).
 
    **A finding is a code defect in a file; gate checks are not findings.**
-   Missing design sign-off, missing screenshots or per-feature evidence, red
-   CI, open threads, and a negative health delta go in `--summary` and decide
-   the verdict. They have no file or line, so as findings they post with no
-   anchor and a made-up before/after pair. Every finding needs a `path`.
+   Missing design sign-off, missing or unmarked screenshots, missing
+   per-feature evidence, red CI, open threads, and a negative health delta
+   go in `--summary` and decide the verdict. They have no file or line, so
+   as findings they post with no anchor and a made-up before/after pair.
+   Every finding needs a `path`.
 
    ⛔ **`--findings -` is not optional on the pipe form (issue #427).** stdin
    is read only on an explicit `--findings -` (the `!isTTY` fallback was
