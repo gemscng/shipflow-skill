@@ -120,7 +120,9 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    them in the body — auto-bump versions main after merge (#548).
    **Readable-body contract (#464)** — HEADLINE (un-collapsed) ≤ ~25 visible
    lines: TLDR (≤4 sentences — what/why/risk), "What changed" (≤3 bullets),
-   one Verified line; everything else in `<details><summary><b>Section
+   one Verified line, `**Risk:** <tier>: <why>` (the tier and file `pr ready`
+   prints) and `**How to revert:** <steps>` (#1391); everything else in
+   `<details><summary><b>Section
    name</b> — one-line gist</summary>` blocks. Never folded: **Deviations
    from brief** and the `<!-- shipflow:interpretation -->` marker. Hard
    ceiling: 50 visible lines outside `<details>` (exit 2 under

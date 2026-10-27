@@ -353,7 +353,18 @@ loop-authored PR goes through `renaiss-shipflow pr note <n> --body …
 - `approved_ready` → reviewer already added `shipflow-approved` (B step 4)
   → `renaiss-shipflow pr automerge <n> --json` (merges only if
   `merge-policy` + CI + approval allow **and no review thread is
-  unresolved** — hard gate; parks on `manual`). **automerge owns
+  unresolved** — hard gate; parks on `manual`). **Risk tier (#1391):**
+  under either auto-* policy only a **low** PR (every file is docs, tests
+  or copy, author has write access) merges on `shipflow-approved`. A
+  **medium** PR (everything else) needs a person's APPROVED review on the
+  current head; a **high** one (CI, deploy and release, auth, money,
+  migrations, secrets, the merge gate, or the repo's `## High-risk paths`)
+  needs one from a maintainer. The label, a bot review and the
+  `auto-timeout` clock never count. Such a PR parks with a blocker naming
+  the tier and file (`high: <file> — needs a maintainer approval at
+  <sha>`): leave it for a human — never re-approve, relabel or `pr merge`
+  it (`loop-gate.md` § Risk-tier park: one notice per head, then quiet).
+  **automerge owns
   review-settle (#687):** an immediate thread count of 0 is not settled.
   It waits up to 120s since the last head (or until an external review
   lands; the loop's own reviews / `shipflow-approved` do not count), then
@@ -858,6 +869,11 @@ governs it.
   "Spawned / headless sessions") no human can confirm: `pr automerge` +
   `merge-policy` is the whole merge story; `release` is skipped (escalate
   if genuinely needed).
+- **The loop never submits an `APPROVE` review** (#1391). It posts as the
+  operator's account, so a GitHub approval from it would read as a
+  person's. Reviews go out as COMMENT (`pr post-review`); the loop's
+  approval is the `shipflow-approved` label, which only a low-risk PR may
+  merge on.
 - **Production data is off-limits to the loop.** Never request, accept,
   or use a production `DATABASE_URL`, prod secrets, or prod API keys — not
   as a worker, not as an escalation option ("grant the loop prod access"

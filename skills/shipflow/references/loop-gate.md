@@ -1,8 +1,9 @@
 # Intent gate & reporter protocol (loop)
 
 Split from loop-mode.md §Guardrails (#611). The spine routes here from the
-`awaiting_reporter` / `reporter_corrected` / escalate-once rows — load this
-card ONLY when one of those states is in play.
+`awaiting_reporter` / `reporter_corrected` / escalate-once rows, and from an
+`approved_ready` row that `pr automerge` parks on its risk tier (§ Risk-tier
+park, last) — load this card ONLY when one of those states is in play.
 
 - **Mark loop comments on escalated issues.** The server auto-clears
   `needs-human` on a *human* reply — it recognizes machinery by the 🚧
@@ -190,3 +191,27 @@ card ONLY when one of those states is in play.
   have a trail (`pr automerge` posts the marked gate notice), so this
   fires only on legacy or hand-labelled PRs — the right answer is a
   human, not a guess.
+
+## Risk-tier park (#1391)
+
+`pr automerge` merges a medium or high PR only after a person approved its
+current head: someone with write access for medium, maintain or admin for
+high. The loop's `shipflow-approved` label, a bot review and the
+`auto-timeout` clock never count, and the loop never submits an `APPROVE`
+review itself.
+
+| Situation | What happens |
+| --- | --- |
+| The tier is the only blocker left | automerge posts ONE notice on the PR for this head SHA, then parks (exit 5) |
+| Later ticks on the same head | it parks quietly: no new notice; do not nudge or escalate |
+| The head moves | earlier approvals stop counting; one new notice for the new head |
+
+**Self-approval limit.** GitHub refuses an approval from a PR's own author,
+so "the person directing the agent may approve" does not work when that
+person is the author. On a repo where the operator authors the loop's PRs,
+a medium or high PR parks until a second account approves it or the
+operator runs `/shipflow-merge`. That confirmed merge is the operator's
+human sign-off. Every medium/high blocker says so: `medium: src/x.ts —
+needs a human approval at <sha> · authors can't approve their own PR; a
+person can merge with /shipflow-merge`. That hint is for the operator,
+not the loop.

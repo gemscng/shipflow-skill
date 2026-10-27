@@ -3268,12 +3268,15 @@ function mergeDecision(pr, me, opts) {
   } else if (opts.behindBy !== undefined && opts.behindBy > 0) {
     blockers.push(`behind base by ${opts.behindBy} commit(s) — rebase first (run: pr sync <n>) so CI re-runs on the rebased head`);
   }
-  if (opts.policy === "auto-on-green" && !cl.approved) {
+  const approved = cl.approved || (opts.risk?.approvers.length ?? 0) > 0;
+  if (opts.policy === "auto-on-green" && !approved) {
     blockers.push(hasApprovalLabel(pr) ? STALE_APPROVAL_BLOCKER : "not approved (needs a GitHub review approval or a shipflow-approved label)");
   }
-  if (opts.policy === "auto-timeout" && !cl.approved && cl.ageHours < opts.staleHours) {
+  if (opts.policy === "auto-timeout" && !approved && cl.ageHours < opts.staleHours) {
     blockers.push(`awaiting approval or the ${opts.staleHours}h timeout (age ${Math.round(cl.ageHours)}h)`);
   }
+  if (opts.risk?.blocker && opts.policy !== "manual")
+    blockers.push(opts.risk.blocker);
   if (opts.intentBlocked) {
     blockers.push(opts.intentBlockedBy ? `${INTENT_BLOCKER} (${INTENT_BLOCKED_BY_DETAIL[opts.intentBlockedBy]})` : INTENT_BLOCKER);
   }
@@ -4986,6 +4989,46 @@ function ghPRChangedFiles(repo, number) {
   const out = _exec(`gh api --paginate repos/${shellQuote(repo)}/pulls/${number}/files --jq ${shellQuote(".[].filename")}`, { maxBuffer: 32 * 1024 * 1024 }).toString();
   return out.split(`
 `).map((l) => l.trim()).filter(Boolean);
+}
+function ghPRReviewVerdicts(repo, number) {
+  const jq = ".[] | {login: .user.login, userType: .user.type, state: .state, commitId: .commit_id, submittedAt: .submitted_at}";
+  const out = _exec(`gh api --paginate repos/${shellQuote(repo)}/pulls/${number}/reviews --jq ${shellQuote(jq)}`, { maxBuffer: 32 * 1024 * 1024 }).toString();
+  return out.split(`
+`).map((l) => l.trim()).filter(Boolean).map((l) => JSON.parse(l));
+}
+function ghCollaboratorRole(repo, login) {
+  try {
+    const out = _exec(`gh api repos/${shellQuote(repo)}/collaborators/${shellQuote(encodeURIComponent(login))}/permission --jq ${shellQuote("{permission: .permission, roleName: .role_name}")}`, { stdio: ["ignore", "pipe", "pipe"] }).toString();
+    const parsed = JSON.parse(out);
+    return {
+      permission: typeof parsed.permission === "string" ? parsed.permission : "none",
+      roleName: typeof parsed.roleName === "string" ? parsed.roleName : ""
+    };
+  } catch (e) {
+    const err = e;
+    if (/HTTP 404|\bNot Found\b/i.test(`${String(err.stderr ?? "")}
+${err.message ?? ""}`)) {
+      return { permission: "none", roleName: "" };
+    }
+    throw e;
+  }
+}
+function ghBlobTexts(repo, expressions) {
+  if (expressions.length === 0)
+    return [];
+  const [owner, name] = repo.split("/");
+  const vars = expressions.map((_, i) => `$e${i}:String!`).join(",");
+  const fields = expressions.map((_, i) => `f${i}:object(expression:$e${i}){... on Blob{text}}`).join(" ");
+  const query = `query($o:String!,$r:String!,${vars}){repository(owner:$o,name:$r){${fields}}}`;
+  const cmd = `gh api graphql -f query=${shellQuote(query)} -f o=${shellQuote(owner)} -f r=${shellQuote(name)} ` + expressions.map((e, i) => `-f e${i}=${shellQuote(e)}`).join(" ");
+  const payload = JSON.parse(_exec(cmd).toString());
+  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+    throw new Error(`GraphQL error: ${payload.errors.map((e) => e?.message ?? "unknown").join("; ")}`);
+  }
+  const node = payload?.data?.repository;
+  if (!node)
+    throw new Error(`GraphQL returned no repository for ${repo}`);
+  return expressions.map((_, i) => node[`f${i}`]?.text).filter((t) => typeof t === "string");
 }
 function ghPRMergedByHead(repo, branch) {
   const out = _exec(`gh pr list --repo ${shellQuote(repo)} --head ${shellQuote(branch)} --state merged --limit 1 --json number,headRefOid`).toString();
@@ -10040,7 +10083,7 @@ import { hostname as hostname3 } from "node:os";
 
 // src/review-contract-data.ts
 var REVIEW_CONTRACT = {
-  $comment: "Canonical review contract (epic #96, Option B): the single source of truth for constants BOTH reviewers share — the Go server's pr_review runner and the TS CLI's loop review packet. Mirrors: apps/renaissshipflow-server/internal/reviewcontract/review-contract.json (go:embed, byte-identical) and apps/renaissshipflow-cli/src/review-contract-data.ts (generated). Regenerate mirrors with `node scripts/sync-review-contract.mjs`; parity tests on both sides fail on drift. Noise lists are the UNION of the two pre-contract lists (never narrow), split into scopes: the lists under `noise` are shared review-filter noise; `noise.featuremapOnly` is feature-map-only (tracked, reviewable source the loop packet must keep showing). Verdict vocabularies are carried per side AS-IS — reconciliation is a later slice. `ownsTestVectors` pins the directory-boundary `owns` matcher, which stays implemented per language. `merge` is the (path, fingerprint) identity + Jaccard threshold the fingerprint helpers share (issue #508/#993; line is not required); the algorithm is implemented per language like `owns`.",
+  $comment: "Canonical review contract (epic #96, Option B): the single source of truth for constants BOTH reviewers share — the Go server's pr_review runner and the TS CLI's loop review packet. Mirrors: apps/renaissshipflow-server/internal/reviewcontract/review-contract.json (go:embed, byte-identical) and apps/renaissshipflow-cli/src/review-contract-data.ts (generated). Regenerate mirrors with `node scripts/sync-review-contract.mjs`; parity tests on both sides fail on drift. Noise lists are the UNION of the two pre-contract lists (never narrow), split into scopes: the lists under `noise` are shared review-filter noise; `noise.featuremapOnly` is feature-map-only (tracked, reviewable source the loop packet must keep showing). Verdict vocabularies are carried per side AS-IS — reconciliation is a later slice. `ownsTestVectors` pins the directory-boundary `owns` matcher, which stays implemented per language. `merge` is the (path, fingerprint) identity + Jaccard threshold the fingerprint helpers share (issue #508/#993; line is not required); the algorithm is implemented per language like `owns`. `categories` / `defaultCategory` are the finding kinds a finder reports (issue #1384); a blank or unknown category reads as defaultCategory, and the server drops style and cleanup findings after verification.",
   version: 1,
   budgets: {
     $comment: "perFileDiffCap/packetTotalCap bound each reviewer's diff; briefCap bounds the linked-issue spec + PR body (acceptance criteria sit at the BOTTOM of issue bodies — a tight cap silently drops the checklist).",
@@ -10162,6 +10205,16 @@ var REVIEW_CONTRACT = {
     quick: " · ⚡ quick fix",
     involved: " · \uD83D\uDD28 involved"
   },
+  displayTags: {
+    $comment: "Reader-facing tag that opens each finding's badge line and overview row, byte-identical across BOTH reviewers (server runner_pr_review.go findingDisplayTag ↔ CLI review-contract.ts displayTag), issue #1384. A finding whose severity is in nitSeverities reads `nit`; every other severity (blank and unknown included, which render as defaultSeverity) reads `important`. A finding with pre_existing=true (a real bug this PR did not introduce or worsen) also carries ` · <preExisting>`, and its comment body gets preExistingNote on the line after the badge line. Pre-existing findings never make the server verdict request_changes.",
+    important: "**Important**",
+    nit: "**Nit**",
+    nitSeverities: ["low"],
+    preExisting: "**Pre-existing**",
+    preExistingNote: "_Not introduced by this PR: the bug was already in the code. It does not block this PR._"
+  },
+  categories: ["correctness", "security", "performance", "style", "cleanup"],
+  defaultCategory: "correctness",
   merge: {
     $comment: "Finding/coverage-row identity for merge (issue #378/#508, within-review collapse #993). Fingerprint is the issue/item text after lowercase + every non-letter/digit rune → space + whitespace collapsed (Go unicode.IsLetter/IsDigit ↔ TS \\p{L}/\\p{N}). Findings collapse when canonical file identity matches AND fingerprints are exact or their token-set Jaccard is >= fingerprintSimilarityThreshold; line is not part of the key. Coverage rows match on fingerprint only (no path). First-seen text/location wins and severity escalates to the max seen — those policy rules live in the server's mergeReviewPasses and the CLI's post-review collapse. Threshold 0.6 is the #378 value; do not retune it here (#509 owns eval-driven retune; #964 titles Jaccard 0.5454545 and #966 coverage items 1/3 Jaccard 0.5384615 must stay uncollapsed). normalizeTestVectors / similarTestVectors pin the helpers across both languages (similar vectors are already-normalized fingerprints).",
     key: ["path", "fingerprint"],
@@ -10340,6 +10393,12 @@ function effortTag(effort) {
   if (key.startsWith("$"))
     return "";
   return tags[key] ?? "";
+}
+function displayTag(f) {
+  const t = REVIEW_CONTRACT.displayTags;
+  const sev = String(f.severity ?? "").trim().toLowerCase();
+  const tag = t.nitSeverities.includes(sev) ? t.nit : t.important;
+  return f.pre_existing ? `${tag} · ${t.preExisting}` : tag;
 }
 var FINGERPRINT_SIMILARITY_THRESHOLD = REVIEW_CONTRACT.merge.fingerprintSimilarityThreshold;
 function normalizeFingerprint(s) {
@@ -10582,7 +10641,11 @@ function renderFindingBody(f) {
 ${REVIEW_MARKER}`;
 }
 function renderFindingCore(f) {
-  let b = `${severityBadge(f.severity)}${effortTag(f.effort)}${suspectedTag(f)} ${f.issue}`;
+  let b = `${displayTag(f)} ${severityBadge(f.severity)}${effortTag(f.effort)}${suspectedTag(f)} ${f.issue}`;
+  if (f.pre_existing)
+    b += `
+
+${REVIEW_CONTRACT.displayTags.preExistingNote}`;
   const ba = renderBeforeAfter(f.before, f.after);
   if (ba)
     b += `
@@ -10665,7 +10728,7 @@ function buildFindingsOverview(findings) {
   const lines = [`**${findings.length} finding(s):**`];
   for (const f of findings) {
     const anchor = findingAnchor(f);
-    lines.push(`- ${severityBadge(f.severity)}${suspectedTag(f)} ${anchor ? `\`${anchor}\` — ` : ""}${f.issue}`);
+    lines.push(`- ${displayTag(f)} ${severityBadge(f.severity)}${suspectedTag(f)} ${anchor ? `\`${anchor}\` — ` : ""}${f.issue}`);
   }
   return lines.join(`
 `) + `
@@ -11507,6 +11570,357 @@ function buildReviewPacketData(input) {
 init_shipflow_contract_data();
 init_sh();
 init_pr_state();
+
+// src/risk-tier.ts
+init_pr_state();
+var RANK = { low: 0, medium: 1, high: 2 };
+var HIGH_RISK_GLOBS = [
+  ".github/workflows/**",
+  ".github/actions/**",
+  ".github/CODEOWNERS",
+  "deploy/**",
+  "**/Dockerfile*",
+  "**/docker-compose*.yml",
+  "**/*deploy*.sh",
+  "**/*release*.{sh,mjs,js,ts}",
+  "scripts/bump-version.mjs",
+  "**/install*.sh",
+  "**/eas.json",
+  "**/ExportOptions.plist",
+  "**/fastlane/**",
+  "**/app.config.{js,ts}",
+  "**/marketplace.json",
+  "**/migrations/**",
+  "**/migrate/**",
+  "**/*.sql",
+  "**/schema.prisma",
+  "**/.env*",
+  "**/*secret*",
+  "**/*.sol",
+  "contracts/review-*",
+  "skills/shipflow/references/loop-reviewer*.md",
+  "skills/shipflow/references/loop-gate.md",
+  "skills/shipflow/references/loop-mode.md",
+  "apps/renaissshipflow-cli/src/pr-state.ts",
+  "apps/renaissshipflow-cli/src/commands/pr.ts",
+  "apps/renaissshipflow-cli/src/risk-tier.ts"
+];
+var HIGH_RISK_SEGMENTS = [
+  "auth",
+  "oauth",
+  "session",
+  "jwt",
+  "permission",
+  "permissions",
+  "rbac",
+  "attest",
+  "integrity",
+  "billing",
+  "payment",
+  "payments",
+  "stripe",
+  "credits",
+  "invoice",
+  "checkout"
+];
+var LOW_RISK_GLOBS = [
+  "docs/**",
+  "**/*.test.*",
+  "**/*.spec.*",
+  "**/__tests__/**",
+  "**/testdata/**",
+  "**/*.snap",
+  "**/e2e/**",
+  "**/i18n/**/messages/**",
+  "**/locales/**"
+];
+var LOW_MD_GLOB = "**/*.md";
+var LOW_MD_EXCLUDED_NAMES = ["CLAUDE.md", "AGENTS.md", "REVIEW.md", "DESIGN.md", "SKILL.md"];
+var LOW_MD_EXCLUDED_GLOBS = ["skills/**", ".claude/**", ".shipflow/**"];
+var REVIEW_POLICY_FILES = ["REVIEW.md", ".shipflow/review.md"];
+var FILES_ENDPOINT_CAP = 3000;
+function expandBraces(glob) {
+  const open = glob.indexOf("{");
+  if (open < 0)
+    return [glob];
+  let depth = 0;
+  for (let i = open;i < glob.length; i++) {
+    if (glob[i] === "{")
+      depth++;
+    else if (glob[i] === "}" && --depth === 0) {
+      const parts = [];
+      let start = open + 1;
+      let d = 0;
+      for (let j = open + 1;j < i; j++) {
+        if (glob[j] === "{")
+          d++;
+        else if (glob[j] === "}")
+          d--;
+        else if (glob[j] === "," && d === 0) {
+          parts.push(glob.slice(start, j));
+          start = j + 1;
+        }
+      }
+      parts.push(glob.slice(start, i));
+      const head = glob.slice(0, open);
+      const tail = glob.slice(i + 1);
+      return parts.flatMap((p) => expandBraces(head + p + tail));
+    }
+  }
+  return [glob];
+}
+function matchesGlob(glob, path) {
+  const p = path.replace(/^\.\//, "").toLowerCase();
+  return expandBraces(glob.trim().replace(/^\//, "").toLowerCase()).some((g) => ownsPath(g, p));
+}
+function riskSegment(path) {
+  for (const raw of path.toLowerCase().split("/")) {
+    const stem = raw.split(".")[0];
+    const hit = HIGH_RISK_SEGMENTS.find((w) => raw === w || stem === w);
+    if (hit)
+      return hit;
+  }
+  return null;
+}
+function isLowRiskPath(path) {
+  if (LOW_RISK_GLOBS.some((g) => matchesGlob(g, path)))
+    return true;
+  if (!matchesGlob(LOW_MD_GLOB, path))
+    return false;
+  const base = (path.split("/").pop() ?? "").toLowerCase();
+  if (LOW_MD_EXCLUDED_NAMES.some((n) => n.toLowerCase() === base))
+    return false;
+  return !LOW_MD_EXCLUDED_GLOBS.some((g) => matchesGlob(g, path));
+}
+function fileRiskTier(path, repoHighRisk = []) {
+  if (HIGH_RISK_GLOBS.some((g) => matchesGlob(g, path)))
+    return "high";
+  if (riskSegment(path))
+    return "high";
+  if (repoHighRisk.some((g) => matchesGlob(g, path)))
+    return "high";
+  return isLowRiskPath(path) ? "low" : "medium";
+}
+function parseReviewPolicy(text2) {
+  const out = { highRisk: [], twoPerson: [] };
+  let into = null;
+  for (const line of text2.split(`
+`)) {
+    const heading = /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
+    if (heading) {
+      const name = heading[1].toLowerCase();
+      into = name === "high-risk paths" ? out.highRisk : name === "two-person paths" ? out.twoPerson : null;
+      continue;
+    }
+    if (!into)
+      continue;
+    const bullet = /^\s*[-*+]\s+(.*)$/.exec(line);
+    if (!bullet)
+      continue;
+    const item = bullet[1].trim();
+    const glob = (/^`([^`]+)`/.exec(item)?.[1] ?? item.split(/\s+/)[0] ?? "").trim();
+    if (glob)
+      into.push(glob);
+  }
+  return out;
+}
+function mergeReviewPolicies(policies) {
+  return {
+    highRisk: [...new Set(policies.flatMap((p) => p.highRisk))],
+    twoPerson: [...new Set(policies.flatMap((p) => p.twoPerson))]
+  };
+}
+function classifyRiskTier(input) {
+  const policy = input.policy ?? { highRisk: [], twoPerson: [] };
+  let tier = "low";
+  let reason = `low: all ${input.files.length} file(s) are docs, tests or copy`;
+  const raise = (t, why) => {
+    if (RANK[t] > RANK[tier]) {
+      tier = t;
+      reason = `${t}: ${why}`;
+    }
+  };
+  if (input.files.length === 0)
+    raise("medium", "no changed files listed");
+  if (input.files.length >= FILES_ENDPOINT_CAP)
+    raise("medium", `${input.files.length} files; GitHub lists at most ${FILES_ENDPOINT_CAP}`);
+  let twoPerson = false;
+  for (const f of input.files) {
+    raise(fileRiskTier(f, policy.highRisk), f);
+    if (!twoPerson && policy.twoPerson.some((g) => matchesGlob(g, f))) {
+      twoPerson = true;
+      raise("medium", `${f} (two-person path)`);
+    }
+  }
+  for (const raw of input.labels ?? []) {
+    const name = raw.trim().toLowerCase();
+    if (name === "risk:high")
+      raise("high", "label risk:high");
+    else if (name === "risk:medium")
+      raise("medium", "label risk:medium");
+  }
+  if (!input.authorTrusted) {
+    raise("medium", input.authorNote ?? `author ${input.authorLogin || "unknown"} has no write access`);
+  }
+  return { tier, reason, twoPerson };
+}
+var DECISIVE_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
+function humanApproversAtHead(reviews, headSha) {
+  const head = commitSha(headSha);
+  if (!head)
+    return [];
+  const latest = new Map;
+  for (const r of reviews) {
+    const login = (r.login ?? "").trim();
+    if (!login || r.userType !== "User" || login.toLowerCase().endsWith("[bot]"))
+      continue;
+    if (!DECISIVE_REVIEW_STATES.has((r.state ?? "").toUpperCase()))
+      continue;
+    latest.set(login.toLowerCase(), { ...r, login });
+  }
+  const out = [];
+  for (const r of latest.values()) {
+    if (r.state.toUpperCase() === "APPROVED" && commitSha(r.commitId) === head)
+      out.push(r.login);
+  }
+  return out.sort();
+}
+function hasWriteAccess(r) {
+  return ["admin", "maintain", "write"].includes(r.roleName.toLowerCase()) || ["admin", "write"].includes(r.permission.toLowerCase());
+}
+function isMaintainer(r) {
+  return ["admin", "maintain"].includes(r.roleName.toLowerCase()) || r.permission.toLowerCase() === "admin";
+}
+var RISK_UNKNOWN_BLOCKER = "risk tier unknown — never merge on an unread risk tier";
+var RISK_MERGE_HINT = "authors can't approve their own PR; a person can merge with /shipflow-merge";
+function message(e) {
+  return String(e?.message ?? e).split(`
+`)[0];
+}
+function shortSha(sha) {
+  return sha ? sha.slice(0, 12) : "the current head (head SHA unreadable)";
+}
+function humanApprovalMet(g) {
+  return g.tier !== "unknown" && g.blocker === null && g.approvers.length > 0;
+}
+function evaluateRiskGate(pr, reads, opts = {}) {
+  const head = commitSha(pr.headSha);
+  const unknown = (why) => ({
+    tier: "unknown",
+    reason: `unknown: ${why}`,
+    twoPerson: false,
+    approvers: [],
+    blocker: `${RISK_UNKNOWN_BLOCKER} (${why})`
+  });
+  let files;
+  try {
+    files = reads.changedFiles();
+  } catch (e) {
+    return unknown(`changed files unreadable: ${message(e)}`);
+  }
+  let policy;
+  try {
+    policy = mergeReviewPolicies(reads.policyTexts().map(parseReviewPolicy));
+  } catch (e) {
+    return unknown(`REVIEW.md unreadable: ${message(e)}`);
+  }
+  const login = (pr.author ?? "").trim();
+  let authorTrusted = false;
+  let authorNote;
+  if (login) {
+    try {
+      authorTrusted = hasWriteAccess(reads.role(login));
+    } catch {
+      authorNote = `author ${login}'s permission unreadable`;
+    }
+  }
+  const cls = classifyRiskTier({ files, labels: pr.labels, authorTrusted, authorLogin: login, authorNote, policy });
+  const low = cls.tier === "low";
+  if (low && !opts.approvalsForLow)
+    return { ...cls, approvers: [], blocker: null };
+  const needed = cls.twoPerson ? 2 : 1;
+  const who = cls.tier === "high" ? "maintainer" : "human";
+  const ask = needed === 2 ? `2 ${who} approvals` : `a ${who} approval`;
+  const base = `${cls.reason} — needs ${ask} at ${shortSha(head)}`;
+  const withNotes = (notes) => {
+    const n = notes.filter(Boolean);
+    return `${base}${n.length ? ` (${n.join("; ")})` : ""} · ${RISK_MERGE_HINT}`;
+  };
+  let reviews;
+  try {
+    reviews = reads.reviews();
+  } catch (e) {
+    return { ...cls, approvers: [], blocker: low ? null : withNotes([`reviews unreadable: ${message(e)}`]) };
+  }
+  const approvers = [];
+  const unreadable = [];
+  for (const l of humanApproversAtHead(reviews, head)) {
+    let role;
+    try {
+      role = reads.role(l);
+    } catch {
+      unreadable.push(l);
+      continue;
+    }
+    if (cls.tier === "high" ? isMaintainer(role) : hasWriteAccess(role))
+      approvers.push(l);
+  }
+  if (low || approvers.length >= needed)
+    return { ...cls, approvers, blocker: null };
+  return {
+    ...cls,
+    approvers,
+    blocker: withNotes([
+      approvers.length ? `has ${approvers.length}: ${approvers.join(", ")}` : "",
+      unreadable.length ? `permission unreadable: ${unreadable.join(", ")}` : ""
+    ])
+  };
+}
+var RISK_GATE_NOTICE_MARKER = "<!-- shipflow:risk-gate";
+function riskGateNoticeMarker(sha) {
+  return `${RISK_GATE_NOTICE_MARKER} sha=${sha} -->`;
+}
+function renderRiskGateNotice(number, gate, headSha) {
+  const who = gate.tier === "high" ? "with maintain or admin permission" : "with write access";
+  return [
+    `⏸️ **Waiting for a human — ${gate.tier} risk**`,
+    "",
+    `${gate.blocker}`,
+    "",
+    "ShipFlow will not merge this PR on the loop's own approval.",
+    "",
+    "| To merge it | Do this |",
+    "| --- | --- |",
+    `| **Approve** | an APPROVED review on this commit from an account ${who} (not the PR's author) |`,
+    `| **Or merge it yourself** | \`/shipflow-merge ${number}\` — your confirmed merge is the sign-off |`,
+    "",
+    "Posted once per commit.",
+    "",
+    riskGateNoticeMarker(headSha)
+  ].join(`
+`);
+}
+function hasRiskGateNotice(comments, headSha) {
+  const marker = riskGateNoticeMarker(headSha);
+  return comments.some((c) => c.viewerDidAuthor && c.body.split(`
+`).some((l) => l.trim() === marker));
+}
+function postRiskGateNotice(number, gate, headSha, w) {
+  try {
+    if (hasRiskGateNotice(w.comments(), headSha))
+      return "exists";
+  } catch (e) {
+    return `unverified: ${message(e)} — not posted, rechecked next pass`;
+  }
+  try {
+    w.post(renderRiskGateNotice(number, gate, headSha));
+    return "posted";
+  } catch (e) {
+    return `failed: ${message(e)}`;
+  }
+}
+
+// src/commands/pr.ts
 init_helpers();
 init_project();
 var LINT_MODES = ["warn", "strict"];
@@ -11863,6 +12277,25 @@ function lastHeadAtOrBlock(repo, number) {
     return { lastHeadAt: null, unavailable: true };
   }
 }
+function readRiskGate(repo, number, prView, headSha, opts = {}) {
+  const roles = new Map;
+  const refs = [headSha, prView.baseRefName].filter((r) => !!r);
+  const reads = {
+    changedFiles: () => ghPRChangedFiles(repo, number),
+    policyTexts: () => ghBlobTexts(repo, refs.flatMap((ref) => REVIEW_POLICY_FILES.map((f) => `${ref}:${f}`))),
+    reviews: () => ghPRReviewVerdicts(repo, number),
+    role: (login) => {
+      const key = login.toLowerCase();
+      const cached = roles.get(key);
+      if (cached)
+        return cached;
+      const role = ghCollaboratorRole(repo, login);
+      roles.set(key, role);
+      return role;
+    }
+  };
+  return evaluateRiskGate({ author: prView.author?.login, labels: (prView.labels ?? []).map((l) => l.name), headSha }, reads, opts);
+}
 var defaultReviewSettleSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 var reviewSettleSleep = defaultReviewSettleSleep;
 function isSettleBlocker(b) {
@@ -11896,6 +12329,9 @@ async function automergeOnce(ctx, repo, number, opts) {
   const lastHeadAt = lastHead.unavailable ? null : lastHead.lastHeadAt;
   const settleReviews = threads.settleReviews ?? [];
   const headSha = commitSha(prView.headRefOid);
+  const risk = readRiskGate(repo, number, prView, headSha);
+  const riskTier = risk.tier;
+  const riskReason = risk.reason;
   const decide = (head, at) => mergeDecision(prView, me, {
     policy,
     requireCi: resolveRequireCi(),
@@ -11908,7 +12344,8 @@ async function automergeOnce(ctx, repo, number, opts) {
     lastHeadAt: head,
     nowMs: at,
     settleReviews,
-    headSha
+    headSha,
+    risk
   });
   const decision = decide(lastHeadAt, nowMs);
   const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
@@ -11931,6 +12368,8 @@ async function automergeOnce(ctx, repo, number, opts) {
           number,
           merged: false,
           policy,
+          riskTier,
+          riskReason,
           blockers: allBlockers,
           ...arm.attempted ? { gateArmed: arm.armed } : {},
           ...arm.gateArmError ? { gateArmError: arm.gateArmError } : {},
@@ -11943,17 +12382,26 @@ async function automergeOnce(ctx, repo, number, opts) {
       if (!arm.armed) {
         console.error(`❌ ${GATE_ARM_BLOCKER} — the reporter is not confirmed to have been asked: ${arm.gateArmError}`);
       }
+      const riskNotice = risk.blocker && headSha && risk.tier !== "unknown" && allBlockers.length === 1 && allBlockers[0] === risk.blocker ? postRiskGateNotice(number, risk, headSha, {
+        comments: () => ghIssueComments(repo, number),
+        post: (body) => ghIssueComment(repo, number, body)
+      }) : undefined;
       return {
         number,
         merged: false,
         policy,
+        riskTier,
+        riskReason,
         blockers: allBlockers,
+        ...riskNotice ? { riskNotice } : {},
         ...arm.attempted ? { gateArmed: arm.armed } : {},
         ...arm.gateArmError ? { gateArmError: arm.gateArmError } : {},
         ...decision.unsatisfiable ? { unsatisfiable: true } : {}
       };
     }
   }
+  if (risk.blocker)
+    return { number, merged: false, policy, riskTier, riskReason, blockers: [risk.blocker] };
   const preMerge = unresolvedThreadsOrBlock(repo, number);
   if (preMerge.count > 0 || preMerge.unavailable) {
     const late = preMerge.unavailable ? ["review threads unavailable"] : [`${preMerge.count} unresolved review thread(s) — address + resolve them first`];
@@ -11965,6 +12413,8 @@ async function automergeOnce(ctx, repo, number, opts) {
       number,
       merged: false,
       policy,
+      riskTier,
+      riskReason,
       blockers: [...late, ...arm.blockers],
       ...arm.attempted ? { gateArmed: arm.armed } : {},
       ...arm.gateArmError ? { gateArmError: arm.gateArmError } : {}
@@ -11974,7 +12424,7 @@ async function automergeOnce(ctx, repo, number, opts) {
   cleanupMergedLocalBranch(result.headBranch);
   await signalBestEffort(ctx, "prs", number, "merged", { repo, mergedSha: result.mergedSha }, "Merged but ShipFlow signal failed");
   const closed = await releaseClaimsAfterAutomerge(ctx, repo, number, prView);
-  return { number, merged: true, mergedSha: result.mergedSha, policy, closedIssues: closed };
+  return { number, merged: true, mergedSha: result.mergedSha, policy, riskTier, riskReason, closedIssues: closed };
 }
 function registerPRCommand(program2) {
   const pr = program2.command("pr").description("Pull request actions");
@@ -12056,6 +12506,10 @@ ${opts.body ?? ""}`;
       emit(opts, { number, merged: false, blockers }, () => console.error(`⛔ Not merging PR #${number}: ${blockers[0]}`));
       process.exit(5);
     }
+    const risk = readRiskGate(repo, number, prView, commitSha(prView.headRefOid), { approvalsForLow: true });
+    const humanApproved = humanApprovalMet(risk);
+    if (risk.blocker)
+      console.error(`⚠️  ${risk.blocker} — merging anyway because a person ran pr merge.`);
     const result = ghPRMerge(repo, number, opts.mode, !opts.keepBranch);
     if (!opts.keepBranch)
       cleanupMergedLocalBranch(result.headBranch);
@@ -12063,7 +12517,7 @@ ${opts.body ?? ""}`;
       repo,
       mergedSha: result.mergedSha
     }, "Merged but ShipFlow signal failed");
-    emit(opts, { number, merged: true, mergedSha: result.mergedSha, mode: opts.mode, signalOk }, () => console.log(`merged: ${result.mergedSha}`));
+    emit(opts, { number, merged: true, mergedSha: result.mergedSha, mode: opts.mode, signalOk, riskTier: risk.tier, riskReason: risk.reason, humanApproved }, () => console.log(`merged: ${result.mergedSha} · risk ${risk.reason}`));
   }));
   pr.command("ready <number>").description("Report whether a PR is mergeable under the active merge policy (read-only — used by the loop)").option("--policy <p>", `Override merge policy — one of: ${MERGE_POLICIES.join(" | ")}. Anything else is REFUSED (exit 1) — never narrowed to a policy you did not ask for (issue #669)`).option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const rawPolicy = opts.policy?.trim();
@@ -12089,7 +12543,8 @@ ${opts.body ?? ""}`;
     const cl = classifyPR(prView, me, { staleHours, unresolvedThreads, intentBlocked: gate.blocked, headSha });
     const freshness = ghPRFreshness(repo, prView);
     const lastHead = lastHeadAtOrBlock(repo, number);
-    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy, behindBy: freshness.behindBy, freshnessUnresolvable: freshness.unresolvable, lastHeadAt: lastHead.unavailable ? null : lastHead.lastHeadAt, settleReviews: threads.settleReviews ?? [], headSha });
+    const risk = readRiskGate(repo, number, prView, headSha);
+    const decision = mergeDecision(prView, me, { policy, requireCi: resolveRequireCi(), staleHours, unresolvedThreads, intentBlocked: gate.blocked, intentBlockedBy: gate.blockedBy, behindBy: freshness.behindBy, freshnessUnresolvable: freshness.unresolvable, lastHeadAt: lastHead.unavailable ? null : lastHead.lastHeadAt, settleReviews: threads.settleReviews ?? [], headSha, risk });
     const blockers = threads.unavailable ? ["review threads unavailable", ...decision.blockers] : decision.blockers;
     const wouldMerge = decision.wouldMerge && !threads.unavailable;
     const out = {
@@ -12103,10 +12558,12 @@ ${opts.body ?? ""}`;
       wouldMerge,
       blockers,
       approvedSha,
-      headSha
+      headSha,
+      riskTier: risk.tier,
+      riskReason: risk.reason
     };
     emit(opts, out, () => {
-      console.log(`PR #${number}: ${wouldMerge ? "✅ READY TO MERGE" : "⏸️  NOT READY"} · ${cl.state} · ci=${cl.ciState} · approved=${cl.approved} · policy=${policy}`);
+      console.log(`PR #${number}: ${wouldMerge ? "✅ READY TO MERGE" : "⏸️  NOT READY"} · ${cl.state} · ci=${cl.ciState} · approved=${cl.approved} · policy=${policy} · risk ${risk.reason}`);
       for (const b of blockers)
         console.log(`  [ ] ${b}`);
     }, { pretty: true });
@@ -12157,7 +12614,7 @@ ${opts.body ?? ""}`;
     const r = await automergeOnce(ctx, repo, number, opts);
     if (!r.merged) {
       emit(opts, r, () => {
-        console.log(`⏸️  PR #${number} not auto-merged — still blocked on:`);
+        console.log(`⏸️  PR #${number} not auto-merged (risk ${r.riskReason}) — still blocked on:`);
         for (const b of r.blockers ?? [])
           console.log(`  [ ] ${b}`);
         if (r.unsatisfiable)
@@ -12165,7 +12622,7 @@ ${opts.body ?? ""}`;
       });
       process.exit(5);
     }
-    emit(opts, r, () => console.log(`✅ Merged PR #${number} (${r.mergedSha}) under policy=${r.policy}${(r.closedIssues ?? []).length ? ` — closes #${(r.closedIssues ?? []).join(", #")}` : ""}.`));
+    emit(opts, r, () => console.log(`✅ Merged PR #${number} (${r.mergedSha}) under policy=${r.policy} · risk ${r.riskReason}${(r.closedIssues ?? []).length ? ` — closes #${(r.closedIssues ?? []).join(", #")}` : ""}.`));
   }));
   pr.command("sync <number>").description("Rebase the PR's branch onto its (moved) base; aborts cleanly on conflict (or leaves it in progress with --keep-conflicts) so the loop can resolve or escalate. Run on the PR's checked-out branch.").option("--repo <fullname>", "Override target repo").option("--no-push", "Don't force-with-lease push after a clean rebase").option("--keep-conflicts", "On conflict, leave the rebase in progress and list the conflicted files instead of aborting — the agentic-resolution entry point (issue #393)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadCtx(program2);
@@ -12516,7 +12973,7 @@ ${opts.body ?? ""}`;
     const foldedCount = findings.length - inlineCount;
     emit(opts, { number, verdict, posted: true, inline: inlineCount, folded: foldedCount, scan: scanField, ...degradedField({ degraded: [...ctx.degraded, ...scan.degraded] }) }, () => console.log(`Posted ${verdict} review on #${number}: ${inlineCount} inline finding(s) on the diff${foldedCount ? `, ${foldedCount} folded into the body` : ""}.`));
   }));
-  pr.command("approve <number>").description("Record the loop reviewer's approval: adds the shipflow-approved label (the automerge approval source) + an optional comment").option("--comment <text>", "Reviewer summary to post on the PR").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to approve a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the approval comment").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--force", "Approve even with unresolved review threads (not recommended)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  pr.command("approve <number>").description("Record the loop reviewer's approval: adds the shipflow-approved label (the automerge approval source; a medium/high risk tier also needs a human review) + an optional comment").option("--comment <text>", "Reviewer summary to post on the PR").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to approve a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the approval comment").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--force", "Approve even with unresolved review threads (not recommended)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const threadCensus = reviewThreadCensus(ghReviewThreads(repo, number), ghCurrentLogin());
@@ -14234,11 +14691,11 @@ var SETTINGS = [
 var byKey = new Map(SETTINGS.map((s) => [s.key, s]));
 var KEYS = SETTINGS.map((s) => s.key);
 function unknownKey(key, json) {
-  const message = `Unknown key: ${key} (supported: ${KEYS.join(", ")})`;
+  const message2 = `Unknown key: ${key} (supported: ${KEYS.join(", ")})`;
   if (json)
-    console.log(JSON.stringify({ error: message }));
+    console.log(JSON.stringify({ error: message2 }));
   else
-    console.error(message);
+    console.error(message2);
   process.exit(1);
 }
 function registerConfigCommand(program2) {
@@ -14250,14 +14707,14 @@ function registerConfigCommand(program2) {
     try {
       echo = s.set(value, cfg);
     } catch (e) {
-      let message = e.message;
+      let message2 = e.message;
       if (value.trim().toLowerCase() === "unset") {
-        message += ` — to restore the default, run: renaiss-shipflow config unset ${key}`;
+        message2 += ` — to restore the default, run: renaiss-shipflow config unset ${key}`;
       }
       if (opts.json) {
-        console.log(JSON.stringify({ error: message }));
+        console.log(JSON.stringify({ error: message2 }));
       } else {
-        console.error(message);
+        console.error(message2);
       }
       process.exit(1);
     }

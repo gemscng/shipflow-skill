@@ -139,7 +139,10 @@ PR body template (sections, all visual-first, blank line between each):
 if the failure is a flow · **Changed** table (file → before → after) · **Testing**
 checklist with numbers · **Evidence** images/links, each after-shot and defect
 shot outlined around the region its caption names (`browser-testing.md`
-§ Mark what changed).
+§ Mark what changed) · `**Risk:** <tier>: <why>` — the tier and file `pr ready`
+prints, e.g. `high: deploy/mac-pair/autodeploy.sh` · `**How to revert:** <steps>`
+— usually `git revert <merge sha>`, plus any migration, config or deploy step
+the revert does not undo (#1391). The prose lint does not require either line.
 
 ### Confirmation-only notification — one PR reply surface (#975)
 
