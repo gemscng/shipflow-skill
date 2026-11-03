@@ -2521,7 +2521,9 @@ var init_shipflow_contract_data = __esm(() => {
         "pr_review",
         "bug_report_triage",
         "test_runner",
-        "codebase_qa"
+        "codebase_qa",
+        "ios_release",
+        "android_release"
       ]
     },
     executionStatuses: {
@@ -15566,20 +15568,27 @@ function detectRunner(root) {
 init_prompts();
 init_helpers();
 import { execSync as execSync8 } from "node:child_process";
+var RELEASE_PLATFORMS = new Set(["web", "ios", "android", "all"]);
 function registerReleaseCommand(program2) {
-  program2.command("release").description("Trigger a ShipFlow release (patch_notes + regression + downstream workflows)").option("--tag <tag>", "Release tag (e.g. v0.7.3)").option("--base-tag <tag>", "Previous tag (auto-detect if omitted)").option("--env <env>", "Target environment (staging|prod)").option("--wait", "Block and stream status until terminal").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  program2.command("release").description("Trigger a ShipFlow release (patch_notes + regression + optional store workflows)").option("--tag <tag>", "Release tag (e.g. v0.7.3)").option("--base-tag <tag>", "Previous tag (auto-detect if omitted)").option("--env <env>", "Target environment (staging|prod)").option("--platform <platform>", "web (default) | ios | android | all", "web").option("--wait", "Block and stream status until terminal").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     requireFlagWhenMachine(opts, "--tag", opts.tag);
     const { creds, client, project } = await loadCtx(program2);
     const tag = opts.tag ?? await promptText("Tag (e.g. v0.7.3): ");
     const baseTag = opts.baseTag ?? safeLatestTag();
+    const platform = (opts.platform ?? "web").toLowerCase();
+    if (!RELEASE_PLATFORMS.has(platform)) {
+      throw new Error(`--platform must be web, ios, android, or all (got ${opts.platform})`);
+    }
     const result = await client.triggerRelease(creds.org, project.projectId, {
       repo: project.repoFullName,
       tag,
       baseTag,
-      env: opts.env
+      env: opts.env,
+      platform
     });
     emit(opts, result, () => {
       console.log(`Release queued: ${result.releaseRunId}`);
+      console.log(`Platform: ${result.platform ?? platform}`);
       console.log(`Workflows: ${result.workflowRunIds.join(", ")}`);
       if (opts.wait) {
         console.log("(--wait not yet implemented; check the dashboard for status.)");
