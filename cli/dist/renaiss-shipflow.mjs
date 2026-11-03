@@ -6564,17 +6564,42 @@ function cleanupMergedLocalBranch(headBranch) {
     _exec("git worktree prune", { stdio: "ignore" });
   } catch {}
 }
-var GC_BRANCH_PREFIX = "fix/";
+var GC_BRANCH_PREFIXES = [
+  "fix/",
+  "feat/",
+  "docs/",
+  "perf/",
+  "chore/",
+  "shipflow-loop/"
+];
+function isProtectedGcBranch(name) {
+  if (!name)
+    return true;
+  if (name === "main" || name === "release")
+    return true;
+  if (name.startsWith("release/") || name.startsWith("backup/"))
+    return true;
+  return false;
+}
+function isGcCandidateBranch(name) {
+  if (isProtectedGcBranch(name))
+    return false;
+  return GC_BRANCH_PREFIXES.some((p) => name.startsWith(p));
+}
 var GC_MAX_BRANCHES = 20;
 function localGcCandidates() {
   try {
-    const out = _exec(`git for-each-ref --sort=committerdate --format='%(refname:short) %(objectname)' refs/heads/${GC_BRANCH_PREFIX}`).toString();
+    const out = _exec("git for-each-ref --sort=committerdate --format='%(refname:short) %(objectname)' refs/heads/").toString();
     const tips = [];
     for (const line of out.split(`
 `)) {
       const m = line.trim().match(/^(\S+) ([0-9a-f]{40}(?:[0-9a-f]{24})?)$/);
-      if (m)
-        tips.push({ name: m[1], tip: m[2] });
+      if (!m)
+        continue;
+      const name = m[1];
+      if (!isGcCandidateBranch(name))
+        continue;
+      tips.push({ name, tip: m[2] });
     }
     if (tips.length <= GC_MAX_BRANCHES)
       return tips;

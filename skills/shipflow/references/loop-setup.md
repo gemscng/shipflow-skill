@@ -60,11 +60,14 @@ fixed name `shipflow-loop`; else
 checks out, branches, or commits here** — default `loop-concurrency` is 3;
 a shared checkout clobbers in-flight siblings.
 
-Merged `fix/issue-*` branches are pruned at merge time by `pr automerge`/
+Merged loop-created branches are pruned at merge time by `pr automerge`/
 `pr merge`; PRs merged OUTSIDE those commands are healed by the
-**merged-branch GC** `inbox` runs each tick (#455) — a local `fix/*` branch
-whose PR merged at exactly the local tip gets the same cleanup; unpushed
-commits / uncommitted edits are kept and reported (`summary.gcUnpushedKept`).
+**merged-branch GC** `inbox` runs each tick (#455) — local branches under
+`fix/`, `feat/`, `docs/`, `perf/`, `chore/`, or `shipflow-loop/` whose PR
+merged at exactly the local tip (or whose tip is an ancestor of the merged
+head) get the same cleanup; `main`, `release/*`, and `backup/*` are never
+candidates. Unpushed commits / uncommitted edits are kept and reported
+(`summary.gcUnpushedKept`).
 At run end — once no owned PRs are in flight — `ExitWorktree`, else
 `git worktree remove .worktrees/shipflow-loop` + `git branch -D
 shipflow-loop/base`; surface path + branch first; keep it if only pausing.
