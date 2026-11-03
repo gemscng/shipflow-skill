@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# ShipFlow PreToolUse gate — block bare `git commit` so agents go through
+# shipflow:smart-commit (skills/shipflow/references/smart-commit-first.md).
+#
+# Allow when the command already carries SHIPFLOW_SMART_COMMIT=1 (the marker
+# the smart-commit execution path uses). Opt out: SHIPFLOW_SMART_COMMIT_HOOK=false.
+#
+# Reads Claude Code hook JSON from stdin. Exit 0 always; deny via JSON body.
+set -euo pipefail
+
+[ "${SHIPFLOW_SMART_COMMIT_HOOK:-}" = "false" ] && exit 0
+
+input="$(cat || true)"
+cmd="$(printf '%s' "$input" | sed -n 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+# Prefer jq when present (handles escapes); fall back to the sed extract.
+if command -v jq >/dev/null 2>&1; then
+  cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
+fi
+[ -n "$cmd" ] || exit 0
+
+# Already marked by the smart-commit execution path.
+case "$cmd" in
+  *SHIPFLOW_SMART_COMMIT=1*) exit 0 ;;
+esac
+
+# Only gate real `git … commit` invocations (not commit-tree / commit-graph).
+# Word-ish boundary before `git` (start / whitespace / shell separator).
+if ! printf '%s' "$cmd" | grep -Eq '(^|[[:space:];|&])git([[:space:]]+(-C|-c)[[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)'; then
+  exit 0
+fi
+
+# Help / version are not creating a commit.
+if printf '%s' "$cmd" | grep -Eq '[[:space:]]commit[[:space:]]+(-h|--help|-V|--version)([[:space:]]|$)'; then
+  exit 0
+fi
+
+reason='Bare git commit is blocked by the ShipFlow plugin. Invoke Skill → shipflow:smart-commit (or read skills/smart-commit/SKILL.md from the ShipFlow skill root), then run commits as: SHIPFLOW_SMART_COMMIT=1 git commit …. Opt out: SHIPFLOW_SMART_COMMIT_HOOK=false. See skills/shipflow/references/smart-commit-first.md.'
+
+# Escape reason for JSON string.
+json_reason="$(printf '%s' "$reason" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$json_reason"
+exit 0

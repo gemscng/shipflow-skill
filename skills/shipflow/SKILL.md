@@ -60,6 +60,7 @@ are identical across harnesses.
 | "route unassigned issues to a dev" | `renaiss-shipflow issue route --all --json` — the Issue Triage picker names an owner per open unassigned issue; `no-fit` leaves it. `issue route <n>` for one. The loop runs it before Pick under `pickup-scope=assigned` |
 | "what needs follow-up on my PRs" | `renaiss-shipflow inbox --json` |
 | "feature map" / "what features exist" | `renaiss-shipflow features --json`. Before changing code the agent follows `references/feature-map-first.md`; the plugin's SessionStart hook adds it to every session in a GitHub repo, and `codex/install.sh` writes it into `~/.codex/AGENTS.md` (opt out: `SHIPFLOW_FEATURE_MAP_HINT=false`) |
+| "commit" / "git commit" | Never bare `git commit`. Invoke **`shipflow:smart-commit`** (message-style.md). SessionStart + PreToolUse gate enforce this after install (`references/smart-commit-first.md`; opt out: `SHIPFLOW_SMART_COMMIT_HOOK=false`) |
 | "regenerate feature map" / empty-map | `renaiss-shipflow features generate --json` |
 | "standing priorities" | `renaiss-shipflow priorities --json` (human-edited `docs/PRIORITIES.md`) |
 | "loop through issues and fix them" / `/shipflow-loop` | Loop mode → `references/loop-mode.md` |

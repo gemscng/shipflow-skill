@@ -7,6 +7,8 @@
 #      (skipped when run from an installed Codex plugin, which serves them itself)
 #   4. the "read the feature map before changing      → $CODEX_HOME/AGENTS.md, between
 #      code" instruction (#1364)                         shipflow:feature-map-first markers
+#   5. the "use shipflow:smart-commit" instruction       → same AGENTS.md, between
+#      (#1415)                                           shipflow:smart-commit-first markers
 #
 # After this, `$shipflow` (and `$smart-commit`) invoke the skills in Codex, and
 # Codex also auto-selects `shipflow` from its description when you mention
@@ -137,6 +139,38 @@ else
   cat "$kept.new" > "$AGENTS_MD"
   rm -f "$kept" "$kept.new"
   echo "agents:  feature-map instruction -> $AGENTS_MD (between shipflow:feature-map-first markers)"
+fi
+
+# 5. smart-commit-first (#1415): prefer shipflow:smart-commit over bare git commit.
+SC_HINT="$ROOT/skills/shipflow/references/smart-commit-first.md"
+SC_BEGIN="<!-- shipflow:smart-commit-first BEGIN"
+SC_END="<!-- shipflow:smart-commit-first END -->"
+sc_count() { if [ -f "$AGENTS_MD" ]; then grep -c -F -- "$1" "$AGENTS_MD" || true; else echo 0; fi; }
+if [ "${SHIPFLOW_SMART_COMMIT_HOOK:-}" = "false" ]; then
+  echo "agents:  smart-commit hint skipped (SHIPFLOW_SMART_COMMIT_HOOK=false)"
+elif [ ! -f "$SC_HINT" ]; then
+  echo "agents:  smart-commit hint skipped ($SC_HINT not found)"
+elif [ "$(sc_count "$SC_BEGIN")" != "$(sc_count "$SC_END")" ] || [ "$(sc_count "$SC_BEGIN")" -gt 1 ]; then
+  echo "agents:  smart-commit hint skipped — $AGENTS_MD has unmatched shipflow:smart-commit-first markers; fix or remove them and re-run"
+else
+  kept="$(mktemp)"
+  if [ -f "$AGENTS_MD" ]; then
+    awk -v b="$SC_BEGIN" -v e="$SC_END" '
+      index($0, b) == 1 { skip = 1; next }
+      skip && index($0, e) == 1 { skip = 0; next }
+      !skip' "$AGENTS_MD" |
+      awk '/^[[:space:]]*$/ { blank++; next } { for (; blank > 0; blank--) print ""; print }' > "$kept"
+  fi
+  mkdir -p "$CODEX_HOME"
+  {
+    [ -s "$kept" ] && { cat "$kept"; echo; }
+    echo "$SC_BEGIN (written by ShipFlow codex/install.sh; a re-run replaces this block) -->"
+    cat "$SC_HINT"
+    echo "$SC_END"
+  } > "$kept.new"
+  cat "$kept.new" > "$AGENTS_MD"
+  rm -f "$kept" "$kept.new"
+  echo "agents:  smart-commit instruction -> $AGENTS_MD (between shipflow:smart-commit-first markers)"
 fi
 
 cat <<MSG

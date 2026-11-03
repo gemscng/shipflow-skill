@@ -23,7 +23,10 @@ silently installs any pending update at each session start, so updates load
 **automatically next session** — you run nothing. The same hook also adds
 `references/feature-map-first.md` to the session context in a GitHub repo
 (again after `/clear` and compaction); `SHIPFLOW_FEATURE_MAP_HINT=false` turns
-that off.
+that off. In any git repo it also adds `references/smart-commit-first.md`, and
+`hooks.json` registers a PreToolUse Bash gate (`bin/shipflow-smart-commit-gate`)
+that denies bare `git commit` unless the command carries `SHIPFLOW_SMART_COMMIT=1`
+(issue #1415). Opt out: `SHIPFLOW_SMART_COMMIT_HOOK=false`.
 
 **Opt-in same-session apply (asked once):** live-reload is tri-state —
 `renaiss-shipflow config get live-reload` is `true`, `false`, or `unset` (env

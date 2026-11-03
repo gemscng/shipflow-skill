@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ShipFlow SessionStart hook. Two jobs, one JSON reply:
+# ShipFlow SessionStart hook. Three jobs, one JSON reply:
 #
 #   1. Install a pending plugin update so it's live with zero manual action
 #      (session startup only). Opt out with SHIPFLOW_AUTO_UPDATE=false.
@@ -93,6 +93,16 @@ if [ "${SHIPFLOW_FEATURE_MAP_HINT:-}" != "false" ] && [ -f "$HINT" ]; then
   case "$origin" in
     *github.com[:/]*) ctx="${ctx:+$ctx\\n\\n}$(json_text "$HINT")" ;;
   esac
+fi
+
+
+# smart-commit-first (#1415): any git working tree (commits happen here). The
+# PreToolUse Bash gate denies bare `git commit` unless SHIPFLOW_SMART_COMMIT=1.
+SC_HINT="$ROOT/skills/shipflow/references/smart-commit-first.md"
+if [ "${SHIPFLOW_SMART_COMMIT_HOOK:-}" != "false" ] && [ -f "$SC_HINT" ]; then
+  if git -C "${CLAUDE_PROJECT_DIR:-$PWD}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    ctx="${ctx:+$ctx\\n\\n}$(json_text "$SC_HINT")"
+  fi
 fi
 
 [ -n "$ctx" ] || exit 0

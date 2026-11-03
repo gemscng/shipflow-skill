@@ -31,6 +31,19 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/shipflow-smart-commit-gate",
+            "timeout": 10,
+            "statusMessage": "ShipFlow smart-commit gate"
+          }
+        ]
+      }
     ]
   }
 }
