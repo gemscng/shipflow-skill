@@ -2911,6 +2911,22 @@ function loopReviewedHead(pr, me, lastHeadAt, opts) {
     return true;
   return !!opts?.headSha && loopReviewedSameHead(pr, opts.headSha);
 }
+function loopReviewChangeRequestCount(pr) {
+  const marker = SHIPFLOW_CONTRACT.markers.loopReview;
+  const needle = "needs changes";
+  let n = 0;
+  for (const c of pr.comments ?? []) {
+    const body = stripQuotedLines(c.body);
+    if (body.includes(marker) && body.toLowerCase().includes(needle))
+      n++;
+  }
+  for (const r of pr.reviews ?? []) {
+    const body = stripQuotedLines(r.body);
+    if (body.includes(marker) && body.toLowerCase().includes(needle))
+      n++;
+  }
+  return n;
+}
 function classifyPR(pr, me, opts = {}) {
   let reasons = prAttentionReasons(pr, me);
   if (opts.unresolvedThreads === 0) {
@@ -2967,7 +2983,13 @@ function classifyPR(pr, me, opts = {}) {
     state = "stale";
   else
     state = "awaiting_review";
-  const needsAction = state !== "ci_pending" && state !== "awaiting_reporter" && state !== "awaiting_review" && state !== "awaiting_human";
+  const reviewRoundCeiling = opts.maxReworks ?? DEFAULT_MAX_REWORKS;
+  if ((state === "review_comments" || state === "changes_requested") && loopReviewChangeRequestCount(pr) >= reviewRoundCeiling) {
+    if (!reasons.includes(REVIEW_ROUND_CEILING_REASON)) {
+      reasons = [...reasons, REVIEW_ROUND_CEILING_REASON];
+    }
+  }
+  const needsAction = state !== "ci_pending" && state !== "awaiting_reporter" && state !== "awaiting_review" && state !== "awaiting_human" && !reasons.includes(REVIEW_ROUND_CEILING_REASON);
   if (needsAction && reasons.length === 0)
     reasons = [state];
   return {
@@ -3357,7 +3379,7 @@ function foreignConflictedPRs(mine, all, me, opts = {}) {
     return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
   });
 }
-var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", MERGED_UNREVIEWED_REASON = "merged_unreviewed", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", LOOP_REVIEWED_MARKER, INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_OVERRIDE_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, INTAKE_GATE_AUDIT_MARKER, INTAKE_GATE_AUDIT_LINE, INTAKE_TRUSTED_MARKER, INTAKE_TRUSTED_LINE, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
+var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", MERGED_UNREVIEWED_REASON = "merged_unreviewed", REVIEW_ROUND_CEILING_REASON = "review_round_ceiling", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", LOOP_REVIEWED_MARKER, INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_OVERRIDE_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, INTAKE_GATE_AUDIT_MARKER, INTAKE_GATE_AUDIT_LINE, INTAKE_TRUSTED_MARKER, INTAKE_TRUSTED_LINE, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
 var init_pr_state = __esm(() => {
   init_shipflow_contract_data();
   FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
@@ -3369,7 +3391,8 @@ var init_pr_state = __esm(() => {
     REWORK_CEILING_REASON,
     CORRECTION_UNREADABLE_REASON,
     REPORTER_GATE_STALE_REASON,
-    MERGED_UNREVIEWED_REASON
+    MERGED_UNREVIEWED_REASON,
+    REVIEW_ROUND_CEILING_REASON
   ];
   APPROVED_HEAD_MARKER = SHIPFLOW_CONTRACT.markers.approvedHead;
   APPROVED_HEAD_LINE = new RegExp(`^${APPROVED_HEAD_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+sha=(\\S+?)\\s*-->$`);
@@ -13978,6 +14001,8 @@ function actionableConflicts(prs) {
 function escalateOnceNote(row) {
   if (row.reasons.includes(REWORK_CEILING_REASON))
     return "\uD83C\uDD98 escalate once (no rework left)";
+  if (row.reasons.includes(REVIEW_ROUND_CEILING_REASON))
+    return "\uD83C\uDD98 escalate once (review round ceiling)";
   if (row.reasons.includes(CORRECTION_UNREADABLE_REASON))
     return "\uD83C\uDD98 escalate once (correction unreadable)";
   if (row.reasons.includes(REPORTER_GATE_STALE_REASON)) {
