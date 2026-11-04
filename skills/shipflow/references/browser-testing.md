@@ -184,16 +184,24 @@ delta in the caption (the reviewer and merge gate read it):
 
 ```bash
 renaiss-shipflow issue evidence <n> --pr <pr> \
-  --before "$EV/mode-row-before.png" "$EV/ladder-before.png" \
-  --after  "$EV/mode-row-after.png"  "$EV/ladder-after.png" \
-  --label  "Mode row" "Grade ladder" \
+  --before "$EV/mode-row-before.png" "$EV/ladder-before.png" "$EV/sheet-before.png" \
+  --after  "$EV/mode-row-after.png"  "$EV/ladder-after.png"  "$EV/sheet-after.png" \
+  --label  "Mode row" "Grade ladder" "Photo sheet" \
   --caption "Verified: <what you tested> · health <before>→<after> (Δ<+/-N>) · 0 new console errors"
 ```
+
+Any number of `--before`/`--after` pairs (and `--image`/`--file` extras) is
+fine: the CLI stages them through `/media` in server-sized batches and still
+posts **one** evidence comment and **one** gallery for the call (#1404). Do
+not split the command yourself to dodge the per-upload file cap, and never
+commit screenshots to the repo.
 
 Pair/mix: `validateEvidenceSelection`
 (`apps/renaissshipflow-cli/src/evidence.ts`). `--pr` lands the comment on
 the PR (plus the reporter's chat thread; issue linked via `Fixes #<n>`);
-without it, an issue comment. `--file demo.mp4` adds a screen recording for
+without it, an issue comment. For a PR with no tracking issue, use
+`issue evidence <pr> --pr <pr>` so both the path number and `--pr` are the
+PR. `--file demo.mp4` adds a screen recording for
 flows that need motion. A change with no UI surface (schema, persistence,
 API-only, test-only) has nothing to screenshot: attach the test-runner summary
 instead, `--file "$EV/issue-<n>-vitest.txt" --caption "Verified: <what the

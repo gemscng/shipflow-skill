@@ -214,3 +214,10 @@ sub-issues**; `followUps` is capped at 2. Triage unavailable (`⚠️ triage una
 relatedFiles NOT loaded`) blocks like any un-run gate — rule and marker table
 in `loop-reviewer.md` § "Degradation discipline". Message style for every
 GitHub write: `message-style.md`.
+
+## Risk-tier labels (PR gate owns them)
+
+Do not add or remove `risk:high` / `risk:medium` at intake. The PR reviewer
+raises the tier from the diff when path lists miss auth/payment/migration/
+deploy behavior — see `loop-reviewer.md` § "Raise the risk tier with risk:*
+labels" (#1394). A label only raises; never lower.

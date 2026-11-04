@@ -2102,7 +2102,8 @@ class ShipFlowClient {
   }
   static REQUEST_TIMEOUT_MS = 60000;
   static UPLOAD_TIMEOUT_MS = 180000;
-  authedFetch(method, path, body) {
+  static ROUTE_TIMEOUT_MS = 180000;
+  authedFetch(method, path, body, timeoutMs = ShipFlowClient.REQUEST_TIMEOUT_MS) {
     const headers = { "Content-Type": "application/json" };
     if (this.apiKey)
       headers["Authorization"] = `Bearer ${this.apiKey}`;
@@ -2110,7 +2111,7 @@ class ShipFlowClient {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(ShipFlowClient.REQUEST_TIMEOUT_MS)
+      signal: AbortSignal.timeout(timeoutMs)
     });
   }
   async fetchWithRefresh(url, init) {
@@ -2136,15 +2137,15 @@ class ShipFlowClient {
       return;
     return JSON.parse(text);
   }
-  async request(method, path, body) {
+  async request(method, path, body, timeoutMs) {
     const retriable = method.toUpperCase() === "GET";
     const maxAttempts = retriable ? 3 : 1;
     let lastErr;
     for (let attempt = 0;attempt < maxAttempts; attempt++) {
       try {
-        let res = await this.authedFetch(method, path, body);
+        let res = await this.authedFetch(method, path, body, timeoutMs);
         if (res.status === 401 && this.refreshToken && await this.tryRefresh()) {
-          res = await this.authedFetch(method, path, body);
+          res = await this.authedFetch(method, path, body, timeoutMs);
         }
         if (retriable && res.status >= 500 && attempt < maxAttempts - 1) {
           await this.sleep(backoffMs(attempt));
@@ -2262,7 +2263,7 @@ class ShipFlowClient {
     return this.request("GET", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/triage?${qs}`);
   }
   async routeIssue(org, projectId, number, body) {
-    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/issues/${number}/route`, body);
+    return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/issues/${number}/route`, body, ShipFlowClient.ROUTE_TIMEOUT_MS);
   }
   async matchPrecedent(org, projectId, body) {
     return this.request("POST", `/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/precedents/match`, body);
@@ -2305,6 +2306,16 @@ class ShipFlowClient {
     appendAll("after", opts.after);
     appendAll("actual", opts.actual);
     appendAll("images", opts.images);
+    const appendUrls = (urlField, nameField, items) => {
+      for (const it of items ?? []) {
+        form.append(urlField, it.url);
+        form.append(nameField, it.filename);
+      }
+    };
+    appendUrls("beforeUrl", "beforeFilename", opts.beforeUrls);
+    appendUrls("afterUrl", "afterFilename", opts.afterUrls);
+    appendUrls("actualUrl", "actualFilename", opts.actualUrls);
+    appendUrls("imageUrl", "imageFilename", opts.imageUrls);
     const res = await this.fetchWithRefresh(`${this.baseUrl}/api/v1/orgs/${encodeURIComponent(org)}/projects/${encodeURIComponent(projectId)}/issues/${number}/evidence`, { method: "POST", body: form });
     if (!res.ok) {
       throw new ApiError(res.status, await res.text().catch(() => res.statusText));
@@ -2799,8 +2810,10 @@ function approvedHeadSha(comments) {
   }
   return found;
 }
-function isApproved(pr, headSha) {
+function isApproved(pr, headSha, humanApproversAtHead) {
   if (pr.reviewDecision === "APPROVED")
+    return true;
+  if (humanApproversAtHead && humanApproversAtHead.length > 0)
     return true;
   if (!hasApprovalLabel(pr))
     return false;
@@ -2880,7 +2893,7 @@ function classifyPR(pr, me, opts = {}) {
     reasons = [...reasons, "review_comments"];
   }
   const ciState = ciStateOf(pr.statusCheckRollup);
-  const approved = isApproved(pr, opts.headSha);
+  const approved = isApproved(pr, opts.headSha, opts.humanApproversAtHead);
   const ageHours = hoursSince(pr.updatedAt, opts.nowMs);
   const staleHours = opts.staleHours ?? 48;
   const conflicting = (pr.mergeable ?? "").toUpperCase() === "CONFLICTING";
@@ -2918,6 +2931,8 @@ function classifyPR(pr, me, opts = {}) {
     state = "review_comments";
   else if (ciState === "pending")
     state = "ci_pending";
+  else if (approved && opts.riskParked)
+    state = "awaiting_human";
   else if (approved)
     state = "approved_ready";
   else if (loopReviewable(pr) && !loopReviewedHead(pr, me, opts.lastHeadAt))
@@ -2926,7 +2941,7 @@ function classifyPR(pr, me, opts = {}) {
     state = "stale";
   else
     state = "awaiting_review";
-  const needsAction = state !== "ci_pending" && state !== "awaiting_reporter" && state !== "awaiting_review";
+  const needsAction = state !== "ci_pending" && state !== "awaiting_reporter" && state !== "awaiting_review" && state !== "awaiting_human";
   if (needsAction && reasons.length === 0)
     reasons = [state];
   return {
@@ -4817,14 +4832,37 @@ function ghPRCheckLines(repo, number) {
 `).filter((l) => l.trim() !== "");
   }
 }
-function ghPRMerge(repo, number, mode = "squash", deleteBranch = true) {
+function isHeadCommitMismatch(err) {
+  return err instanceof HeadCommitMismatchError || !!err && typeof err === "object" && err.code === "head_commit_mismatch";
+}
+function looksLikeHeadCommitMismatch(err) {
+  const e = err;
+  const blob = [
+    e?.message ?? "",
+    typeof e?.stderr === "string" ? e.stderr : e?.stderr?.toString?.() ?? "",
+    typeof e?.stdout === "string" ? e.stdout : e?.stdout?.toString?.() ?? ""
+  ].join(`
+`).toLowerCase();
+  return blob.includes("head branch was modified") || blob.includes("match-head-commit") || blob.includes("head oid did not match") || blob.includes("expected head") && blob.includes("match");
+}
+function ghPRMerge(repo, number, mode = "squash", deleteBranch = true, matchHeadCommit) {
   const method = chooseMergeMethod(mode, ghRepoMergeMethods(repo));
   if (method !== mode)
     console.error(`ℹ️  repo disallows --${mode}; merging with --${method} (issue #494)`);
   const flags = [`--${method}`];
   if (deleteBranch)
     flags.push("--delete-branch");
-  _exec(`gh pr merge ${number} --repo ${shellQuote(repo)} ${flags.join(" ")}`, { stdio: "inherit" });
+  const pinned = matchHeadCommit?.trim();
+  if (pinned)
+    flags.push(`--match-head-commit ${shellQuote(pinned)}`);
+  try {
+    _exec(`gh pr merge ${number} --repo ${shellQuote(repo)} ${flags.join(" ")}`, { stdio: "inherit" });
+  } catch (err) {
+    if (pinned && looksLikeHeadCommitMismatch(err)) {
+      throw new HeadCommitMismatchError(pinned, err?.message);
+    }
+    throw err;
+  }
   const view = _exec(`gh pr view ${number} --repo ${shellQuote(repo)} --json mergeCommit,headRefName`).toString();
   const parsed = JSON.parse(view);
   return { mergedSha: parsed.mergeCommit?.oid ?? "", headBranch: parsed.headRefName ?? "" };
@@ -5370,7 +5408,7 @@ function ghResolveReviewThread(threadId) {
     _exec(`gh api graphql -f query=${shellQuote(m)} -f t=${shellQuote(threadId)}`, { stdio: "ignore" });
   } catch {}
 }
-var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner,headRefOid,mergedAt", GH_GRAPHQL_PAGE_MAX = 100, LIST_BY_LABEL_FIELDS, LABEL_COLORS, LABEL_PREFIX_COLORS, BODY_REVISION_PAGE_CAP = 50;
+var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, HeadCommitMismatchError, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner,headRefOid,mergedAt", GH_GRAPHQL_PAGE_MAX = 100, LIST_BY_LABEL_FIELDS, LABEL_COLORS, LABEL_PREFIX_COLORS, BODY_REVISION_PAGE_CAP = 50;
 var init_gh = __esm(() => {
   init_sh();
   init_shipflow_contract_data();
@@ -5388,6 +5426,15 @@ var init_gh = __esm(() => {
   SHIPFLOW_TRIAGED_MARKER = SHIPFLOW_CONTRACT.markers.triaged;
   VIA_SHIPFLOW_LABEL = SHIPFLOW_CONTRACT.labels.names.viaShipflow;
   DETAIL_FIELDS = `${FIELDS},author,milestone,updatedAt,closedAt`;
+  HeadCommitMismatchError = class HeadCommitMismatchError extends Error {
+    expectedSha;
+    code = "head_commit_mismatch";
+    constructor(expectedSha, detail) {
+      super(detail?.trim() ? `PR head no longer matches ${expectedSha}: ${detail.trim()}` : `PR head no longer matches ${expectedSha}`);
+      this.expectedSha = expectedSha;
+      this.name = "HeadCommitMismatchError";
+    }
+  };
   LIST_BY_LABEL_FIELDS = `${FIELDS},comments`;
   LABEL_COLORS = SHIPFLOW_CONTRACT.labels.colors;
   LABEL_PREFIX_COLORS = SHIPFLOW_CONTRACT.labels.prefixColors;
@@ -8872,6 +8919,8 @@ function validateEvidenceSelection(before, after, misc, labels = [], beforeCapti
 }
 var VIDEO_EXTS = [".mp4", ".mov", ".webm"];
 var MAX_SCREENSHOT_BYTES = 8 << 20;
+var MAX_EVIDENCE_FILES_PER_UPLOAD = 4;
+var MAX_EVIDENCE_BYTES_PER_UPLOAD = 32 << 20;
 function isVideoPath(p) {
   const lower = p.toLowerCase();
   return VIDEO_EXTS.some((e) => lower.endsWith(e));
@@ -8911,6 +8960,45 @@ function renderScreenshotsSection(shots) {
   return parts.join(`
 
 `);
+}
+function evidenceNeedsMediaStaging(fileCount, totalBytes) {
+  if (fileCount > MAX_EVIDENCE_FILES_PER_UPLOAD) {
+    return { reason: "file-count", fileCount, totalBytes };
+  }
+  if (totalBytes > MAX_EVIDENCE_BYTES_PER_UPLOAD) {
+    return { reason: "byte-budget", fileCount, totalBytes };
+  }
+  return null;
+}
+function evidenceUploadLimitMessage(kind, detail) {
+  if (kind === "file-count") {
+    return `at most ${MAX_EVIDENCE_FILES_PER_UPLOAD} files per upload` + (detail ? ` (${detail})` : "") + ` — split this call into smaller batches (the CLI does this automatically for issue evidence), or attach fewer files. Never host the shots on a git branch or third-party image host.`;
+  }
+  if (kind === "byte-budget") {
+    return `at most ${MAX_EVIDENCE_BYTES_PER_UPLOAD} bytes per upload` + (detail ? ` (${detail})` : "") + ` — split this call into smaller batches, or shrink the files. Never host the shots on a git branch or third-party image host.`;
+  }
+  return `each file must be at most ${MAX_SCREENSHOT_BYTES} bytes` + (detail ? ` (${detail})` : "") + ` — shrink or split the file. Never host the shots on a git branch or third-party image host.`;
+}
+function evidenceLimitRefusalMessage(err) {
+  if (!(err instanceof ApiError))
+    return null;
+  const msg = (err.message || "").toLowerCase();
+  const body = (err.body || "").toLowerCase();
+  const blob = msg + " " + body;
+  if (blob.includes("at most") && blob.includes("files per upload")) {
+    return evidenceUploadLimitMessage("file-count", envelopeHint(err));
+  }
+  if (blob.includes("exceeds 8mb") || blob.includes("too large") || blob.includes("8mb")) {
+    return evidenceUploadLimitMessage("file-bytes", envelopeHint(err));
+  }
+  if (blob.includes("multipart") && (blob.includes("large") || blob.includes("32"))) {
+    return evidenceUploadLimitMessage("byte-budget", envelopeHint(err));
+  }
+  return null;
+}
+function envelopeHint(err) {
+  const m = err.message.replace(/^API error \d+:\s*/i, "").trim();
+  return m || undefined;
 }
 
 // src/commands/issue.ts
@@ -9931,31 +10019,110 @@ ${block}`));
     }
     const ctx = await loadCtx(program2);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
-    const toImg = (p) => ({ filename: basename2(p), data: new Uint8Array(readFileSync4(p)) });
-    const res = await ctx.client.attachEvidence(ctx.creds.org, ctx.project.projectId, number, {
-      repo,
-      pr: opts.pr ? parseInt(opts.pr, 10) : undefined,
-      previewUrl: opts.previewUrl,
-      caption: opts.caption,
-      before: before.map(toImg),
-      after: after.map(toImg),
-      labels,
-      beforeCaptions,
-      afterCaptions,
-      imageCaptions,
-      touched: opts.touched ?? [],
-      actual: actual.map(toImg),
-      actualCaptions,
-      images: misc.map(toImg)
-    }).catch((err) => {
+    const toImg = (p) => {
+      const data = new Uint8Array(readFileSync4(p));
+      if (data.byteLength > MAX_SCREENSHOT_BYTES) {
+        console.error(evidenceUploadLimitMessage("file-bytes", basename2(p)));
+        process.exit(1);
+      }
+      return { filename: basename2(p), data };
+    };
+    const beforeImgs = before.map(toImg);
+    const afterImgs = after.map(toImg);
+    const actualImgs = actual.map(toImg);
+    const miscImgs = misc.map(toImg);
+    const allImgs = [...beforeImgs, ...afterImgs, ...actualImgs, ...miscImgs];
+    const totalBytes = allImgs.reduce((n, img) => n + img.data.byteLength, 0);
+    const staging = evidenceNeedsMediaStaging(allImgs.length, totalBytes);
+    const onEvidenceErr = (err) => {
       const access = evidenceApiErrorVerdict(err);
-      if (!access)
-        throw err;
-      if (opts.json)
-        console.log(JSON.stringify({ error: access.error, code: access.code }));
-      console.error(access.note);
-      return process.exit(access.exitCode);
-    });
+      if (access) {
+        if (opts.json)
+          console.log(JSON.stringify({ error: access.error, code: access.code }));
+        console.error(access.note);
+        return process.exit(access.exitCode);
+      }
+      const limit = evidenceLimitRefusalMessage(err);
+      if (limit) {
+        console.error(limit);
+        process.exit(1);
+      }
+      throw err;
+    };
+    let res;
+    if (!staging) {
+      res = await ctx.client.attachEvidence(ctx.creds.org, ctx.project.projectId, number, {
+        repo,
+        pr: opts.pr ? parseInt(opts.pr, 10) : undefined,
+        previewUrl: opts.previewUrl,
+        caption: opts.caption,
+        before: beforeImgs,
+        after: afterImgs,
+        labels,
+        beforeCaptions,
+        afterCaptions,
+        imageCaptions,
+        touched: opts.touched ?? [],
+        actual: actualImgs,
+        actualCaptions,
+        images: miscImgs
+      }).catch(onEvidenceErr);
+    } else {
+      for (const img of allImgs) {
+        if (img.data.byteLength > MAX_EVIDENCE_BYTES_PER_UPLOAD) {
+          console.error(evidenceUploadLimitMessage("byte-budget", `${img.filename} is larger than one upload`));
+          process.exit(1);
+        }
+      }
+      const hosted = [];
+      let batch = [];
+      let batchBytes = 0;
+      const flush = async () => {
+        if (batch.length === 0)
+          return;
+        const uploaded = await ctx.client.uploadMedia(ctx.creds.org, ctx.project.projectId, batch).catch(onEvidenceErr);
+        if (!uploaded)
+          return;
+        const { urls } = uploaded;
+        for (let i = 0;i < batch.length; i++) {
+          hosted.push({ filename: batch[i].filename, url: urls[i] ?? "" });
+        }
+        batch = [];
+        batchBytes = 0;
+      };
+      for (const img of allImgs) {
+        const nextCount = batch.length + 1;
+        const nextBytes = batchBytes + img.data.byteLength;
+        if (batch.length > 0 && (nextCount > MAX_EVIDENCE_FILES_PER_UPLOAD || nextBytes > MAX_EVIDENCE_BYTES_PER_UPLOAD)) {
+          await flush();
+        }
+        batch.push(img);
+        batchBytes += img.data.byteLength;
+      }
+      await flush();
+      if (hosted.some((h) => !h.url)) {
+        console.error("media staging returned fewer URLs than files — retry the evidence call; never host the shots on a git branch.");
+        process.exit(1);
+      }
+      let cursor = 0;
+      const take = (n) => hosted.slice(cursor, cursor += n);
+      res = await ctx.client.attachEvidence(ctx.creds.org, ctx.project.projectId, number, {
+        repo,
+        pr: opts.pr ? parseInt(opts.pr, 10) : undefined,
+        previewUrl: opts.previewUrl,
+        caption: opts.caption,
+        labels,
+        beforeCaptions,
+        afterCaptions,
+        imageCaptions,
+        touched: opts.touched ?? [],
+        actualCaptions,
+        beforeUrls: take(beforeImgs.length),
+        afterUrls: take(afterImgs.length),
+        actualUrls: take(actualImgs.length),
+        imageUrls: take(miscImgs.length)
+      }).catch(onEvidenceErr);
+    }
     const threadVerdict = evidenceThreadVerdict(res.threadStatus, res.threadNotified, res.threadError);
     const commentVerdict = evidenceCommentVerdict(res.commentStatus, res.githubCommented, !!res.prCommented, res.commentError);
     emit(opts, res, () => {
@@ -10099,16 +10266,6 @@ init_config();
 init_gh();
 init_pr_state();
 init_escalation_format();
-init_helpers();
-
-// src/commands/pr.ts
-init_config();
-init_gh();
-import { execSync as execSync6 } from "node:child_process";
-import { closeSync, existsSync as existsSync3, lstatSync, openSync, readFileSync as readFileSync5, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { createHash as createHash3 } from "node:crypto";
-import { join as join4 } from "node:path";
-import { hostname as hostname3 } from "node:os";
 
 // src/review-contract-data.ts
 var REVIEW_CONTRACT = {
@@ -11622,11 +11779,6 @@ function buildReviewPacketData(input) {
   };
 }
 
-// src/commands/pr.ts
-init_shipflow_contract_data();
-init_sh();
-init_pr_state();
-
 // src/risk-tier.ts
 init_pr_state();
 var RANK = { low: 0, medium: 1, high: 2 };
@@ -11961,6 +12113,31 @@ function hasRiskGateNotice(comments, headSha) {
   return comments.some((c) => c.viewerDidAuthor && c.body.split(`
 `).some((l) => l.trim() === marker));
 }
+function riskGateNoticeOnHead(comments, headSha) {
+  const head = commitSha(headSha);
+  if (!head || !comments?.length)
+    return false;
+  const marker = riskGateNoticeMarker(head);
+  return comments.some((c) => c.body.split(`
+`).some((l) => l.trim() === marker));
+}
+function riskGateNoticeMeta(comments, headSha) {
+  const head = commitSha(headSha);
+  if (!head || !comments?.length)
+    return null;
+  const marker = riskGateNoticeMarker(head);
+  for (const c of comments) {
+    const lines = c.body.split(`
+`);
+    if (!lines.some((l) => l.trim() === marker))
+      continue;
+    const title = lines.find((l) => /Waiting for a human — \w+ risk/i.test(l));
+    const tier = title?.match(/Waiting for a human — (\w+) risk/i)?.[1]?.toLowerCase() ?? "unknown";
+    const reason = lines.map((l) => l.trim()).find((l) => /^(medium|high|unknown):/i.test(l) || /needs a .+ approval/i.test(l)) ?? "";
+    return { tier, reason };
+  }
+  return null;
+}
 function postRiskGateNotice(number, gate, headSha, w) {
   try {
     if (hasRiskGateNotice(w.comments(), headSha))
@@ -11976,7 +12153,20 @@ function postRiskGateNotice(number, gate, headSha, w) {
   }
 }
 
+// src/commands/inbox.ts
+init_helpers();
+
 // src/commands/pr.ts
+init_config();
+init_gh();
+import { execSync as execSync6 } from "node:child_process";
+import { closeSync, existsSync as existsSync3, lstatSync, openSync, readFileSync as readFileSync5, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { createHash as createHash3 } from "node:crypto";
+import { join as join4 } from "node:path";
+import { hostname as hostname3 } from "node:os";
+init_shipflow_contract_data();
+init_sh();
+init_pr_state();
 init_helpers();
 init_project();
 var LINT_MODES = ["warn", "strict"];
@@ -12476,7 +12666,17 @@ async function automergeOnce(ctx, repo, number, opts) {
       ...arm.gateArmError ? { gateArmError: arm.gateArmError } : {}
     };
   }
-  const result = ghPRMerge(repo, number, opts.mode ?? "squash", true);
+  let result;
+  try {
+    result = ghPRMerge(repo, number, opts.mode ?? "squash", true, headSha ?? undefined);
+  } catch (err) {
+    if (isHeadCommitMismatch(err)) {
+      const blocker = `head moved since gate evaluated ${err.expectedSha} — recheck next tick`;
+      console.error(`⏸ PR #${number}: ${blocker}`);
+      return { number, merged: false, policy, riskTier, riskReason, blockers: [blocker] };
+    }
+    throw err;
+  }
   cleanupMergedLocalBranch(result.headBranch);
   await signalBestEffort(ctx, "prs", number, "merged", { repo, mergedSha: result.mergedSha }, "Merged but ShipFlow signal failed");
   const closed = await releaseClaimsAfterAutomerge(ctx, repo, number, prView);
@@ -12521,8 +12721,20 @@ function registerPRCommand(program2) {
     const ctx = await loadCtx(program2);
     const branch = currentBranch();
     const issueNumber = opts.issue ? parseInt(opts.issue, 10) : detectIssueFromBranch(branch);
-    if (!issueNumber)
-      console.warn(unlinkedPrWarning(branch));
+    if (!issueNumber) {
+      const baseRef = opts.base ? refExists(opts.base) ? opts.base : refExists(`origin/${opts.base}`) ? `origin/${opts.base}` : null : originHeadRef() ?? defaultBranchRef();
+      const changed = baseRef ? changedPaths(baseRef) : { paths: [], ok: false, cmd: "" };
+      if (changed.ok && hasVisibleSurface(changed.paths)) {
+        const msg = unlinkedVisibleSurfaceWarning(branch);
+        if (opts.lint === "strict") {
+          console.error(msg);
+          process.exit(2);
+        }
+        console.warn(msg);
+      } else {
+        console.warn(unlinkedPrWarning(branch));
+      }
+    }
     const linkMode = opts.partial ? "part-of" : "closes";
     const issueUrl = issueNumber ? `https://github.com/${ctx.project.repoFullName}/issues/${issueNumber}` : undefined;
     const header = buildShipFlowHeader(ctx.project.projectName, issueNumber, issueUrl, linkMode);
@@ -12566,7 +12778,18 @@ ${opts.body ?? ""}`;
     const humanApproved = humanApprovalMet(risk);
     if (risk.blocker)
       console.error(`⚠️  ${risk.blocker} — merging anyway because a person ran pr merge.`);
-    const result = ghPRMerge(repo, number, opts.mode, !opts.keepBranch);
+    const mergeHead = commitSha(prView.headRefOid);
+    let result;
+    try {
+      result = ghPRMerge(repo, number, opts.mode, !opts.keepBranch, mergeHead ?? undefined);
+    } catch (err) {
+      if (isHeadCommitMismatch(err)) {
+        const blockers = [`head moved since gate evaluated ${err.expectedSha} — recheck next tick`];
+        emit(opts, { number, merged: false, blockers }, () => console.error(`⏸ Not merging PR #${number}: ${blockers[0]}`));
+        process.exit(5);
+      }
+      throw err;
+    }
     if (!opts.keepBranch)
       cleanupMergedLocalBranch(result.headBranch);
     const signalOk = await signalBestEffort(ctx, "prs", number, "merged", {
@@ -13327,6 +13550,25 @@ function detectIssueFromBranch(branch) {
 function unlinkedPrWarning(branch) {
   return `⚠️  No linked issue: --issue was not given and branch "${branch}" carries no detectable issue number ` + "(accepted: issue/<n>, fix/<n>, feat/<n>, fix/issue-<n>, feat/issue-<n>). " + "The PR will open UNLINKED — merging it closes nothing, and any `issue wait --on` timer " + "parked on the intended issue waits forever. Pass --issue <n> to link it.";
 }
+function isVisibleSurfacePath(path) {
+  const p = path.replace(/\\/g, "/");
+  const lower = p.toLowerCase();
+  if (/\.(tsx|jsx|vue|svelte)$/i.test(lower))
+    return true;
+  if (/\.(css|scss|sass|less)$/i.test(lower))
+    return true;
+  if (/(^|\/)(i18n|locales|messages)(\/|$)/i.test(lower))
+    return true;
+  if (/(^|\/)(lens|lenses|panels?)(\/|$)/i.test(lower))
+    return true;
+  return false;
+}
+function hasVisibleSurface(paths) {
+  return paths.some(isVisibleSurfacePath);
+}
+function unlinkedVisibleSurfaceWarning(branch) {
+  return `⚠️  No linked issue on a visible-surface diff: --issue was not given and branch "${branch}" carries no detectable issue number. ` + "Evidence cannot be attached until an issue is linked (`issue evidence <issue> --pr <pr>` needs an issue). " + "Pass --issue <n> (or name the branch issue/<n>, fix/issue-<n>, feat/issue-<n>, …). " + "Under --lint=strict this refuses to open the PR.";
+}
 function buildShipFlowHeader(project, issueNumber, issueUrl, linkMode = "closes") {
   const lines = ["## ShipFlow context", `- Project: ${project}`];
   if (issueNumber) {
@@ -13677,7 +13919,7 @@ function escalateOnceNote(row) {
     return "\uD83C\uDD98 escalate once (merged unreviewed)";
   return "\uD83C\uDD98 escalate once";
 }
-var PARKED_STATES = ["awaiting_review", "ci_pending", "awaiting_reporter", "merged_unreviewed"];
+var PARKED_STATES = ["awaiting_review", "ci_pending", "awaiting_reporter", "awaiting_human", "merged_unreviewed"];
 function parkedCount(prs) {
   return prs.filter((p) => p.needsAttention !== true && (PARKED_STATES.includes(p.state) || p.foreign === true && p.state === "reporter_corrected")).length;
 }
@@ -13685,7 +13927,7 @@ function actionableCorrections(prs) {
   return prs.filter((p) => p.state === "reporter_corrected" && p.foreign !== true).length;
 }
 function actionableWip(prs) {
-  return prs.filter((p) => p.foreign !== true && p.state !== "awaiting_reporter" && p.state !== "merged_unreviewed").length;
+  return prs.filter((p) => p.foreign !== true && p.state !== "awaiting_reporter" && p.state !== "awaiting_human" && p.state !== "merged_unreviewed").length;
 }
 var GC_LOOKUP_BUDGET_MS = 20000;
 function gcMergedLocalBranches(repo, deps = {}) {
@@ -13759,11 +14001,51 @@ var STATE_ICONS = {
   review_comments: "\uD83D\uDCAC",
   ci_pending: "⏳",
   approved_ready: "✅",
+  awaiting_human: "\uD83D\uDC64",
   needs_review: "\uD83D\uDD0E",
   stale: "\uD83D\uDD70️",
   awaiting_review: "·",
   merged_unreviewed: "\uD83D\uDEA8"
 };
+function shouldReadHumanApprovers(pr) {
+  if (pr.isDraft)
+    return false;
+  if (pr.mergeable === "CONFLICTING")
+    return false;
+  if (pr.reviewDecision === "APPROVED" || pr.reviewDecision === "CHANGES_REQUESTED")
+    return false;
+  const ci = ciStateOf(pr.statusCheckRollup);
+  if (ci === "failing" || ci === "pending")
+    return false;
+  return true;
+}
+function inboxRiskOpts(repo, pr) {
+  const head = commitSha(pr.headRefOid);
+  if (riskGateNoticeOnHead(pr.comments, head)) {
+    const meta = riskGateNoticeMeta(pr.comments, head);
+    return {
+      humanApproversAtHead: [],
+      riskParked: true,
+      ...meta ? { riskTier: meta.tier, riskReason: meta.reason } : {}
+    };
+  }
+  if (!shouldReadHumanApprovers(pr)) {
+    return { humanApproversAtHead: [], riskParked: false };
+  }
+  try {
+    const atHead = humanApproversAtHead(ghPRReviewVerdicts(repo, pr.number), head);
+    const qualified = [];
+    for (const login of atHead) {
+      try {
+        if (hasWriteAccess(ghCollaboratorRole(repo, login)))
+          qualified.push(login);
+      } catch {}
+    }
+    return { humanApproversAtHead: qualified, riskParked: false };
+  } catch {
+    return { humanApproversAtHead: [], riskParked: false };
+  }
+}
 function collectInboxPrRows(repo, me, opts) {
   const { sweepEnabled, staleHours, maxReworks, readOnly = false } = opts;
   let escalatedIssues = null;
@@ -13804,8 +14086,24 @@ function collectInboxPrRows(repo, me, opts) {
     const intentBlocked = inboxIntentBlocked(repo, pr, readOnly);
     const gateClearedAt = gateClearanceReadFor(pr.number, intentBlocked, (n) => ghIntentGateLastClearedAt(repo, n));
     const lastHeadAt = headClockReadFor(pr, me, (n) => ghPRLastHeadAt(repo, n));
-    const cl = classifyPR(pr, me, { staleHours, unresolvedThreads, intentBlocked, maxReworks, gateClearedAt, headSha: pr.headRefOid, lastHeadAt });
-    return { pr, row: minePrRow(pr, cl, { unresolvedThreads, degraded, parentIsEscalated, parentWasEscalatedFor }) };
+    const risk = inboxRiskOpts(repo, pr);
+    const cl = classifyPR(pr, me, {
+      staleHours,
+      unresolvedThreads,
+      intentBlocked,
+      maxReworks,
+      gateClearedAt,
+      headSha: pr.headRefOid,
+      lastHeadAt,
+      humanApproversAtHead: risk.humanApproversAtHead,
+      riskParked: risk.riskParked
+    });
+    const row = minePrRow(pr, cl, { unresolvedThreads, degraded, parentIsEscalated, parentWasEscalatedFor });
+    if (risk.riskTier)
+      row.riskTier = risk.riskTier;
+    if (risk.riskReason)
+      row.riskReason = risk.riskReason;
+    return { pr, row };
   });
   if (sweepEnabled) {
     try {
@@ -13884,6 +14182,7 @@ function registerInboxCommand(program2) {
       prsNeedingAttention: prs.filter((p) => p.needsAttention).length,
       issuesNeedingAttention: issues.filter((i) => i.needsAttention).length,
       readyToMerge: count("approved_ready"),
+      awaitingHuman: count("awaiting_human"),
       ciFailing: count("ci_failing"),
       changesRequested: count("changes_requested"),
       conflicts: actionableConflicts(prs),
@@ -13903,7 +14202,7 @@ function registerInboxCommand(program2) {
     };
     emit(opts, withProvenance({ repo, prs, issues, summary, gc, collections }), () => {
       console.log(`\uD83D\uDCE5 Inbox for ${repo}`);
-      console.log(`Needs action: ${meter(summary.prsNeedingAttention, prs.length)} PRs · ${meter(summary.issuesNeedingAttention, issues.length)} issues · ✅ ${summary.readyToMerge} ready to merge`);
+      console.log(`Needs action: ${meter(summary.prsNeedingAttention, prs.length)} PRs · ${meter(summary.issuesNeedingAttention, issues.length)} issues · ✅ ${summary.readyToMerge} ready to merge` + (summary.awaitingHuman ? ` · \uD83D\uDC64 ${summary.awaitingHuman} waiting on a human` : ""));
       if (collections.mergedPrs === "unavailable") {
         console.log("⚠️  Merged PR scan unavailable (github-merged-prs) — this inbox is INCOMPLETE; re-read before concluding there is no work.");
       }
@@ -13925,7 +14224,7 @@ function registerInboxCommand(program2) {
           p.state,
           `ci:${p.ciState}`,
           `${p.ageHours}h`,
-          p.title + (p.correction ? ` \uD83D\uDCE3 @${p.correction.author} corrected the reading` : "") + (p.corrections && p.corrections.length > 1 ? ` (+${p.corrections.length - 1} more unanswered)` : "") + (p.escalateOnce ? ` ${escalateOnceNote(p)}` : "") + (p.parentNeedsHuman ? " (parent is needs-human)" : "") + (p.degraded ? " ⚠️ degraded" : "") + (p.humanOnly ? ` \uD83D\uDD12 ${p.distrust} — human only` : "")
+          p.title + (p.correction ? ` \uD83D\uDCE3 @${p.correction.author} corrected the reading` : "") + (p.corrections && p.corrections.length > 1 ? ` (+${p.corrections.length - 1} more unanswered)` : "") + (p.escalateOnce ? ` ${escalateOnceNote(p)}` : "") + (p.parentNeedsHuman ? " (parent is needs-human)" : "") + (p.degraded ? " ⚠️ degraded" : "") + (p.humanOnly ? ` \uD83D\uDD12 ${p.distrust} — human only` : "") + (p.riskTier ? ` \uD83D\uDC64 ${p.riskTier}${p.riskReason ? `: ${p.riskReason}` : ""}` : "")
         ]);
         for (const l of renderTable(["PR", "State", "CI", "Age", "Title"], rows))
           console.log(`  ${l}`);
@@ -13959,6 +14258,7 @@ var PLAN_ACTION_BY_STATE = {
   review_comments: "address_comments",
   ci_pending: "park",
   approved_ready: "automerge",
+  awaiting_human: "park",
   needs_review: "review",
   stale: "nudge",
   awaiting_review: "park",

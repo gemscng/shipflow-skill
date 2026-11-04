@@ -347,7 +347,7 @@ mean "irrelevant", they stop meaning anything.
    [{"path":"","line":0,"severity":"medium","issue":"No linked issue or acceptance brief",
      "fix":"Link the issue this PR implements (Fixes #N / Part of #N)"},
     {"path":"","line":0,"severity":"medium","issue":"No evidence for 7 of 9 touched features",
-     "fix":"Link an issue, then attach one marked pair per feature with `issue evidence`"}]
+     "fix":"Link an issue first, then `issue evidence <issue> --pr <pr>` (one marked pair per feature)"}]
    ```
 
    ⛔ **`--findings -` is not optional on the pipe form (issue #427).** stdin
@@ -445,6 +445,19 @@ Pre-#411 any unrecognised comment cleared the gate (PR #405 merged, reporter
 never consulted). Unknown prose is now ignored; don't clear the label
 yourself.
 
+### Raise the risk tier with `risk:*` labels (#1394)
+
+Path lists in `risk-tier.ts` miss some auth, permission, payment, migration
+and deploy behavior that lands in ordinary paths. When **this PR's diff**
+changes that kind of behavior through a path the lists do not cover, **add**
+`risk:high` (or `risk:medium` when the blast is narrower) before you approve,
+and name the reason in the review comment (one line: what the change does to
+access / money / data / deploy). A label only **raises** the tier — never
+remove `risk:high` / `risk:medium`, and never add a label to *lower* a
+path-derived tier. Example: a helper under `src/lib/guards.ts` that starts
+skipping a role check stays path-medium until you add `risk:high`, so merge
+waits for a maintainer approval.
+
 ## Before you `approve` — self-verify
 Never return `approve` unless all hold:
 - [ ] `renaiss-shipflow pr diff <n> --out <path>` exited **0** and you READ
@@ -471,6 +484,10 @@ Never return `approve` unless all hold:
 - [ ] `features --json` pulled — non-zero exit, `degraded[]`, or 0 features
       is a hard error (not an empty map) → `--verdict blocked`; neighbouring
       features checked.
+- [ ] Risk tier raised when needed: if the diff changes auth, permission,
+      payment, migration or deploy behavior through a path the tier lists
+      miss, `risk:high` / `risk:medium` is on the PR (never removed) and the
+      review names why (#1394).
 - [ ] Parent issue's Judge block reads the truth (#969): state `review`
       naming this PR, `linesToAction ≤ 4` from `renaiss-shipflow issue judge
       <n> --state review --pr <pr> --pr-status "<standing>" --json`. A stale
