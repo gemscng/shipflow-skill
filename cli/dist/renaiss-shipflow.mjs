@@ -2558,7 +2558,7 @@ var init_shipflow_contract_data = __esm(() => {
       ]
     },
     labels: {
-      $comment: "ShipFlow's GitHub label palette + the lifecycle label NAMES. `colors` maps a label name to its 6-hex color; ShipFlow owns these colors and BOTH the server's ensureLabels and the CLI's ghEnsureLabel source this ONE map (pre-contract they were byte-identical copies, so a color edit on one side flip-flopped the label). `prefixColors` colors open-ended label groups by name prefix. `names` are the lifecycle labels the code references by MEANING (claim / escalation / approval / reporter-review / verify-failed); every `names` value is also a `colors` key (parity-tested). `needsReporterApproval` is the INTAKE gate (issue #448): an issue opened by an account outside the code org carries it until a trusted maintainer approves, and `isActionableForPickup` refuses to claim a carrier — so the loop cannot build work nobody in the org has green-lit. It is deliberately NOT `needsReporterReview`: that label is the #441 MERGE gate with its own confirmation-token grammar, and one reply must never release two different decisions. `verifyFailed` is applied by the post-deploy verifier when a PR's verification manifest has a failing assertion (issue #207) — it hooks the reporter ping and the follow-up auto-revert. `autoHarvested` marks issues the cross-reviewer finding harvester files from valid findings OTHER PR reviewers (gemini-code-assist, chatgpt-codex-connector) raised and ShipFlow missed (part of #56). Repaint/matching semantics stay per-consumer — only the literals are shared.",
+      $comment: "ShipFlow's GitHub label palette + the lifecycle label NAMES. `colors` maps a label name to its 6-hex color; ShipFlow owns these colors and BOTH the server's ensureLabels and the CLI's ghEnsureLabel source this ONE map (pre-contract they were byte-identical copies, so a color edit on one side flip-flopped the label). `prefixColors` colors open-ended label groups by name prefix. `names` are the lifecycle labels the code references by MEANING (claim / escalation / approval / reporter-review / verify-failed); every `names` value is also a `colors` key (parity-tested). `needsReporterApproval` is the INTAKE gate (issue #448): an issue opened by an account outside the code org carries it until a trusted maintainer approves, and `isActionableForPickup` refuses to claim a carrier — so the loop cannot build work nobody in the org has green-lit. It is deliberately NOT `needsReporterReview`: that label is the #441 MERGE gate with its own confirmation-token grammar, and one reply must never release two different decisions. `verifyFailed` is applied by the post-deploy verifier when a PR's verification manifest has a failing assertion (issue #207) — it hooks the reporter ping and the follow-up auto-revert. `autoHarvested` marks issues the cross-reviewer finding harvester files from valid findings OTHER PR reviewers (gemini-code-assist, chatgpt-codex-connector) raised and ShipFlow missed (part of #56). `reviewing` is on a PR while the server's PR review runs on it, and a sweep removes it when no running review holds it (issue #1446). Repaint/matching semantics stay per-consumer — only the literals are shared.",
       colors: {
         bug: "d73a4a",
         enhancement: "a2eeef",
@@ -2587,7 +2587,8 @@ var init_shipflow_contract_data = __esm(() => {
         "via-shipflow": "0e7490",
         "auto-harvested": "d876e3",
         "⏳ waiting-on": "fbca04",
-        "loop-closed": "6f42c1"
+        "loop-closed": "6f42c1",
+        "\uD83D\uDD0D shipflow-reviewing": "bfd4f2"
       },
       prefixColors: {
         "category:": "5319e7",
@@ -2605,7 +2606,8 @@ var init_shipflow_contract_data = __esm(() => {
         autoHarvested: "auto-harvested",
         waitingOn: "⏳ waiting-on",
         loopClosed: "loop-closed",
-        loopProceed: "loop-proceed"
+        loopProceed: "loop-proceed",
+        reviewing: "\uD83D\uDD0D shipflow-reviewing"
       }
     },
     markers: {
