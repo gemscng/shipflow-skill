@@ -10242,6 +10242,12 @@ var REVIEW_CONTRACT = {
   },
   categories: ["correctness", "security", "performance", "style", "cleanup"],
   defaultCategory: "correctness",
+  summary: {
+    $comment: "The review summary both reviewers post (issue #1437): what the PR does and its overall risk, naming no concern, because every concern is a finding. The server's finder and verifier prompts ask for 1 to maxSentences sentences of at most maxWordsPerSentence words (reviewcontract.SummaryRule). The loop's `pr post-review` refuses (exit 1, nothing posted) a summary over maxSentences sentences or maxChars characters, on more than one line, or opening with a list, quote, heading, or table marker (review-contract.ts summaryShapeError).",
+    maxSentences: 2,
+    maxWordsPerSentence: 14,
+    maxChars: 280
+  },
   merge: {
     $comment: "Finding/coverage-row identity for merge (issue #378/#508, within-review collapse #993). Fingerprint is the issue/item text after lowercase + every non-letter/digit rune → space + whitespace collapsed (Go unicode.IsLetter/IsDigit ↔ TS \\p{L}/\\p{N}). Findings collapse when canonical file identity matches AND fingerprints are exact or their token-set Jaccard is >= fingerprintSimilarityThreshold; line is not part of the key. Coverage rows match on fingerprint only (no path). First-seen text/location wins and severity escalates to the max seen — those policy rules live in the server's mergeReviewPasses and the CLI's post-review collapse. Threshold 0.6 is the #378 value; do not retune it here (#509 owns eval-driven retune; #964 titles Jaccard 0.5454545 and #966 coverage items 1/3 Jaccard 0.5384615 must stay uncollapsed). normalizeTestVectors / similarTestVectors pin the helpers across both languages (similar vectors are already-normalized fingerprints).",
     key: ["path", "fingerprint"],
@@ -10647,6 +10653,27 @@ function findingsIssueGuardError(findings) {
       return `findings[${i}].issue must be a non-empty string`;
     }
   }
+  return;
+}
+var SUMMARY_MAX_CHARS = REVIEW_CONTRACT.summary.maxChars;
+var SUMMARY_MAX_SENTENCES = REVIEW_CONTRACT.summary.maxSentences;
+var SUMMARY_RULE = `one line, at most ${SUMMARY_MAX_SENTENCES} sentences and ${SUMMARY_MAX_CHARS} characters: what the PR does and its overall risk, naming no concern`;
+var GATE_FINDING_SHAPE = `{"path":"","line":0,"severity":"medium","issue":"<the gate>","fix":"<the one action that clears it>"}`;
+function summaryShapeError(summary) {
+  const s = summary.trim();
+  if (!s)
+    return;
+  if (s.includes(`
+`))
+    return "it spans more than one line";
+  if (/^(?:[-*+]\s|\d+[.)]\s|[>#|])/.test(s))
+    return "it opens with a list, quote, heading, or table marker";
+  const sentences = s.split(/(?<=[.!?])\s+/).length;
+  if (sentences > SUMMARY_MAX_SENTENCES)
+    return `it has ${sentences} sentences (at most ${SUMMARY_MAX_SENTENCES})`;
+  const chars = Array.from(s).length;
+  if (chars > SUMMARY_MAX_CHARS)
+    return `it is ${chars} characters (at most ${SUMMARY_MAX_CHARS})`;
   return;
 }
 var REVIEW_MARKER = SHIPFLOW_CONTRACT.markers.loopReview;
@@ -12896,7 +12923,7 @@ ${opts.body ?? ""}`;
     writeCapture(opts.out, diff);
     emit(opts, { ...out, ok: true }, () => console.log(`files=${files} lines=${lines} sha256=${sha256}`));
   }));
-  pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", "1-2 sentence verdict summary").option("--verdict <v>", `One of: ${LOOP_VERDICTS.join(" | ")}. Anything else is REFUSED (exit 1, nothing posted) — never rewritten to \`comment\` (issue #671)`, "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...], coverage:[{item,status,evidence}]}). Pass '-' to read stdin — stdin is read ONLY with '-'. Without the flag the command posts ZERO findings, and a bare `… | pr post-review` FAILS LOUDLY (exit 1, nothing posted) instead of dropping the pipe silently: any byte seen on stdin before the review is posted refuses, however slow the producer (issue #427)").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to post --verdict approve on a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the review body").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  pr.command("post-review <number>").description("Post the loop reviewer's findings as a formal review with INLINE diff-anchored comments (like the server) — findings sit on the code diff, not a diff-less top-level comment").option("--summary <text>", `${SUMMARY_RULE}. Each concern is a --findings entry; anything else is REFUSED (exit 1, nothing posted) (issue #1437)`).option("--verdict <v>", `One of: ${LOOP_VERDICTS.join(" | ")}. Anything else is REFUSED (exit 1, nothing posted) — never rewritten to \`comment\` (issue #671)`, "comment").option("--findings <path>", "JSON file of findings (array or {findings:[...], coverage:[{item,status,evidence}]}). Pass '-' to read stdin — stdin is read ONLY with '-'. Without the flag the command posts ZERO findings, and a bare `… | pr post-review` FAILS LOUDLY (exit 1, nothing posted) instead of dropping the pipe silently: any byte seen on stdin before the review is posted refuses, however slow the producer (issue #427)").option("--scan-files <n>", "Attestation (issue #407): how many files the security scan actually READ. Cross-checked against GitHub's changed-file count; required to post --verdict approve on a code diff").option("--scan-report <path>", "The security scan's written findings — must be a non-empty file; required to approve, and recorded in the review body").option("--scan-digest <sha256>", "The `sha256=` that `pr diff` printed for the capture you scanned — re-derived from GitHub and refused when it differs; required to approve").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const rawVerdict = (opts.verdict ?? "").trim();
     if (!LOOP_VERDICTS.includes(rawVerdict)) {
       console.error(`Unknown review verdict "${opts.verdict ?? ""}" — valid: ${LOOP_VERDICTS.join(", ")}`);
@@ -12904,6 +12931,14 @@ ${opts.body ?? ""}`;
       process.exit(1);
     }
     const verdict = rawVerdict;
+    const summaryText = stripScanLines(opts.summary ?? "");
+    const summaryErr = summaryShapeError(summaryText);
+    if (summaryErr) {
+      console.error(`--summary does not fit the review layout: ${summaryErr}.`);
+      console.error(`   Nothing was posted. The summary is ${SUMMARY_RULE}.`);
+      console.error(`   Post each concern as a --findings entry. A merge-gate blocker with no file is ${GATE_FINDING_SHAPE}.`);
+      process.exit(1);
+    }
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     let rawFindings;
@@ -12978,7 +13013,7 @@ ${opts.body ?? ""}`;
     const anchors = diffAnchors(diffText);
     const hunks = diffHunks(diffText);
     const summary = [
-      stripScanLines(opts.summary ?? ""),
+      summaryText,
       recordsScanLine(scan, approving) ? scanAttestationLine(scan, opts.scanReport, opts.scanDigest) : ""
     ].filter(Boolean).join(`
 

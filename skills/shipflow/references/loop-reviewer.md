@@ -281,7 +281,7 @@ mean "irrelevant", they stop meaning anything.
      Open the PR's `🧪 Test evidence` comment, download each after-shot and
      defect shot it links, and Read it. One with no red outline on the
      region its caption names counts as missing evidence: `request_changes`,
-     named in `--summary` by label and caption; the worker marks it
+     a gate finding naming the label and caption; the worker marks it
      (`browser-testing.md` § Mark what changed) and re-attaches it via
      `issue evidence`. Before-shots need no mark.
    - **Preview-deploy regression gate (when available):** preview deploy
@@ -316,7 +316,7 @@ mean "irrelevant", they stop meaning anything.
    bad multi-line comment, and one 422 drops every inline comment in the
    review). One line is still correct for a genuinely one-line defect.
 
-   **Every finding carries `before` / `after` (issue #960)** — the observable
+   **Every code finding carries `before` / `after` (issue #960)** — the observable
    behavior now vs. once fixed, ≤20 words each; the CLI renders them as a
    `| Before | After |` table under the issue line. Behavior, not code (the
    suggestion block already shows the code pair). Both-or-neither: a lone
@@ -324,12 +324,31 @@ mean "irrelevant", they stop meaning anything.
    finding is probably a style nit — drop it (`message-style.md` § Before →
    after).
 
-   **A finding is a code defect in a file; gate checks are not findings.**
-   Missing design sign-off, missing or unmarked screenshots, missing
-   per-feature evidence, red CI, open threads, and a negative health delta
-   go in `--summary` and decide the verdict. They have no file or line, so
-   as findings they post with no anchor and a made-up before/after pair.
-   Every finding needs a `path`.
+   **Every concern is a finding; the summary names none (issue #1437).**
+   This is the server review's rule, so both reviews read the same:
+   verdict header, a 1-2 sentence summary, `**N finding(s):**` with one
+   row per concern, the walkthrough. `--summary` says what the PR does
+   and its overall risk on one line, with no list, table, or checklist.
+   The limits live in `contracts/review-contract.json` → `summary`, which
+   the server's prompts read too; `pr post-review` refuses a summary
+   outside them (exit 1, nothing posted) and names the limit it broke.
+
+   A merge-gate blocker is a **gate finding**: no linked brief, missing
+   design sign-off, missing or unmarked evidence, red CI, an open thread,
+   a negative health delta. It has no file, so `path` is `""` and `line`
+   is `0`; `issue` names the gate and `fix` names the one action that
+   clears it. It has no `before` / `after`: there is no code behavior to
+   compare, so omit both and never invent a pair. It lists in the
+   overview and folds into *Further findings*, where the server puts a
+   finding it cannot anchor. Post one gate finding per gate, and name
+   every feature it covers in that one finding.
+
+   ```json
+   [{"path":"","line":0,"severity":"medium","issue":"No linked issue or acceptance brief",
+     "fix":"Link the issue this PR implements (Fixes #N / Part of #N)"},
+    {"path":"","line":0,"severity":"medium","issue":"No evidence for 7 of 9 touched features",
+     "fix":"Link an issue, then attach one marked pair per feature with `issue evidence`"}]
+   ```
 
    ⛔ **`--findings -` is not optional on the pipe form (issue #427).** stdin
    is read only on an explicit `--findings -` (the `!isTTY` fallback was
@@ -397,10 +416,10 @@ mean "irrelevant", they stop meaning anything.
      three scan flags required (§0b), same `pr diff` capture; both commands
      refuse (exit 9) on a missing one, 0, a file-list mismatch, or a foreign
      digest.
-   - **request_changes** → the inline findings ARE the required fixes (incl.
-     every unresolved external thread). The orchestrator re-dispatches a
-     worker; after it pushes + `pr resolve`s the threads, re-review. Never
-     approve while a thread is open.
+   - **request_changes** → the findings ARE the required fixes (gate
+     findings and every unresolved external thread included). The
+     orchestrator re-dispatches a worker; after it pushes + `pr resolve`s
+     the threads, re-review. Never approve while a thread is open.
    - **blocked** → `renaiss-shipflow pr post-review <n> --verdict blocked
      --summary "Not a code defect — <gate> could not run. <one action>."`
      Zero findings. The approve command still refuses.
