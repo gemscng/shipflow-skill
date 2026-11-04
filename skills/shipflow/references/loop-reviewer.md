@@ -397,7 +397,13 @@ mean "irrelevant", they stop meaning anything.
      checklists, or a scan line into it — the review already carries them,
      and the approve command appends the one authoritative scan record
      itself (a pasted scan line is stripped).
-   - **Re-approving after a rebase with the diff digest unchanged** → the
+   - **Same head already reviewed (issue #1440)** → if the PR's latest
+     `<!-- shipflow:loop-reviewed head:<sha> patch:<digest> -->` receipt
+     matches the current head SHA, post **nothing**. The prior review is
+     the gate record; a second wall of text on an unchanged diff is noise.
+     `pr post-review` and approve stamp that receipt next to
+     `<!-- shipflow:loop-review -->`.
+- **Re-approving after a rebase with the diff digest unchanged** → the
      summary and the stamp are both just:
      `Re-approved <sha12> — rebase only, diff unchanged.`
      The original review remains the gate record; repeating it makes the

@@ -2626,6 +2626,7 @@ var init_shipflow_contract_data = __esm(() => {
       triaged: "<!-- shipflow:triaged -->",
       loop: "<!-- shipflow:loop -->",
       loopReview: "<!-- shipflow:loop-review -->",
+      loopReviewed: "<!-- shipflow:loop-reviewed",
       interpretationNote: "<!-- shipflow:interpretation -->",
       markerPrefix: "<!-- shipflow:",
       intentGateCleared: "<!-- shipflow:intent-gate-cleared",
@@ -2873,17 +2874,42 @@ function loopReviewable(pr) {
     return false;
   return linkedIssueNumbers(pr).length > 0;
 }
-function loopReviewedHead(pr, me, lastHeadAt) {
-  const mine = (pr.reviews ?? []).filter((r) => !!r.author && foldLogin(r.author.login) === foldLogin(me));
-  if (mine.length === 0)
+function parseLoopReviewedMarker(body) {
+  const m = /<!--\s*shipflow:loop-reviewed\s+head:([0-9a-fA-F]{7,40})\s+patch:([0-9a-f]{16,64})\s*-->/.exec(body ?? "");
+  return m ? { head: m[1], patch: m[2] } : null;
+}
+function loopReviewedSameHead(pr, headSha) {
+  const want = commitSha(headSha);
+  if (!want)
     return false;
+  const bodies = [];
+  for (const c of pr.comments ?? [])
+    if (c.body)
+      bodies.push(c.body);
+  for (const r of pr.reviews ?? [])
+    if (r.body)
+      bodies.push(r.body);
+  for (const body of bodies) {
+    const seen = parseLoopReviewedMarker(body);
+    if (seen && commitSha(seen.head) === want)
+      return true;
+  }
+  return false;
+}
+function loopReviewedHead(pr, me, lastHeadAt, opts) {
+  const mine = (pr.reviews ?? []).filter((r) => !!r.author && foldLogin(r.author.login) === foldLogin(me));
+  if (mine.length === 0) {
+    return !!opts?.headSha && loopReviewedSameHead(pr, opts.headSha);
+  }
   const headMs = Date.parse(lastHeadAt ?? "");
   if (lastHeadAt == null || Number.isNaN(headMs))
     return true;
-  return mine.some((r) => {
+  if (mine.some((r) => {
     const submitted = Date.parse(r.submittedAt ?? "");
     return !Number.isNaN(submitted) && submitted >= headMs;
-  });
+  }))
+    return true;
+  return !!opts?.headSha && loopReviewedSameHead(pr, opts.headSha);
 }
 function classifyPR(pr, me, opts = {}) {
   let reasons = prAttentionReasons(pr, me);
@@ -2935,7 +2961,7 @@ function classifyPR(pr, me, opts = {}) {
     state = "awaiting_human";
   else if (approved)
     state = "approved_ready";
-  else if (loopReviewable(pr) && !loopReviewedHead(pr, me, opts.lastHeadAt))
+  else if (loopReviewable(pr) && !loopReviewedHead(pr, me, opts.lastHeadAt, { headSha: opts.headSha ?? pr.headRefOid }))
     state = "needs_review";
   else if (ageHours >= staleHours)
     state = "stale";
@@ -3331,7 +3357,7 @@ function foreignConflictedPRs(mine, all, me, opts = {}) {
     return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
   });
 }
-var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", MERGED_UNREVIEWED_REASON = "merged_unreviewed", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_OVERRIDE_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, INTAKE_GATE_AUDIT_MARKER, INTAKE_GATE_AUDIT_LINE, INTAKE_TRUSTED_MARKER, INTAKE_TRUSTED_LINE, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
+var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", MERGED_UNREVIEWED_REASON = "merged_unreviewed", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", LOOP_REVIEWED_MARKER, INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_OVERRIDE_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, INTAKE_GATE_AUDIT_MARKER, INTAKE_GATE_AUDIT_LINE, INTAKE_TRUSTED_MARKER, INTAKE_TRUSTED_LINE, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
 var init_pr_state = __esm(() => {
   init_shipflow_contract_data();
   FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
@@ -3347,6 +3373,7 @@ var init_pr_state = __esm(() => {
   ];
   APPROVED_HEAD_MARKER = SHIPFLOW_CONTRACT.markers.approvedHead;
   APPROVED_HEAD_LINE = new RegExp(`^${APPROVED_HEAD_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+sha=(\\S+?)\\s*-->$`);
+  LOOP_REVIEWED_MARKER = SHIPFLOW_CONTRACT.markers.loopReviewed;
   INTENT_BLOCKED_BY_DETAIL = {
     label: "blocking input: the `needs-reporter-review` label",
     signal: "blocking input: the PR body's interpretation/deviation signal (no label to remove — removal would be a no-op; reply with a confirmation token; token-less path: apply-then-clear)",
@@ -12271,11 +12298,22 @@ function renderPrNoteBody(body, reworkFrom) {
   return parts.join(`
 `);
 }
-function stampLoopReview(body) {
+var LOOP_REVIEWED_MARKER2 = SHIPFLOW_CONTRACT.markers.loopReviewed;
+function renderLoopReviewedMarker(head, patch) {
+  return `<!-- shipflow:loop-reviewed head:${head} patch:${patch} -->`;
+}
+function stampLoopReview(body, seen) {
   const marker = SHIPFLOW_CONTRACT.markers.loopReview;
-  return body.includes(marker) ? body : `${body.replace(/\s+$/, "")}
+  let out = body.includes(marker) ? body : `${body.replace(/\s+$/, "")}
 
 ${marker}`;
+  if (seen?.head && seen?.patch) {
+    const line = renderLoopReviewedMarker(seen.head, seen.patch);
+    if (!out.includes(LOOP_REVIEWED_MARKER2))
+      out = `${out.replace(/\s+$/, "")}
+${line}`;
+  }
+  return out;
 }
 function renderIntentGateNotice(opts) {
   const blockedBy = opts?.blockedBy ?? (opts?.hasLabel === false ? "signal" : "label");
@@ -13260,6 +13298,13 @@ ${opts.body ?? ""}`;
     if (stdinWatch && await stdinWatch.sawBytes())
       refuseUnflaggedPipe(number);
     stdinWatch?.release();
+    try {
+      const headSha = ghPRHeadOid(repo, number) ?? "";
+      const patch = diffDigest(diffText);
+      if (headSha && patch) {
+        payload.body = stampLoopReview(payload.body, { head: headSha, patch });
+      }
+    } catch {}
     ghCreateReview(repo, number, payload);
     const inlineCount = payload.comments.length;
     const foldedCount = findings.length - inlineCount;
@@ -13312,7 +13357,7 @@ Address + resolve them (pr resolve), then approve (or --force).`));
 
 `);
     try {
-      execSync6(`gh pr comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(stampLoopReview(opts.comment))}`, { stdio: ["ignore", "ignore", "inherit"] });
+      execSync6(`gh pr comment ${number} --repo ${shellQuote(repo)} --body ${shellQuote(stampLoopReview(opts.comment, headSha && opts.scanDigest ? { head: headSha, patch: opts.scanDigest } : undefined))}`, { stdio: ["ignore", "ignore", "inherit"] });
     } catch (e) {
       emit(opts, { number, approved: false, scan: scanField, ...degradedField({ degraded: [...ctx.degraded, GITHUB_REST_DEP] }) }, () => {
         console.error(`⛔ Not approving PR #${number}: the scan attestation comment could not be posted (${flattenCause(e)}).`);
