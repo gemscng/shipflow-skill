@@ -5408,6 +5408,10 @@ function ghResolveReviewThread(threadId) {
     _exec(`gh api graphql -f query=${shellQuote(m)} -f t=${shellQuote(threadId)}`, { stdio: "ignore" });
   } catch {}
 }
+function ghReplyToReviewThread(threadId, body) {
+  const m = "mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$t,body:$b}){comment{id}}}";
+  _exec(`gh api graphql -f query=${shellQuote(m)} -f t=${shellQuote(threadId)} -f b=${shellQuote(body)}`, { stdio: ["ignore", "pipe", "pipe"] });
+}
 var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, HeadCommitMismatchError, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner,headRefOid,mergedAt", GH_GRAPHQL_PAGE_MAX = 100, LIST_BY_LABEL_FIELDS, LABEL_COLORS, LABEL_PREFIX_COLORS, BODY_REVISION_PAGE_CAP = 50;
 var init_gh = __esm(() => {
   init_sh();
@@ -12168,6 +12172,7 @@ init_shipflow_contract_data();
 init_sh();
 init_pr_state();
 init_helpers();
+init_provenance();
 init_project();
 var LINT_MODES = ["warn", "strict"];
 function claimLoopReview(ctx, number, body) {
@@ -13430,14 +13435,32 @@ ${t.body}`);
     const { claim } = await claimLoopReview(ctx, number, { repo, headSha: opts.head, ttlMinutes });
     emit(opts, { number, repo, claim }, () => console.log(`\uD83D\uDD12 PR #${number} is claimed for loop review until ${claim.expiresAt}; the server skips its webhook reviews until then.`));
   }));
-  pr.command("resolve <number>").description("Resolve review threads the loop has addressed (all unresolved, or specific --thread ids)").option("--thread <id...>", "Specific thread node-id(s) to resolve (default: all unresolved)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  pr.command("resolve <number>").description("Resolve review threads the loop has addressed — requires --reason (posted as the thread reply; issue #1389)").option("--thread <id...>", "Specific thread node-id(s) to resolve (default: all unresolved)").option("--reason <reason>", "Why this thread is resolved (e.g. fixed in <sha>, or why the finding is wrong/intentional); posted as the thread reply").option("--reason-file <path>", "UTF-8 reason file; '-' reads stdin; mutually exclusive with --reason").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+    if (opts.reason !== undefined && opts.reasonFile !== undefined) {
+      throw new UsageError("pr resolve: --reason and --reason-file are mutually exclusive — pass one or the other.");
+    }
+    const reasonRaw = opts.reasonFile !== undefined ? readFileSync5(opts.reasonFile === "-" ? 0 : opts.reasonFile, "utf8") : opts.reason;
+    const reason = (reasonRaw ?? "").trim();
+    if (!reason) {
+      throw new UsageError("pr resolve: --reason (or --reason-file) is required — post why the finding is fixed, wrong, or intentional before resolving.");
+    }
     const ctx = await loadGhCtx(program2, opts.repo);
     const { number, repo } = resolveTarget(ctx, numberStr, opts);
     const unresolved = ghReviewThreads(repo, number).filter((t) => !t.isResolved);
     const targets = opts.thread?.length ? unresolved.filter((t) => opts.thread.includes(t.id)) : unresolved;
-    for (const t of targets)
+    if (opts.thread?.length) {
+      const all = ghReviewThreads(repo, number);
+      const trulyUnknown = opts.thread.filter((id) => !all.some((t) => t.id === id));
+      if (trulyUnknown.length) {
+        throw new UsageError(`pr resolve: unknown thread id(s): ${trulyUnknown.join(", ")}. Refresh with pr reviews.`);
+      }
+    }
+    const replyBody = stampProvenance(reason);
+    for (const t of targets) {
+      ghReplyToReviewThread(t.id, replyBody);
       ghResolveReviewThread(t.id);
-    emit(opts, { number, resolved: targets.length, ...degradedField(ctx) }, () => console.log(`\uD83E\uDDF5 Resolved ${targets.length} review thread(s) on PR #${number}.`));
+    }
+    emit(opts, { number, resolved: targets.length, replied: targets.length, reason, ...degradedField(ctx) }, () => console.log(`\uD83E\uDDF5 Resolved ${targets.length} review thread(s) on PR #${number} (reason posted on each).`));
   }));
 }
 function branchAuthorEmails() {

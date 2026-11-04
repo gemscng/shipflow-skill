@@ -89,8 +89,13 @@ Scope/behavior changed, or the reporter should know →
 
 ## 6. Resolve the threads you addressed
 
-`renaiss-shipflow pr resolve <n> --thread <id>` (ids from step 1) so the
-thread stops blocking approval/merge. Only resolve threads you actually
+Answer every finding first — `"fixed in <sha>"`, or why it is wrong or
+intentional — then resolve:
+
+`renaiss-shipflow pr resolve <n> --thread <id> --reason "fixed in <sha>"`
+(ids from step 1). `--reason` (or `--reason-file`) is required and is posted
+as the thread reply before the thread is marked resolved; bulk resolve with
+no reason is refused (issue #1389). Only resolve threads you actually
 addressed.
 
 ## 7. Hand back for re-review
