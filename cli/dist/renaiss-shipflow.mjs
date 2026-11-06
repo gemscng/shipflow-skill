@@ -2549,6 +2549,17 @@ var init_shipflow_contract_data = __esm(() => {
         "skipped"
       ]
     },
+    prReviewStages: {
+      $comment: "The ordered stages of a pr_review run. The runner reports each one as execution progress at its start (progress.stage = id, stage_num = 1-based position, total_stages = list length), and the dashboard activity feed draws them as a stepper with these labels. The Go runner's stage list (workflow/pr_review_stages.go) is pinned to these ids by a parity test. A run can jump over a stage it does not run (review_verify=false skips verify).",
+      values: [
+        { id: "check", label: "Check PR" },
+        { id: "diff", label: "Read diff" },
+        { id: "context", label: "Gather context" },
+        { id: "review", label: "Review" },
+        { id: "verify", label: "Verify findings" },
+        { id: "post", label: "Post review" }
+      ]
+    },
     channelTypes: {
       $comment: "The complete domain.ChannelType taxonomy (notification.go — notification delivery methods), single-sourced per issue #185. Go's domain.AllChannelTypes is pinned to this list by a parity test, the dashboard and CLI ChannelType unions derive from it, and a spec-accuracy test pins every channelType enum in openapi.yaml to it (the spec had verified drift: `telegram` was live everywhere but missing from NotificationChannel/CreateChannelRequest).",
       values: [
