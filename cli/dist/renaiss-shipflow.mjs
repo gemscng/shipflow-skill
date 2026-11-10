@@ -3879,6 +3879,8 @@ function findHumanReplyAfterEscalation(comments) {
     const c = comments[i];
     if ((c.authorLogin ?? "").endsWith("[bot]"))
       continue;
+    if (c.viewerDidAuthor !== true && !TRUSTED_AUTHOR_ASSOCIATIONS.has((c.authorAssociation ?? "").trim().toUpperCase()))
+      continue;
     const typed = stripQuotedLines(c.body).trim();
     if (!typed || isEscalationBanner(typed) || typed.includes(SHIPFLOW_CONTRACT.markers.markerPrefix))
       continue;

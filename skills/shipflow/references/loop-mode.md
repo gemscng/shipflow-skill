@@ -445,7 +445,9 @@ A PR becomes `approved_ready` **only** via reviewer approval — never
 hand-add `shipflow-approved`. Per in-progress issue with a `newComment`, a
 worker reads + acts. **A human reply on a `needs-human` issue unblocks it**
 — only a *decision*, from a person (never the loop's own `🚧 **Needs a
-human**` / evidence comments):
+human**` / evidence comments) whom GitHub reports as OWNER, MEMBER or
+COLLABORATOR, or the operator's own account; anyone else's reply leaves it
+parked:
 
 - **Trigger** — a green-light reply ("proceed / go ahead / just work on it
   / do it") or a structured per-decision reply; question/chatter-only stays
