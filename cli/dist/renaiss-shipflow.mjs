@@ -5618,6 +5618,15 @@ function getApiCtx(cmd) {
 function resolveTarget(ctx, numberStr, opts) {
   return { number: parseInt(numberStr, 10), repo: opts.repo ?? ctx.project.repoFullName };
 }
+function subcommandFlag(cmd, key) {
+  const own = cmd.opts()[key];
+  if (typeof own === "string" && own)
+    return own;
+  if (cmd.getOptionValueSourceWithGlobals(key) !== "cli")
+    return;
+  const value = cmd.optsWithGlobals()[key];
+  return typeof value === "string" && value ? value : undefined;
+}
 function getOrg(cmd) {
   return cmd.optsWithGlobals().org || "default";
 }
@@ -6473,9 +6482,13 @@ function formatTokenConnectError(status, body) {
   }
   return null;
 }
+function loginOrgFlag(opts, cmd) {
+  return opts.org || subcommandFlag(cmd, "org");
+}
 function registerLoginCommand(program2) {
-  program2.command("login").description("Sign in to ShipFlow (uses gh auth)").option("--no-gh-bootstrap", "Don't auto-run `gh auth login` if gh isn't logged in").option("--with-gh-token", "If no ShipFlow org exists for your account yet, connect one with your gh token — a bridge while the GitHub App install awaits an org admin's approval (#980)").option("--org <login>", "Org to sign in to (skips the tenant prompt); with --with-gh-token, the org to connect (defaults to your only org without the App)").option("--all", "Sign in to every tenant you belong to, each in its own store (issue #1146) — no prompt").action(runAction(async (opts) => {
-    if (opts.all && opts.org) {
+  program2.command("login").description("Sign in to ShipFlow (uses gh auth)").option("--no-gh-bootstrap", "Don't auto-run `gh auth login` if gh isn't logged in").option("--with-gh-token", "If no ShipFlow org exists for your account yet, connect one with your gh token — a bridge while the GitHub App install awaits an org admin's approval (#980)").option("--org <login>", "Org to sign in to (skips the tenant prompt); with --with-gh-token, the org to connect (defaults to your only org without the App)").option("--all", "Sign in to every tenant you belong to, each in its own store (issue #1146) — no prompt").action(runAction(async (opts, cmd) => {
+    const org = loginOrgFlag(opts, cmd);
+    if (opts.all && org) {
       console.error("--all signs in to every tenant; drop --org (or drop --all to pick one).");
       process.exit(1);
     }
@@ -6510,7 +6523,7 @@ function registerLoginCommand(program2) {
     try {
       result = await client.exchangeGhToken(ghToken);
       if (opts.withGhToken) {
-        const target = tokenConnectTargetAfterExchange(result.tenants, opts.org);
+        const target = tokenConnectTargetAfterExchange(result.tenants, org);
         if (target.kind === "connect") {
           const connected = await connectOrgWithGhToken(client, ghToken, target.org);
           result = connected.result;
@@ -6527,8 +6540,8 @@ function registerLoginCommand(program2) {
         console.error(formatNoTenantHelp(err instanceof ApiError ? err.body : "") ?? String(err));
         process.exit(1);
       }
-      const org = await pickOrgForTokenConnect(payload, opts.org);
-      const connected = await connectOrgWithGhToken(client, ghToken, org);
+      const connectOrg = await pickOrgForTokenConnect(payload, org);
+      const connected = await connectOrgWithGhToken(client, ghToken, connectOrg);
       result = connected.result;
       connectedLine = connected.line;
     }
@@ -6545,7 +6558,7 @@ function registerLoginCommand(program2) {
       console.log(`${result.tenants.length} tenant${result.tenants.length === 1 ? "" : "s"} signed in (${apiUrl}). ` + "Commands pick the store from each repo's origin owner; `renaiss-shipflow profiles` lists them." + identity.line);
       return;
     }
-    const wanted = opts.org?.trim().toLowerCase();
+    const wanted = org?.trim().toLowerCase();
     let chosen = result.tenants.find((t) => wanted && t.tenant.githubOrg.toLowerCase() === wanted) ?? result.tenants[0];
     if (result.tenants.length > 1 && !(wanted && chosen.tenant.githubOrg.toLowerCase() === wanted)) {
       const idx = await promptSelect("You belong to multiple ShipFlow tenants. Pick one:", result.tenants.map((t) => `${t.tenant.displayName} (${t.tenant.githubOrg})`));
@@ -7295,10 +7308,10 @@ function registerVersionCommand(program2, cliVersion2) {
   const cmd = program2.command("version").description("Show ShipFlow component versions: CLI, installed plugin/skill, the server build, and CLI drift vs the npm registry's latest").option("--api-url <url>", "Override the server URL for the build probe").option("--check", `Exit ${driftExitCode("stale")} when the installed CLI is BEHIND the registry (0 otherwise) — the loop's drift gate`).option("--json", "Output JSON").option("--yaml", "Output YAML");
   for (const g of GATEWAYS)
     cmd.option(`--${g.name}-url <url>`, `Override the ${g.name} gateway URL for the version probe`);
-  cmd.action(runAction(async (opts) => {
+  cmd.action(runAction(async (opts, self) => {
     const cli = cliVersion2;
     const plugin = installedPluginVersion();
-    const apiUrl = resolveApiUrl(opts.apiUrl);
+    const apiUrl = resolveApiUrl(subcommandFlag(self, "apiUrl"));
     const configuredGateways = GATEWAYS.map((g) => ({ name: g.name, url: resolveGatewayUrl(opts[g.flag], g.env) })).filter((g) => Boolean(g.url));
     const [server, registry, githubCred, gatewayProbes] = await Promise.all([
       probeServer(apiUrl),

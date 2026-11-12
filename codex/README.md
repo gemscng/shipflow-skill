@@ -9,7 +9,8 @@ also a Codex plugin marketplace (`.agents/plugins/marketplace.json` +
 ```bash
 codex plugin marketplace add gemscng/shipflow-skill   # registers the `shipflow` marketplace
 codex plugin add shipflow@shipflow                    # installs the plugin: shipflow + smart-commit skills
-npx -y @renaiss-shipflow/cli login                    # sign in once (rides on gh auth)
+# sign in once with the plugin's bundled CLI (rides on gh auth); npm's copy is stuck at 0.55.9
+"$(ls -d ~/.codex/plugins/cache/shipflow/shipflow/*/ | sort -V | tail -1)bin/renaiss-shipflow" login
 ```
 
 Optional, from the installed plugin: put the bundled CLI on PATH, install
