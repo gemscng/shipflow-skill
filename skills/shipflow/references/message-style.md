@@ -58,7 +58,12 @@ Rules that hold for every format:
   secrets, prod API keys) is never on the table — the choices for prod
   data work are "operator runs it" or "reproduce on a local DB first"
   (the escalation lint refuses the former; loop-mode.md § Guardrails).
-- Table cells read in one breath: the ≤30-word visible-line cap applies **per cell**.
+- Table cells read in one breath: ≤15 words per cell. Explanation goes under the table.
+- **Readability advisories (#1476).** The PR and issue create commands print
+  `💡 readability:` lines for: bullets over 12 words, cells over 15 words,
+  over 300 visible words, and a PR that does not open with `**Outcome:**`
+  or keeps `**Risk:**` below line 8. They never block, `--lint=strict`
+  included. Fix them anyway: they are what a reader trips on.
 - Detail nobody needs in order to act folds into `<details>`; it never renders unfolded.
 - Cut openers ("I have reviewed…"), hedges, and restatements of the diff.
 - If a bullet needs a second clause, split it or cut it.
@@ -134,15 +139,20 @@ already carry the pair as **Actual** (before) / **Expected** (after) —
 never duplicate it in prose; add a graphical pair only when the change is
 visual or structural (then it lands in the evidence table).
 
-PR body template (sections, all visual-first, blank line between each):
-`Closes #N` (full fix) / `Part of #N` (slice) · **Root cause** ≤3 bullets, `mermaid`
-if the failure is a flow · **Changed** table (file → before → after) · **Testing**
-checklist with numbers · **Evidence** images/links, each after-shot and defect
-shot outlined around the region its caption names (`browser-testing.md`
-§ Mark what changed) · `**Risk:** <tier>: <why>` — the tier and file `pr ready`
-prints, e.g. `high: deploy/mac-pair/autodeploy.sh` · `**How to revert:** <steps>`
-— usually `git revert <merge sha>`, plus any migration, config or deploy step
-the revert does not undo (#1391). The prose lint does not require either line.
+PR body template (sections, all visual-first, blank line between each). The
+first screen is what a reviewer triages on, so it opens with the outcome and
+the risk (#1476); ShipFlow's project + issue link is a footer that the PR command
+appends, so never write a `## ShipFlow context` block yourself:
+**`**Outcome:** <what changes for users>`** (one line) · `**Risk:** <tier>: <why>`
+— the tier and file `pr ready` prints, e.g. `high: deploy/mac-pair/autodeploy.sh`
+· **Evidence** images/links, each after-shot and defect shot outlined around the
+region its caption names (`browser-testing.md` § Mark what changed) ·
+**Changed** table (area → change, ≤15 words per cell) · `<details>` for **Root
+cause** (≤3 bullets, `mermaid` if the failure is a flow), **Testing** (checklist
+with numbers) and file lists · `**How to revert:** <steps>` — usually
+`git revert <merge sha>`, plus any migration, config or deploy step the revert
+does not undo (#1391). The prose lint does not require these lines; the
+readability advisories ask for the outcome and risk lines.
 
 ### Confirmation-only notification — one PR reply surface (#975)
 

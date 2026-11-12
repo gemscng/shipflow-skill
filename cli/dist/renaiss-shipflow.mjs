@@ -8405,6 +8405,97 @@ function lintJargonGloss(body) {
   }
   return problems;
 }
+var MAX_BULLET_WORDS = 12;
+var MAX_CELL_WORDS = 15;
+var MAX_VISIBLE_WORDS = 300;
+var RISK_WITHIN_LINES = 8;
+function visibleProseLines(body) {
+  let depth = 0;
+  let fenced = false;
+  const out = [];
+  for (const line of body.split(`
+`)) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced)
+      continue;
+    const stripped = line.replace(/`[^`\n]*`/g, " ");
+    const opens = (stripped.match(/<details\b/gi) ?? []).length;
+    const closes = (stripped.match(/<\/details>/gi) ?? []).length;
+    if (depth === 0 && opens === 0 && line.trim() !== "")
+      out.push(line);
+    depth = Math.max(0, depth + opens - closes);
+  }
+  return out;
+}
+function proseWords(text2) {
+  const t = text2.replace(/`[^`\n]*`/g, " x ").replace(/!?\[([^\]]*)\]\([^)]*\)/g, " $1 ").replace(/https?:\/\/\S+/g, " x ").replace(/<[^>\n]+>/g, " ");
+  return (t.match(/[\p{L}\p{N}][\p{L}\p{N}'’._/#+-]*/gu) ?? []).length;
+}
+var LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/;
+var TABLE_LINE = /^\s*\|.*\|\s*$/;
+var TABLE_SEPARATOR = /^\s*\|[\s:|-]+\|\s*$/;
+function preview(text2) {
+  const words = text2.replace(/`/g, "").trim().split(/\s+/);
+  return `"${words.slice(0, 6).join(" ")}${words.length > 6 ? " …" : ""}"`;
+}
+var OUTCOME_LINE = /^(?:>\s*)?(?:#+\s*)?(?:\p{Extended_Pictographic}\s*)?(?:\*\*)?(?:\p{Extended_Pictographic}\s*)?outcome\b/iu;
+var CALLOUT_OPENER = /^>\s*\[![A-Z]+\]\s*$/;
+var RISK_LINE = /^(?:>\s*)?\*\*Risk:?\*\*/i;
+function lintReadability(body, kind) {
+  const lines = visibleProseLines(body);
+  if (!lines.length)
+    return [];
+  const problems = [];
+  const longBullets = [];
+  let bullets = 0;
+  const longCells = [];
+  for (const line of lines) {
+    if (TABLE_LINE.test(line)) {
+      if (TABLE_SEPARATOR.test(line))
+        continue;
+      for (const cell of line.trim().replace(/^\||\|$/g, "").split("|")) {
+        const w = proseWords(cell);
+        if (w > MAX_CELL_WORDS)
+          longCells.push({ words: w, text: cell });
+      }
+      continue;
+    }
+    const m = LIST_ITEM.exec(line);
+    if (m) {
+      bullets++;
+      const w = proseWords(m[1]);
+      if (w > MAX_BULLET_WORDS)
+        longBullets.push({ words: w, text: m[1] });
+    }
+  }
+  const longest = (xs) => xs.reduce((a, b) => b.words > a.words ? b : a);
+  if (longBullets.length) {
+    const top = longest(longBullets);
+    problems.push(`${longBullets.length} of ${bullets} bullets run past ${MAX_BULLET_WORDS} words (longest ${top.words}: ${preview(top.text)}) — ` + "one point per bullet; move detail into a table row or <details>");
+  }
+  if (longCells.length) {
+    const top = longest(longCells);
+    problems.push(`${longCells.length} table cell${longCells.length === 1 ? "" : "s"} run past ${MAX_CELL_WORDS} words (longest ${top.words}: ${preview(top.text)}) — ` + "keep cells to a phrase; explain below the table");
+  }
+  const visibleWords = lines.reduce((n, l) => n + proseWords(l), 0);
+  if (visibleWords > MAX_VISIBLE_WORDS) {
+    problems.push(`${visibleWords} visible words (aim ≤${MAX_VISIBLE_WORDS}) — keep the outcome, risk and evidence visible; ` + "fold root cause, file lists and test logs into <details>");
+  }
+  if (kind === "pr") {
+    const first = CALLOUT_OPENER.test(lines[0].trim()) && lines.length > 1 ? lines[1].trim() : lines[0].trim();
+    if (!OUTCOME_LINE.test(first)) {
+      problems.push(`body opens with ${preview(first)}, not the outcome — start with "**Outcome:** <what changes for users>", ` + 'then "**Risk:** <tier>: <why>"');
+    }
+    const riskAt = lines.findIndex((l) => RISK_LINE.test(l.trim()));
+    if (riskAt >= RISK_WITHIN_LINES) {
+      problems.push(`**Risk:** is visible line ${riskAt + 1} — put it right under the outcome (within ${RISK_WITHIN_LINES} lines) so a reviewer can triage first`);
+    }
+  }
+  return problems;
+}
 var MAX_VISIBLE_BODY_LINES = 50;
 function lintBodyLength(body) {
   const visible = visibleLineCount(body);
@@ -9384,7 +9475,7 @@ function registerIssueCommand(program2) {
     const repo = opts.repo ?? ctx.project.repoFullName;
     const title = opts.title ?? await promptText("Title: ");
     let body = opts.body === "-" ? await readStdin() : opts.body ?? "";
-    const lint = [...lintIssueTitle(title), ...lintMessageBody(body), ...lintBodyLength(body), ...lintIssueOutcome(body), ...lintJargonGloss(body)];
+    const lint = [...lintIssueTitle(title), ...lintMessageBody(body), ...lintBodyLength(body), ...lintIssueOutcome(body), ...lintJargonGloss(body), ...lintReadability(body, "issue")];
     for (const p of lint)
       console.warn(`⚠️  body lint: ${p}`);
     duplicatePreflight(repo, title, opts);
@@ -11699,9 +11790,9 @@ function buildReviewPacket(input) {
       b.push("none");
     } else {
       for (const t of unresolved.slice(0, 20)) {
-        const preview = reviewThreadPreview(t);
+        const preview2 = reviewThreadPreview(t);
         const anchor = t.path ? `${t.path}${t.line ? `:${t.line}` : ""}` : "(top-level)";
-        b.push(`- ${t.id} ${anchor} @${preview.author} — ${preview.body}${preview.bodyTruncated ? "… [truncated]" : ""}`);
+        b.push(`- ${t.id} ${anchor} @${preview2.author} — ${preview2.body}${preview2.bodyTruncated ? "… [truncated]" : ""}`);
       }
       if (unresolved.length > 20)
         b.push(`_${unresolved.length - 20} more unresolved threads; list all with \`pr reviews ${pr.number}\`._`);
@@ -12776,7 +12867,7 @@ async function automergeOnce(ctx, repo, number, opts) {
 }
 function registerPRCommand(program2) {
   const pr = program2.command("pr").description("Pull request actions");
-  pr.command("create").description("Open a PR; prepends ShipFlow context to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (added under ShipFlow header)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--loop-review", "The ShipFlow loop reviews this PR itself: claim its review so the server's pr_review workflow skips it (see `pr review-claim`)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").addOption(new Option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR). Anything else is REFUSED (exit 1, no PR) — never treated as warn (issue #648)").choices([...LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  pr.command("create").description("Open a PR; appends a ShipFlow footer (project, issue link) to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (the ShipFlow footer is added after it)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--loop-review", "The ShipFlow loop reviews this PR itself: claim its review so the server's pr_review workflow skips it (see `pr review-claim`)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").addOption(new Option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR). Anything else is REFUSED (exit 1, no PR) — never treated as warn (issue #648)").choices([...LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const rawLint = opts.lint ?? "";
     if (!LINT_MODES.includes(rawLint)) {
       console.error(`Unknown lint mode "${opts.lint ?? ""}" — valid: ${LINT_MODES.join(", ")}. Nothing was created.`);
@@ -12810,6 +12901,8 @@ function registerPRCommand(program2) {
       for (const p of lintProblems)
         console.warn(`⚠️  body lint: ${p}`);
     }
+    for (const p of lintReadability(opts.body ?? "", "pr"))
+      console.warn(`\uD83D\uDCA1 readability: ${p}`);
     const ctx = await loadCtx(program2);
     const branch = currentBranch();
     const issueNumber = opts.issue ? parseInt(opts.issue, 10) : detectIssueFromBranch(branch);
@@ -12828,11 +12921,11 @@ function registerPRCommand(program2) {
       }
     }
     const linkMode = opts.partial ? "part-of" : "closes";
-    const issueUrl = issueNumber ? `https://github.com/${ctx.project.repoFullName}/issues/${issueNumber}` : undefined;
-    const header = buildShipFlowHeader(ctx.project.projectName, issueNumber, issueUrl, linkMode);
-    const body = `${header}
+    const footer = buildShipFlowFooter(ctx.project.projectName, issueNumber, linkMode);
+    const authored = (opts.body ?? "").trimEnd();
+    const body = authored ? `${authored}
 
-${opts.body ?? ""}`;
+${footer}` : footer;
     const created = ghPRCreate({ repo: ctx.project.repoFullName, body, title: opts.title, base: opts.base, head: branch, draft: opts.draft });
     const headSha = execSync6("git rev-parse HEAD").toString().trim();
     if (opts.loopReview) {
@@ -13686,14 +13779,13 @@ function hasVisibleSurface(paths) {
 function unlinkedVisibleSurfaceWarning(branch) {
   return `⚠️  No linked issue on a visible-surface diff: --issue was not given and branch "${branch}" carries no detectable issue number. ` + "Evidence cannot be attached until an issue is linked (`issue evidence <issue> --pr <pr>` needs an issue). " + "Pass --issue <n> (or name the branch issue/<n>, fix/issue-<n>, feat/issue-<n>, …). " + "Under --lint=strict this refuses to open the PR.";
 }
-function buildShipFlowHeader(project, issueNumber, issueUrl, linkMode = "closes") {
-  const lines = ["## ShipFlow context", `- Project: ${project}`];
-  if (issueNumber) {
-    const ref = linkMode === "part-of" ? `Part of #${issueNumber}` : `Closes #${issueNumber}`;
-    lines.push(issueUrl ? `- ${ref} — ${issueUrl}` : `- ${ref}`);
-  }
-  return lines.join(`
-`);
+var SHIPFLOW_FOOTER_PREFIX = "ShipFlow · ";
+function buildShipFlowFooter(project, issueNumber, linkMode = "closes") {
+  const parts = [`${SHIPFLOW_FOOTER_PREFIX}${project}`];
+  if (issueNumber)
+    parts.push(linkMode === "part-of" ? `Part of #${issueNumber}` : `Closes #${issueNumber}`);
+  return `---
+${parts.join(" · ")}`;
 }
 function resolutionRecipe(baseRef, root = null) {
   return [

@@ -118,19 +118,21 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    (`apps/renaissshipflow-cli/src/message-lint.ts`) exits 2 on a rejected
    body — restructure and re-run. Never bump versions in the PR or state
    them in the body — auto-bump versions main after merge (#548).
-   **Readable-body contract (#464)** — HEADLINE (un-collapsed) ≤ ~25 visible
-   lines: TLDR (≤4 sentences — what/why/risk), "What changed" (≤3 bullets),
-   one Verified line, `**Risk:** <tier>: <why>` (the tier and file `pr ready`
-   prints) and `**How to revert:** <steps>` (#1391); everything else in
+   **Readable-body contract (#464, #1476)** — HEADLINE (un-collapsed) ≤ ~25
+   visible lines, opening with `**Outcome:** <what changes for users>` then
+   `**Risk:** <tier>: <why>` (the tier and file `pr ready` prints); then
+   "What changed" (≤3 bullets, ≤12 words each), one Verified line and
+   `**How to revert:** <steps>` (#1391). The command prints
+   `💡 readability:` advisories (never exit 2) — fix them; everything else in
    `<details><summary><b>Section
    name</b> — one-line gist</summary>` blocks. Never folded: **Deviations
    from brief** and the `<!-- shipflow:interpretation -->` marker. Hard
    ceiling: 50 visible lines outside `<details>` (exit 2 under
    `--lint=strict`); write for ~25.
-   **Full fix** → header links `Closes #N` (closes on merge; default).
-   **Partial slice** → **`--partial`** → header links `Part of #N` (no
+   **Full fix** → footer links `Closes #N` (closes on merge; default).
+   **Partial slice** → **`--partial`** → footer links `Part of #N` (no
    closing keyword), parent stays open; don't hand-write `Part of #N` in
-   `--body` — the header still injects its link, `--partial` switches it.
+   `--body` — the footer still injects its link, `--partial` switches it.
 5b. **Deviations from brief — log them, don't bury them.** Off-brief pivot:
    take the conservative option, record it under a `## Deviations from brief`
    heading: `| Deviation | Why | Risk |`, one
