@@ -31,6 +31,16 @@ per-surface loop): `references/browser-testing.md` §4.
 **No UI surface** (schema, persistence, API-only, test-only)? Skip the pairs and
 attach the test-runner summary: `--file <issue>-vitest.txt --caption "Verified: …"`.
 The server renders the text inline; a pass/fail line in the PR body alone is not evidence.
+**API changes and public exposure** (#1489): with `--pr`, the command reads
+the PR diff and attaches `api-changes.diff`. It lists the routes added (`+`) and
+removed (`-`), and `! check:` lines for added secrets, email addresses and
+personal-data fields in API code (kind and `file:line`, never the value). Add
+what detection missed with `--api-change "+ GET /api/v1/items" "- field email in
+GET /users"`. State the sensitive data the change makes public, and to whom,
+with `--exposure "none"` or `--exposure "<what, to whom>"`: the command warns
+when routes changed and it is missing. Text files (`--file`) are uploaded to a
+public bucket, so secrets and personal email addresses in them are redacted
+first. `--no-api-scan` skips the diff scan. Nothing here blocks the upload.
 **Upload fails** (`API error 5xx` or `fetch failed`): add
 `⚠ no screenshot — evidence upload failed: <error> (<request id>)` to the PR's
 Testing list and re-run the same command once the API answers. Never push the

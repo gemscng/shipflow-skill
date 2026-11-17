@@ -11,5 +11,7 @@ Present the claim graphical-first (keep the triage substance verbatim — reshap
 3. Triage `relatedFiles` as a `- [ ]` checklist; `relatedCommits` as short lines.
 4. The issue body as-is below.
 
+When the fix is done, open the PR (`/shipflow-pr`), then attach evidence of the fix (`/shipflow-evidence`): before/after screenshots for a visible change, the test summary otherwise. `/shipflow-pr` prints the exact `issue evidence` command (#1487).
+
 <!-- Codex CLI custom prompt (generated from .claude/commands/shipflow-next.md).
      Install per codex/README.md; harness adaptation: skills/shipflow/references/codex.md -->

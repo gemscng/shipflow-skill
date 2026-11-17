@@ -61,7 +61,10 @@ leftover SHA, one acceptance-checklist line per leftover commit, and
 **exit 12 is a duplicate, not a failure** — read `{blocked: true,
 candidates}` and either comment on the candidate or re-file with
 `--allow-duplicate`. Full contract: loop-worker.md § "Merged mid-fix".
-Otherwise (open PR) push.
+Otherwise (open PR) push. If the fix changed what the PR's evidence shows
+(a screen, an output, a test result), attach new evidence for it after the
+push: `renaiss-shipflow issue evidence <issue> --pr <n> …` (`loop-worker.md`
+step 6, #1487).
 
 ## 4. Reply on the PR — necessary comments only
 

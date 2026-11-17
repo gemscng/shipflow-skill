@@ -193,6 +193,10 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    the whole log) with `--caption "Verified: <what the tests prove>"`. The
    server renders the text inline on the PR. A `Verified vitest N/N` line
    in the PR body with no attachment is a claim, not evidence.
+   **API changes** — `--pr` attaches `api-changes.diff` (routes `+`/`-`,
+   `! check:` lines for secrets and personal data). Add missed routes with
+   `--api-change "+ …"`/`"- …"`; always pass `--exposure "none"` or
+   `--exposure "<what, to whom>"` when routes changed (#1489).
    **One claim per image** — a caption asserts only what its image shows;
    needs "and" → split into more labeled pairs.
    **Mark the change, don't cover it** — before each after-shot, outline the
