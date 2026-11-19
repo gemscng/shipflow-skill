@@ -118,17 +118,14 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    (`apps/renaissshipflow-cli/src/message-lint.ts`) exits 2 on a rejected
    body — restructure and re-run. Never bump versions in the PR or state
    them in the body — auto-bump versions main after merge (#548).
-   **Readable-body contract (#464, #1476)** — HEADLINE (un-collapsed) ≤ ~25
-   visible lines, opening with `**Outcome:** <what changes for users>` then
-   `**Risk:** <tier>: <why>` (the tier and file `pr ready` prints); then
-   "What changed" (≤3 bullets, ≤12 words each), one Verified line and
-   `**How to revert:** <steps>` (#1391). The command prints
-   `💡 readability:` advisories (never exit 2) — fix them; everything else in
-   `<details><summary><b>Section
-   name</b> — one-line gist</summary>` blocks. Never folded: **Deviations
-   from brief** and the `<!-- shipflow:interpretation -->` marker. Hard
-   ceiling: 50 visible lines outside `<details>` (exit 2 under
-   `--lint=strict`); write for ~25.
+   **Body: `message-style.md` § PR body template** (#464, #1476) — Outcome,
+   Risk, Business flow, Evidence, Changed table, `<details>`, How to revert;
+   the section lists what strict refuses (exit 2). The Testing fold carries
+   the Verified line. The command prints `💡 readability:` advisories (never
+   exit 2) — fix them. Loop additions: fold the rest in
+   `<details><summary><b>Section name</b> — one-line gist</summary>` blocks;
+   never fold **Deviations from brief** or the
+   `<!-- shipflow:interpretation -->` marker.
    **Full fix** → footer links `Closes #N` (closes on merge; default).
    **Partial slice** → **`--partial`** → footer links `Part of #N` (no
    closing keyword), parent stays open; don't hand-write `Part of #N` in
@@ -279,7 +276,7 @@ Never `git push` to the closed PR branch. Filing without this push
 leaves unpushed leftover SHAs that 404 in the evidence table once the
 worktree is gone.
 
-**3. File it.** `renaiss-shipflow issue create --json`, body per the
+**3. File it.** `renaiss-shipflow issue create --json --lint=strict`, body per the
 **issue-body ladder** (`message-style.md`): status header sourcing
 `Part of #<parent>`, an evidence table citing `#<pr>`,
 `fix/pr-<n>-leftover`, and each leftover SHA,

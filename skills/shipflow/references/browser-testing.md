@@ -198,11 +198,12 @@ commit screenshots to the repo.
 
 Pair/mix: `validateEvidenceSelection`
 (`apps/renaissshipflow-cli/src/evidence.ts`). `--pr` lands the comment on
-the PR (plus the reporter's chat thread; issue linked via `Fixes #<n>`);
+the PR (plus the reporter's chat thread; the PR footer links the issue);
 without it, an issue comment. For a PR with no tracking issue, use
 `issue evidence <pr> --pr <pr>` so both the path number and `--pr` are the
-PR. `--file demo.mp4` adds a screen recording for
-flows that need motion. A change with no UI surface (schema, persistence,
+PR. A flow that needs motion gets a GIF (`--image repro.gif`): GitHub
+plays a GIF inline but strips an mp4 (`message-style.md` § Issue-body ladder,
+element 3). A change with no UI surface (schema, persistence,
 API-only, test-only) has nothing to screenshot: attach the test-runner summary
 instead, `--file "$EV/issue-<n>-vitest.txt" --caption "Verified: <what the
 tests prove>"`. The server renders the text inline on the PR.

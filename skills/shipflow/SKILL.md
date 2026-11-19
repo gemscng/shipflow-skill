@@ -51,7 +51,7 @@ are identical across harnesses.
 | "what's my status" | `renaiss-shipflow status --json` |
 | "list issues" | `renaiss-shipflow issues list --json` |
 | "export issues to excel" | `renaiss-shipflow issues export` (gh-style filters; `--out <file.xlsx>`) |
-| "file an issue about X" | `renaiss-shipflow issue create --title "X" --body "..."` — body: `references/loop-mode.md` § "Message style"; visible bug → `--screenshot <path...>`, broken element outlined (`references/browser-testing.md` § Mark what changed). **Exit 12 = duplicate, nothing created** (#580) → `references/feature-issue-detection.md` |
+| "file an issue about X" | `renaiss-shipflow issue create --lint=strict --title "X" --body "..."` — body: `references/message-style.md` § "Issue-body ladder", with a **Business flow** in business words, and a picture (table, mermaid diagram, screenshot or GIF) once it runs past 120 visible words; strict exits 2 and files nothing without them; visible bug → `--screenshot <path...>`, broken element outlined (`references/browser-testing.md` § Mark what changed). **Exit 12 = duplicate, nothing created** (#580) → `references/feature-issue-detection.md` |
 | ↳ who it lands on | Under `pickup-scope=assigned` (the default) it **auto-assigns the current gh login** (#673) — assignment is the queueing gesture, so an unassigned filing is invisible to `issue next`. `--assignee <login...>` overrides; **`--no-assign`** files it unassigned so the loop does NOT pick it up |
 | feature work with no issue / PR without `Fixes #N` | → `references/feature-issue-detection.md` |
 | "auto-create issues" | `renaiss-shipflow config set auto-issue true` |
@@ -69,7 +69,7 @@ are identical across harnesses.
 | "unmatched commit email" | `renaiss-shipflow git-identity --fix` |
 | "I'm done with #42" | `renaiss-shipflow issue done 42` |
 | "attach test evidence to #42" | `renaiss-shipflow issue evidence 42 --pr <pr> --before … --after … --label … --caption …` — any number of labeled pairs (CLI batches uploads, one comment/gallery); each after-shot outlined around the region its caption names (`references/browser-testing.md` § Mark what changed); `--file` for a recording, or the test-runner summary (`.txt`) when there is no UI surface; bug w/o fix → `--actual`; PR with no issue → `issue evidence <pr> --pr <pr>`; upload fails → `⚠ no screenshot` line + re-run later, never a side branch (`references/browser-testing.md` §6); with `--pr` it attaches `api-changes.diff` (routes +/−, secret and personal-data checks): add `--api-change "+ …"` for missed routes and `--exposure "none"` or what is made public (#1489) |
-| "open a PR" | `renaiss-shipflow pr create --json --lint=strict` (after committing) |
+| "open a PR" | `renaiss-shipflow pr create --json --lint=strict` (after committing); body: `references/message-style.md` § PR body template, which lists what strict refuses (exit 2) |
 | "is PR 87 mergeable" | `renaiss-shipflow pr ready 87 --json` |
 | "open review threads on 87" | `renaiss-shipflow pr reviews 87 --json` (read-only query like `pr ready`; parse `blocking`/`unresolvedThreads` — rc is not the signal) |
 | "resolve the threads I fixed" | `renaiss-shipflow pr resolve 87 --thread <id>` |
@@ -100,7 +100,7 @@ are identical across harnesses.
 
 - Pass `--json` whenever supported and parse it; never regex-scrape prose.
 - Present results graphical-first: one-line verdict, then table / checklist /
-  meter — contract: `references/loop-mode.md` § "Message style".
+  meter — contract: `references/message-style.md`.
 - Show the `triage` payload from `issue work` verbatim.
 - A failed signal POST (stderr warning) still means the GitHub-side action
   succeeded; mention it, don't retry.

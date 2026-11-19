@@ -28,7 +28,7 @@ refills the queue:
    once), severity + category from the taxonomy, not already open (dedupe
    is enforced by `issue create` itself — below; skip `auto-qa` items you
    already filed):
-   `renaiss-shipflow issue create --title "<bug>" --body "<issue-body ladder>"
+   `renaiss-shipflow issue create --lint=strict --title "<bug>" --body "<issue-body ladder>"
    --label bug --label auto-qa --label "severity:<…>" --label "area:<…>" --json`
    (`bug-taxonomy.md` §3; body = the **issue-body ladder**,
    `message-style.md` — status header sourcing `auto-qa sweep`). Attach evidence

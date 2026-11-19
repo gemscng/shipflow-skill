@@ -359,7 +359,7 @@ loop-authored PR goes through `renaiss-shipflow pr note <n> --body …
   `merge-policy` + CI + approval allow **and no review thread is
   unresolved** — hard gate; parks on `manual`). **Risk tier (#1391):**
   under either auto-* policy only a **low** PR (every file is docs, tests
-  or copy, author has write access) merges on `shipflow-approved`. A
+  or copy, not skill or agent docs; author has write access) merges on `shipflow-approved`. A
   **medium** PR (everything else) needs a person's APPROVED review on the
   current head; a **high** one (CI, deploy and release, auth, money,
   migrations, secrets, the merge gate, or the repo's `## High-risk paths`)
@@ -654,7 +654,7 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
       checklist on the parent as tracking; a sub-issue is not required
       (`loop-reviewer.md` item 1).
 
-   Gated follow-ups: `renaiss-shipflow issue create --title "…" --body
+   Gated follow-ups: `renaiss-shipflow issue create --lint=strict --title "…" --body
    "Part of #<n>: …" --json` — *before* dispatching the worker; bodies
    per the **issue-body ladder** (`message-style.md`), status header
    sourcing `Part of #<n>`. Later promotion of a Deferred item keeps

@@ -38,7 +38,7 @@ needed. Two caveats:
 ## Unchanged on every harness
 
 - Every `renaiss-shipflow` command, flag, and exit-code contract.
-- The Message style contract (`loop-mode.md` § "Message style") —
+- The Message style contract (`message-style.md`) —
   graphical-first tables/mermaid/checklists/meters.
 - Escalation lint rules, evidence pair rules, the PR-body template, the
   issue-body ladder.

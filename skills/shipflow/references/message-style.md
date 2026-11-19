@@ -63,7 +63,11 @@ Rules that hold for every format:
   `💡 readability:` lines for: bullets over 12 words, cells over 15 words,
   over 300 visible words, and a PR that does not open with `**Outcome:**`
   or keeps `**Risk:**` below line 8. They never block, `--lint=strict`
-  included. Fix them anyway: they are what a reader trips on.
+  included. Fix them anyway: they are what a reader trips on. What
+  `--lint=strict` does block (exit 2, nothing created): for an issue, no
+  **Business flow** section (§ Business flow) or a body over 120 visible
+  words with no table, diagram or image (§ Issue-body ladder, element 3);
+  for a PR, the list in § PR body template. Fix the body and run it again.
 - Detail nobody needs in order to act folds into `<details>`; it never renders unfolded.
 - Cut openers ("I have reviewed…"), hedges, and restatements of the diff.
 - If a bullet needs a second clause, split it or cut it.
@@ -139,20 +143,71 @@ already carry the pair as **Actual** (before) / **Expected** (after) —
 never duplicate it in prose; add a graphical pair only when the change is
 visual or structural (then it lands in the evidence table).
 
-PR body template (sections, all visual-first, blank line between each). The
-first screen is what a reviewer triages on, so it opens with the outcome and
-the risk (#1476); ShipFlow's project + issue link is a footer that the PR command
-appends, so never write a `## ShipFlow context` block yourself:
-**`**Outcome:** <what changes for users>`** (one line) · `**Risk:** <tier>: <why>`
-— the tier and file `pr ready` prints, e.g. `high: deploy/mac-pair/autodeploy.sh`
-· **Evidence** images/links, each after-shot and defect shot outlined around the
-region its caption names (`browser-testing.md` § Mark what changed) ·
-**Changed** table (area → change, ≤15 words per cell) · `<details>` for **Root
-cause** (≤3 bullets, `mermaid` if the failure is a flow), **Testing** (checklist
-with numbers) and file lists · `**How to revert:** <steps>` — usually
-`git revert <merge sha>`, plus any migration, config or deploy step the revert
-does not undo (#1391). The prose lint does not require these lines; the
-readability advisories ask for the outcome and risk lines.
+A PR body follows § PR body template below.
+
+### PR body template
+
+Every PR body, in this order, a blank line between sections. A reviewer
+triages on the first screen, so it opens with the outcome and the risk
+(#1476). The PR command appends the footer: the project and `Closes #<n>`
+(`Part of #<n>` with `--partial`). Never write a `## ShipFlow context`
+block or the issue link yourself; write `Fixes #<m>` only for another issue.
+
+| # | Section | Shape |
+|---|---|---|
+| 1 | `**Outcome:**` | One line: what changes for users |
+| 2 | `**Risk:**` | `<tier>: <why>`, the tier and file `pr ready` prints |
+| 3 | **Business flow** | `message-style.md` § Business flow: before → after in roles and screens |
+| 4 | **Evidence** | Images or links; each shot outlined (`browser-testing.md` § Mark what changed) |
+| 5 | **Changed** | Table, area → change |
+| 6 | `<details>` | **Root cause** (≤3 bullets, mermaid for a flow), **Testing** (checklist with numbers), file lists |
+| 7 | `**How to revert:**` | Usually `git revert <merge sha>`, plus any migration, config or deploy step it does not undo (#1391) |
+
+Bullets ≤12 words, cells ≤15 words; write for about 25 visible lines.
+`pr create --lint=strict` exits 2 and opens nothing when the body:
+
+- has no **Business flow** section, or a "no change" line with no reason
+- runs over 50 visible lines outside `<details>`
+- fails the prose lint (parallel facts written as sentences)
+- has a heading that nearly matches `## Deviations from brief`
+
+It also exits 2 when the branch changes a visible surface and no issue is
+linked. The `💡 readability:` lines (Outcome first, Risk within 8 lines,
+word caps) never block.
+
+### Business flow — every issue and PR body (#1493)
+
+A reader who has never seen the code should be able to follow what changes
+for the people who use the product. Every issue and PR body has a visible
+**Business flow** section (never folded into `<details>`): in an issue right
+after **Why**, in a PR right under **Outcome** and **Risk**.
+
+| The change | Shape |
+|---|---|
+| Changes what someone does or sees | `\| # \| Before \| After \|` table, one row per step |
+| A bug | Numbered steps of the user's journey; ❌ on the step that breaks |
+| Branches, or 3+ roles taking turns | Also a mermaid `flowchart` or `sequenceDiagram`, same words |
+| Internal only (refactor, CI, tests) | One line: `**Business flow:** no change — <why>` |
+| Filed by a machine before anyone knows the user impact | One line: `**Business flow:** not assessed — <why>` |
+
+Write it clean:
+
+- Actors are roles: Admin, Shop owner, Collector, Reviewer, the loop.
+- Steps say what the person does and sees: "Admin picks a storage location".
+- Business objects, not storage: "card", "branch", "payout", never `consigned_cards`.
+- No table names, file paths, routes, API or database words, or code spans.
+  Those belong in **Changed** or the technical part below.
+- At most 7 steps. In the After column, bold the steps that changed.
+
+**BAD:** `API->>action_logs: insert move row` ·
+**GOOD:** `Admin moves 40 cards to "Safe" → Activity Log shows one move`
+
+`issue create --lint=strict` and `pr create --lint=strict` refuse a body
+without the section (exit 2, nothing created); a "no change" line needs a
+reason. Code names inside the section print a `💡 business flow:` line.
+Issues and PRs the server files (bug triage, review findings, auto-revert)
+are tested against the same rules (`internal/bodyrules`, with
+`contracts/body-rules-vectors.json` shared by both sides).
 
 ### Confirmation-only notification — one PR reply surface (#975)
 
@@ -371,23 +426,52 @@ identifier. `issue create` warns (and returns the list as `lint` under
 | # | Element | When | Shape |
 |---|---|---|---|
 | 1 | **Status header** | always — the first line (the loop's Judge block, when present, sits above it — #969) | one blockquote line: `> <priority emoji> **P<n> · <type> · <area> · effort <S/M/L>** · <wave/source>` |
-| 2 | **Body core** | always | bug → the Repro core below; feature/task → the Why/What/Example core below |
-| 3 | **Mermaid diagram** | the defect or design branches, races, or spans ≥3 interacting components — never for a linear restatement of one line | small `flowchart`/`sequenceDiagram`/`stateDiagram` — beats prose causality when the SHAPE is the point |
+| 2 | **Body core** | always | bug → the Business flow + Repro core below; feature/task → the Why/Business flow/What/Example core below (`message-style.md` § Business flow, #1493) |
+| 3 | **Picture** | any body over 120 visible words (#1491) — `issue create --lint=strict` files nothing without one | the first fitting row of the Picture table below, right under the body core |
 | 4 | **Evidence table** | any `file:line` claim | `\| Claim \| Where \|` — every claim grounded in `path:line` / links / screenshots; a claim about a change adds Before / After columns (#960) |
 | 5 | **Acceptance checklist** | always | `- [ ]` items — the reviewer's coverage gate checks them 1:1 |
 | 6 | **Deferred** | parent of a partial slice — remaining parts that failed the spin-off gate | `- [ ]` checklist on the parent; later promotion keeps `Part of #<n>` provenance |
 | 7 | **`<details>` folds** | long logs, alt options, raw data | collapsed at the bottom, never unfolded |
 
 Priority emoji: 🔴 P0 · 🟠 P1 · 🟡 P2 · 🟢 P3. Wave/source examples:
-`auto-qa sweep`, `Part of #N`, `wave 3`, `hand-filed`. All general rules
-above apply (≤30 words per cell, blank line between sections, prose
-last).
+`auto-qa sweep`, `Part of #N`, `wave 3`, `hand-filed`. The general rules
+in `message-style.md` apply (≤15 words per cell, blank line between
+sections, prose last).
+
+**Picture** — element 3. A reader should see the issue before reading it
+(#1491: 29 of 50 recent issues had no table, diagram or image). Use the
+first row that fits; a big issue can carry two:
+
+| The issue has | Draw |
+|---|---|
+| A UI change | Screenshot of the screen now (`--screenshot`) + a mockup or GIF of the expected screen |
+| A bug you can see | Screenshot of the actual state, broken element outlined, or a GIF of the repro |
+| A clicked or typed flow | GIF recording, ≤8 MB (`--screenshot repro.gif`) |
+| 3+ tables or entities | mermaid `erDiagram` (data) or `flowchart` (parts) |
+| Steps across 3+ actors, in order | mermaid `sequenceDiagram` |
+| Branches, retries or states | mermaid `flowchart` or `stateDiagram` |
+| 3+ parallel facts, terms or options | Table, one row each |
+| A plan of 3+ PRs | `\| # \| Step \| Depends on \|` table |
+| None of the above | The change as a `\| \| Before \| After \|` table (#960) |
+
+Motion: GitHub plays a GIF inline but strips an mp4 or `<video>` (#1475),
+so record interactions as GIF — the browser tool's GIF recorder, or
+`ffmpeg -i rec.mov -vf "fps=10,scale=960:-1" repro.gif`. A mermaid
+diagram never draws a single line (A → B); write that sentence instead.
+Agents always file with `issue create --lint=strict`: it prints what to
+draw (read from the body's tables, plans and repeated bullets) and exits 2
+with nothing filed. A person filing without the flag gets a `💡 picture:`
+line instead.
 
 **Bug-body core** — element 2's shape (blank lines are load-bearing):
 
 ```
+**Business flow**
+1. <role> <does what>
+2. <role> <does what> → ❌ <what they see instead>
+
 **Repro**
-1. <step>
+1. <exact step: URL, input, account>
 2. <step>
 
 **Expected** <one line>
@@ -408,6 +492,11 @@ are load-bearing):
 **Why**
 - <≤3 bullets>
 
+**Business flow**
+| # | Before | After |
+|---|---|---|
+| 1 | <role does, sees> | <role does, sees> |
+
 **What**
 - <≤3 bullets>
 
@@ -423,6 +512,11 @@ reader must be able to act without a clarifying question, and the
 reviewer's spec-coverage gate checks the diff against the stated outcome.
 A bug body already carries the pair as **Expected** / **Actual** — never
 duplicate them there. Issue #712 is the live demo of the non-bug shape.
+**Business flow** is in business words only (`message-style.md` §
+Business flow): roles,
+screens, cards and payouts, never table names or routes; those go in
+**What**, **Repro** or the evidence table. Internal work writes one line:
+`**Business flow:** no change — <why>`.
 
 ### Commit messages: invoke the smart-commit skill
 
@@ -450,8 +544,8 @@ What the skill produces (sanity-check its output):
   body).
 - **Atomic**: one logical unit per commit — new-construct / modification
   / config / docs / refactor / bug-fix / test split out; the regression
-  test may ride with its fix (step 4).
-- **Pre-commit**: lint + format clean before committing (step 4's tests
+  test may ride with its fix (`loop-worker.md` step 4).
+- **Pre-commit**: lint + format clean before committing (`loop-worker.md` step 4's tests
   satisfy the skill's test gate).
 - **No AI-attribution trailer** — the skill adds an `Assisted-by`
   trailer by default; loop commits omit it (owner decision, #279) and

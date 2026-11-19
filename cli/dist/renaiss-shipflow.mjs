@@ -2685,6 +2685,12 @@ var init_shipflow_contract_data = __esm(() => {
       $comment: "Deterministic message-readability cap shared across GitHub surfaces: any single line that renders UNFOLDED over this many words is dense prose, not a scannable point — its detail belongs in a folded section. Enforced by the server's readability.VisibleLineWordCap (PR review + triage rendering) and the CLI's ACTION_LINE_WORD_LIMIT (loop escalation lint). ~20-word sentences plus room for a code reference.",
       visibleLineWordCap: 30
     },
+    bodyRules: {
+      $comment: "Picture and business-flow rules for every issue and PR body ShipFlow writes (issues #1491, #1493). One definition, three readers: the CLI's message-lint.ts (issueVisualGap, checkBusinessFlow; `issue create` / `pr create --lint=strict` refuse a body that breaks them), the server's internal/bodyrules (every server-generated issue and PR body is tested against it), and skills/shipflow/references/message-style.md § Business flow and § Issue-body ladder element 3. contracts/body-rules-vectors.json pins the behaviour; both sides run it. minWordsForVisual: an issue body over this many visible words needs a table, mermaid block or image. businessFlowHeading: the visible heading or bold label that opens the section. businessFlowOneLiners: the leads that may replace the steps when followed by a reason, e.g. `no change — CI only`, or for a machine-filed finding whose user impact is not known yet, `not assessed — <why>`.",
+      minWordsForVisual: 120,
+      businessFlowHeading: "Business flow",
+      businessFlowOneLiners: ["no change", "no business change", "no business flow change", "unchanged", "none", "n/a", "not assessed"]
+    },
     packetMarkers: {
       $comment: "Packet/triage markers the loop-reviewer blocking + neutral tables restate (issue #762). `cli` is today's emitter from packet.ts / project.ts (REVIEW_THREADS_UNAVAILABLE_MARKER, specUnavailableMarker, featureMapSkippedWarning, TRIAGE_UNAVAILABLE_MARKER, featureMapNotApplicableNote, specNotReadableIssueNote, plus the inline missing-brief line), placeholders #N / <repo> / … — no new wording, emitters stay byte-identical this slice. `cell` is today's skill-doc table cell (elided where the table already elided). Drift: scripts/check-degradation-markers.mjs binds contract.cell == fragment == consumer docs, and the CLI functions to contract.cli.",
       blocking: {
@@ -10083,6 +10089,7 @@ function escapeRegExp(s) {
 }
 
 // src/message-lint.ts
+init_shipflow_contract_data();
 var TABLE_ROW = /^\s*\|.+\|\s*$/m;
 var CHECKLIST_ITEM = /^\s*[-*+]\s+\[[ xX]\]\s/m;
 var BULLET_ITEM = /^\s*[-*+]\s+\S/m;
@@ -10309,6 +10316,213 @@ function lintReadability(body, kind) {
     }
   }
   return problems;
+}
+var MIN_WORDS_FOR_VISUAL = SHIPFLOW_CONTRACT.bodyRules.minWordsForVisual;
+var MAX_VISUAL_SUGGESTIONS = 5;
+var MERMAID_FENCE = /^\s*(?:```|~~~)\s*mermaid\b/im;
+var IMAGE_EMBED = /<img\b|<picture\b|!\[[^\]\n]*\]\(\s*\S+/i;
+var UI_STRONG = /\b(?:screens?|buttons?|modals?|dialogs?|pickers?|dropdowns?|sidebars?|toolbars?|toasts?|tooltips?|banners?|layouts?|mockups?)\b/i;
+var UI_WEAK = /\b(?:pages?|tabs?|menus?|badges?|dashboards?)\b/gi;
+var BUG_SHAPE = /\*\*\s*(?:repro|actual)\b/i;
+var SNAKE_IDENT = /`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)(?:\.[A-Za-z_]\w*)?`/g;
+var PLAN_LEAD = /\b(?:plan|slices?|phases?|milestones?|rollout|one PR each)\b/i;
+var DECISION_LEAD = /\bdecisions?\b/i;
+var FLOW_VERB = /\b(?:webhooks?|callbacks?|redirects?|posts to|replies|notifies|polls|forwards)\b/gi;
+var WEAK_LEADS = new Set(["the", "a", "an", "and", "or", "to", "in", "on", "for", "of", "is", "it", "this", "that", "http", "https", "www"]);
+function withoutCode(body) {
+  return body.replace(/^\s*(```|~~~)[\s\S]*?(?:^\s*\1\s*$|$(?![\s\S]))/gm, " ").replace(/`[^`\n]*`/g, " ");
+}
+function hasVisual(body) {
+  if (MERMAID_FENCE.test(body))
+    return true;
+  const text2 = withoutCode(body);
+  if (IMAGE_EMBED.test(text2))
+    return true;
+  const lines = text2.split(`
+`);
+  for (let i = 0;i + 1 < lines.length; i++) {
+    if (TABLE_LINE.test(lines[i]) && TABLE_SEPARATOR.test(lines[i + 1]))
+      return true;
+  }
+  return false;
+}
+function bulletLead(item) {
+  const t = item.replace(/[*_`"“”']/g, "").trim();
+  const label = /^([\p{L}\p{N}][\p{L}\p{N} /-]{0,30}):\s/u.exec(t);
+  if (label && label[1].split(/\s+/).length <= 4)
+    return "label:";
+  return (/^[\p{L}\p{N}]+/u.exec(t)?.[0] ?? "").toLowerCase();
+}
+function listRuns(lines) {
+  const runs = [];
+  let current = null;
+  let lastText = "";
+  for (const line of lines) {
+    const m = /^\s*([-*+]|\d+[.)])\s+(\[[ xX]\]\s+)?(.*)$/.exec(line);
+    if (m) {
+      const kind = m[2] ? "check" : /\d/.test(m[1]) ? "ordered" : "bullet";
+      if (!current || current.kind !== kind) {
+        current = { items: [], kind, before: lastText };
+        runs.push(current);
+      }
+      current.items.push(m[3]);
+      continue;
+    }
+    if (line.trim() === "")
+      continue;
+    current = null;
+    lastText = line.trim();
+  }
+  return runs;
+}
+function issueVisualGap(body, { hasImageAttachment = false } = {}) {
+  if (hasImageAttachment || hasVisual(body))
+    return null;
+  const words = visibleWords(body);
+  if (words <= MIN_WORDS_FOR_VISUAL)
+    return null;
+  const suggestions = [];
+  const prose = withoutCode(body);
+  if (BUG_SHAPE.test(body)) {
+    suggestions.push("bug → screenshot of the actual state (`--screenshot`, broken element outlined) or a GIF of the repro");
+  }
+  const weakUi = new Set([...prose.matchAll(UI_WEAK)].map((m) => m[0].toLowerCase().replace(/s$/, "")));
+  if (UI_STRONG.test(prose) || weakUi.size >= 2) {
+    suggestions.push("UI change → screenshot of the current screen (`--screenshot`) and a mockup or GIF of the expected one");
+  }
+  const tables = [...new Set([...body.matchAll(SNAKE_IDENT)].map((m) => m[1]))];
+  if (tables.length >= 3) {
+    suggestions.push(`${tables.length} named entities (\`${tables[0]}\`, \`${tables[1]}\`, …) → mermaid \`erDiagram\` for data, \`flowchart\` otherwise`);
+  }
+  const flowVerbs = new Set([...prose.matchAll(FLOW_VERB)].map((m) => m[0].toLowerCase().replace(/s$/, "")));
+  if (flowVerbs.size >= 2) {
+    suggestions.push(`steps across actors (${[...flowVerbs].slice(0, 3).join(", ")}) → mermaid \`sequenceDiagram\``);
+  }
+  const runs = listRuns(withoutCode(body).split(`
+`));
+  for (const run of runs) {
+    if (run.kind !== "ordered" || run.items.length < 3)
+      continue;
+    if (PLAN_LEAD.test(run.before)) {
+      suggestions.push(`${run.items.length}-step plan → \`| # | Step | Depends on |\` table`);
+    } else if (DECISION_LEAD.test(run.before)) {
+      suggestions.push(`${run.items.length} decisions → \`| # | Decision | Recommendation | If chosen |\` table (the escalation shape)`);
+    }
+  }
+  for (const run of runs) {
+    if (run.kind === "check")
+      continue;
+    let streak = 1;
+    for (let i = 1;i <= run.items.length; i++) {
+      const lead = i < run.items.length ? bulletLead(run.items[i]) : "";
+      if (lead && !WEAK_LEADS.has(lead) && lead === bulletLead(run.items[i - 1])) {
+        streak++;
+        continue;
+      }
+      if (streak >= 3) {
+        const prev = bulletLead(run.items[i - 1]);
+        const shape = prev === "label:" ? '"label: value"' : `"${prev[0].toUpperCase()}${prev.slice(1)} …"`;
+        suggestions.push(`${streak} parallel ${shape} bullets → a table`);
+      }
+      streak = 1;
+    }
+  }
+  if (!suggestions.length) {
+    suggestions.push("the change as a `| | Before | After |` table; anything visible → `--screenshot`");
+  }
+  return { words, suggestions: [...new Set(suggestions)].slice(0, MAX_VISUAL_SUGGESTIONS) };
+}
+function visibleWords(body) {
+  return visibleProseLines(body).reduce((n, l) => n + proseWords(l), 0);
+}
+function formatVisualGap(gap) {
+  return `no table, diagram or image in ${gap.words} visible words — add one (first that fits): ${gap.suggestions.join("; ")}`;
+}
+var BUSINESS_FLOW_HEADING = SHIPFLOW_CONTRACT.bodyRules.businessFlowHeading;
+var BUSINESS_FLOW_MISSING = `no **${BUSINESS_FLOW_HEADING}** section — add the steps a user or shop goes through, before → after ` + `(roles and screens, no code names), or one line: "**${BUSINESS_FLOW_HEADING}:** no change — <why>"`;
+function plainLine(line) {
+  return line.replace(/^\s*(?:>\s*)*/, "").replace(/^#{1,6}\s+/, "").replace(/[*_]{2}/g, "").replace(LEADING_EMOJI, "").trim();
+}
+var BUSINESS_FLOW_HEAD = new RegExp(`^${escapeRegExp(BUSINESS_FLOW_HEADING)}\\b\\s*(?:[:—–-]\\s*)?(.*)$`, "i");
+var NO_FLOW_CHANGE = new RegExp(`^(?:${[...SHIPFLOW_CONTRACT.bodyRules.businessFlowOneLiners].sort((a, b) => b.length - a.length).map(escapeRegExp).join("|")})(?![\\p{L}\\p{N}])\\s*(?:[:—–,-]\\s*)?(.*)$`, "iu");
+var LEADING_EMOJI = /^\s*(?:\p{Extended_Pictographic}\uFE0F?\s*)+/u;
+var NEXT_SECTION = /^\s*(?:#{1,6}\s|\*\*(?!\s*(?:before|after|today|now|old|new|current)\b)[^*\n]+\*\*|<details\b)/i;
+var MERMAID_SYNTAX = /^\s*(?:```|~~~|sequenceDiagram|flowchart\b|graph\b|stateDiagram|erDiagram|journey|autonumber|end\b)/;
+var CODE_NAME_RULES = [
+  /`([^`\n]+)`/g,
+  /\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g,
+  /\b((?:src|apps|internal|lib)\/[\w./[\]-]+)/g,
+  /\b((?:GET|POST|PUT|PATCH|DELETE) \/\S*)/g,
+  /\b(APIs?|DB|SQL|JSON|HTTP)\b/g,
+  /\b(endpoints?|databases?|migrations?|schemas?|handlers?|payloads?|quer(?:y|ies)|webhooks?|cron)\b/gi,
+  /\b(\w+\(\))/g
+];
+function checkBusinessFlow(body) {
+  const lines = body.split(`
+`);
+  let depth = 0;
+  let fenced = false;
+  let start = -1;
+  let inline = "";
+  for (let i = 0;i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced)
+      continue;
+    const stripped = line.replace(/`[^`\n]*`/g, " ");
+    if (depth === 0) {
+      const m = BUSINESS_FLOW_HEAD.exec(plainLine(line));
+      if (m) {
+        start = i;
+        inline = m[1].trim();
+        break;
+      }
+    }
+    depth = Math.max(0, depth + (stripped.match(/<details\b/gi) ?? []).length - (stripped.match(/<\/details>/gi) ?? []).length);
+  }
+  if (start < 0)
+    return { missing: BUSINESS_FLOW_MISSING, codeNames: [] };
+  const section = inline ? [inline] : [];
+  fenced = false;
+  for (const line of lines.slice(start + 1)) {
+    if (/^\s*(```|~~~)/.test(line))
+      fenced = !fenced;
+    if (!fenced && NEXT_SECTION.test(line.replace(LEADING_EMOJI, "")) && !/^\s*```/.test(line))
+      break;
+    if (line.trim())
+      section.push(line);
+  }
+  const first = plainLine(section[0] ?? "");
+  const noChange = NO_FLOW_CHANGE.exec(first);
+  if (noChange) {
+    const why = (noChange[1] ?? "").replace(/[.*_]/g, "").trim();
+    if (why.split(/\s+/).filter(Boolean).length < 2) {
+      return { missing: `"**${BUSINESS_FLOW_HEADING}:** ${noChange[0].slice(0, noChange[0].length - noChange[1].length).replace(/[\s:—–,-]+$/, "")}" needs a reason — write "no change — <why>"`, codeNames: [] };
+    }
+    return { missing: null, codeNames: [] };
+  }
+  if (!section.some((l) => /[\p{L}\p{N}]/u.test(l) && !MERMAID_SYNTAX.test(l))) {
+    return { missing: BUSINESS_FLOW_MISSING, codeNames: [] };
+  }
+  const names = [];
+  for (const line of section) {
+    if (MERMAID_SYNTAX.test(line) || TABLE_SEPARATOR.test(line))
+      continue;
+    const text2 = line.replace(/^\s*(?:participant|actor)\s+/, "");
+    for (const rule of CODE_NAME_RULES) {
+      for (const m of text2.matchAll(rule)) {
+        if (!names.includes(m[1]))
+          names.push(m[1]);
+      }
+    }
+  }
+  return { missing: null, codeNames: names.slice(0, 3) };
+}
+function formatBusinessFlowCodeNames(names) {
+  return `business flow names code (${names.map((n) => `\`${n.replace(/`/g, "")}\``).join(", ")}) — ` + "write roles, screens and business objects; keep code names in Changed or the technical part";
 }
 var MAX_VISIBLE_BODY_LINES = 50;
 function lintBodyLength(body) {
@@ -11131,6 +11345,22 @@ async function loadTriage(ctx, repo, number) {
   }
 }
 var EXIT_DUPLICATE_ISSUE = 12;
+var ISSUE_LINT_MODES = ["warn", "strict"];
+var EXIT_ISSUE_NO_VISUAL = 2;
+function issueStrictRefusal({ gap, flowMissing }, strict) {
+  if (!strict || !gap && !flowMissing)
+    return null;
+  const out = ["⛔ issue NOT created. Fix the body, then run the same command again:"];
+  if (flowMissing)
+    out.push(`   • ${flowMissing}`);
+  if (gap) {
+    out.push(`   • no table, diagram or image in ${gap.words} visible words. Add one (first that fits):`);
+    out.push(...gap.suggestions.map((s) => `     - ${s}`));
+  }
+  out.push("   Shapes: skills/shipflow/references/message-style.md § Business flow, and § Issue-body ladder element 3 (Picture).");
+  return out.join(`
+`);
+}
 function duplicatePreflight(repo, title, opts) {
   let open;
   try {
@@ -11276,7 +11506,11 @@ function routeLine(r) {
 }
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
-  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--assignee <login...>", "Assignee(s) for the new issue (@me = the gh login). Default under pickup-scope=assigned: the current login — assignment is the queueing gesture (#600), so an unassigned filing is invisible to `issue next`").option("--no-assign", "File UNASSIGNED, overriding the pickup-scope=assigned auto-assign default — the per-invocation opt-out for a human filing a backlog item that the loop should NOT pick up. Mutually exclusive with --assignee").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--assignee <login...>", "Assignee(s) for the new issue (@me = the gh login). Default under pickup-scope=assigned: the current login — assignment is the queueing gesture (#600), so an unassigned filing is invisible to `issue next`").option("--no-assign", "File UNASSIGNED, overriding the pickup-scope=assigned auto-assign default — the per-invocation opt-out for a human filing a backlog item that the loop should NOT pick up. Mutually exclusive with --assignee").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).addOption(new Option("--lint <mode>", `Body checks on --body: warn (print \uD83D\uDCA1 lines, file the issue) or strict (exit ${EXIT_ISSUE_NO_VISUAL}, nothing filed) when the body has no **Business flow** section (issue #1493), or runs over ${MIN_WORDS_FOR_VISUAL} visible words with no table, mermaid diagram or image (issue #1491). Agents pass strict; the other body lint lines stay warnings`).choices([...ISSUE_LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    if (!ISSUE_LINT_MODES.includes(opts.lint ?? "warn")) {
+      console.error(`Unknown lint mode "${opts.lint}" — valid: ${ISSUE_LINT_MODES.join(", ")}. Nothing was created.`);
+      process.exit(1);
+    }
     requireFlagWhenMachine(opts, "--title", opts.title);
     const shots = opts.screenshot ?? [];
     const shotCaptions = opts.screenshotCaption ?? [];
@@ -11292,6 +11526,27 @@ function registerIssueCommand(program2) {
     const lint = [...lintIssueTitle(title), ...lintMessageBody(body), ...lintBodyLength(body), ...lintIssueOutcome(body), ...lintJargonGloss(body), ...lintReadability(body, "issue")];
     for (const p of lint)
       console.warn(`⚠️  body lint: ${p}`);
+    const visualGap = issueVisualGap(body, { hasImageAttachment: shots.some(isImagePath) });
+    const flow = checkBusinessFlow(body);
+    const refusal = issueStrictRefusal({ gap: visualGap, flowMissing: flow.missing }, opts.lint === "strict");
+    if (refusal) {
+      const blocked = [...flow.missing ? ["no-business-flow"] : [], ...visualGap ? ["no-visual"] : []];
+      if (opts.json)
+        console.log(JSON.stringify({ error: "issue NOT created", blocked, businessFlow: flow.missing, suggestions: visualGap?.suggestions ?? [], lint }));
+      else
+        console.error(refusal);
+      process.exit(EXIT_ISSUE_NO_VISUAL);
+    }
+    const advise = (tag, text2) => {
+      console.warn(`\uD83D\uDCA1 ${tag}: ${text2}`);
+      lint.push(text2);
+    };
+    if (flow.missing)
+      advise("business flow", flow.missing);
+    if (flow.codeNames.length)
+      advise("business flow", formatBusinessFlowCodeNames(flow.codeNames));
+    if (visualGap)
+      advise("picture", formatVisualGap(visualGap));
     duplicatePreflight(repo, title, opts);
     const { assignees, auto: assigneesAuto } = resolveCreateAssignees(opts.assignee, opts.assign === false);
     if (shots.length > 0) {
@@ -13231,10 +13486,12 @@ function registerPRCommand(program2) {
         process.exit(1);
       }
     }
+    const flow = checkBusinessFlow(opts.body ?? "");
     const lintProblems = [
       ...lintMessageBody(opts.body ?? ""),
       ...lintBodyLength(opts.body ?? ""),
-      ...lintNearMissDeviationHeadings(opts.body ?? "")
+      ...lintNearMissDeviationHeadings(opts.body ?? ""),
+      ...flow.missing ? [flow.missing] : []
     ];
     if (lintProblems.length) {
       if (opts.lint === "strict") {
@@ -13248,6 +13505,8 @@ function registerPRCommand(program2) {
     }
     for (const p of lintReadability(opts.body ?? "", "pr"))
       console.warn(`\uD83D\uDCA1 readability: ${p}`);
+    if (flow.codeNames.length)
+      console.warn(`\uD83D\uDCA1 business flow: ${formatBusinessFlowCodeNames(flow.codeNames)}`);
     const ctx = await loadCtx(program2);
     const branch = currentBranch();
     const issueNumber = opts.issue ? parseInt(opts.issue, 10) : detectIssueFromBranch(branch);

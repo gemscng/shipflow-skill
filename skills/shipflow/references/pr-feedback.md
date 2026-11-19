@@ -55,7 +55,7 @@ must be non-empty. Step 2's "Already addressed / stale → skip" leaves it
 empty, and an empty follow-up describes nothing — file nothing, remove
 the worktree, return. Non-empty →
 `git push origin HEAD:refs/heads/fix/pr-<n>-leftover`, then
-`renaiss-shipflow issue create --json`, body per the issue-body ladder
+`renaiss-shipflow issue create --json --lint=strict`, body per the issue-body ladder
 (`message-style.md`), evidence table citing the leftover branch and each
 leftover SHA, one acceptance-checklist line per leftover commit, and
 **exit 12 is a duplicate, not a failure** — read `{blocked: true,
