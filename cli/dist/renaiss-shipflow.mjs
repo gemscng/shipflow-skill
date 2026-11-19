@@ -2682,7 +2682,7 @@ var init_shipflow_contract_data = __esm(() => {
       releaseHint: "Reply with ONLY `confirmed` and nothing else (`/confirm`, `confirm`, `approved`, `yes`, `LGTM`, `sgtm`, `ship it`, `+1` and \uD83D\uDC4D also work). That one line must be the whole reply — extra words on it (`yes but …`), a second line, or a following paragraph are each read as a correction and leave this gate ON, by design. Send any commentary as a separate comment."
     },
     readability: {
-      $comment: "Deterministic message-readability cap shared across GitHub surfaces: any single line that renders UNFOLDED over this many words is dense prose, not a scannable point — its detail belongs in a folded section. Enforced by the server's readability.VisibleLineWordCap (PR review + triage rendering) and the CLI's ACTION_LINE_WORD_LIMIT (loop escalation lint). ~20-word sentences plus room for a code reference.",
+      $comment: "Deterministic message-readability cap shared across GitHub surfaces: any single line that renders UNFOLDED over this many words is dense prose, not a scannable point — its detail belongs in a folded section. Enforced at runtime only by the CLI's ACTION_LINE_WORD_LIMIT (the loop's escalation lint refuses a longer Action-needed line). The server's workflow.OverCapLines (VisibleLineWordCap) does not change what it posts: its tests run it over the PR review, triage, merge and verification templates, so a template that renders a longer unfolded line fails CI. ~20-word sentences plus room for a code reference.",
       visibleLineWordCap: 30
     },
     bodyRules: {
@@ -2690,6 +2690,10 @@ var init_shipflow_contract_data = __esm(() => {
       minWordsForVisual: 120,
       businessFlowHeading: "Business flow",
       businessFlowOneLiners: ["no change", "no business change", "no business flow change", "unchanged", "none", "n/a", "not assessed"]
+    },
+    prLinks: {
+      $comment: "How a PR body names the issue it is the work for. The PR command (`pr create --lint=strict`) ends the body with a footer line that starts with footerPrefix, e.g. `ShipFlow · <project> · Closes #N` (issue #1476). Readers: the server's internal/prlinks (PR review spec, merge notices, preview pings, reporter review) and the CLI's pr-state.ts linkedIssueRef (review packet). Rule: the footer's reference wins; otherwise the first `closes/fixes/resolves #N` or `Part of #N` in the body, keyword on a word boundary. contracts/pr-link-vectors.json pins it; both sides run it.",
+      footerPrefix: "ShipFlow · "
     },
     packetMarkers: {
       $comment: "Packet/triage markers the loop-reviewer blocking + neutral tables restate (issue #762). `cli` is today's emitter from packet.ts / project.ts (REVIEW_THREADS_UNAVAILABLE_MARKER, specUnavailableMarker, featureMapSkippedWarning, TRIAGE_UNAVAILABLE_MARKER, featureMapNotApplicableNote, specNotReadableIssueNote, plus the inline missing-brief line), placeholders #N / <repo> / … — no new wording, emitters stay byte-identical this slice. `cell` is today's skill-doc table cell (elided where the table already elided). Drift: scripts/check-degradation-markers.mjs binds contract.cell == fragment == consumer docs, and the CLI functions to contract.cli.",
@@ -3184,9 +3188,11 @@ function commentAuthorCouldBeLoop(c) {
   return TRUSTED_AUTHOR_ASSOCIATIONS.has((c.authorAssociation ?? "").trim().toUpperCase());
 }
 function commentIsMachinery(c) {
-  const b = stripQuotedLines(c.body).trim();
-  const marked = b.startsWith(SHIPFLOW_CONTRACT.markers.escalationBannerEmoji) || b.includes(SHIPFLOW_CONTRACT.markers.markerPrefix);
-  return marked && commentAuthorCouldBeLoop(c);
+  return bodyIsMachinery(stripQuotedLines(c.body)) && commentAuthorCouldBeLoop(c);
+}
+function bodyIsMachinery(body) {
+  const b = body.trim();
+  return b.startsWith(SHIPFLOW_CONTRACT.markers.escalationBannerEmoji) || b.includes(SHIPFLOW_CONTRACT.markers.markerPrefix);
 }
 function normalizeTokenLine(line) {
   return line.replace(/[\u{FE0E}\u{FE0F}\u{1F3FB}-\u{1F3FF}]/gu, "").replace(/^[>\s*_`#\-–—•]+/, "").replace(/[\s*_`.!,;:]+$/, "").trim().toLowerCase();
@@ -3269,12 +3275,25 @@ function reporterCorrectionRow(c) {
     excerpt: flat.length > CORRECTION_EXCERPT_CHARS ? `${flat.slice(0, CORRECTION_EXCERPT_CHARS - 1)}…` : flat
   };
 }
+function issueLinkRefs(text) {
+  const out = [];
+  for (const m of (text ?? "").matchAll(ISSUE_LINK_RE)) {
+    const n = parseInt(m[2], 10);
+    if (n > 0)
+      out.push({ number: n, closing: m[1].toLowerCase() !== "part of" });
+  }
+  return out;
+}
+function linkedIssueRef(body) {
+  const footer = (body ?? "").split(`
+`).find((l) => l.startsWith(SHIPFLOW_FOOTER_PREFIX));
+  return issueLinkRefs(footer)[0] ?? issueLinkRefs(body)[0] ?? null;
+}
 function partOfIssueNumbers(body) {
   const out = [];
-  for (const m of (body ?? "").matchAll(PART_OF_ISSUE_RE)) {
-    const n = parseInt(m[1], 10);
-    if (n > 0 && !out.includes(n))
-      out.push(n);
+  for (const r of issueLinkRefs(body)) {
+    if (!r.closing && !out.includes(r.number))
+      out.push(r.number);
   }
   return out;
 }
@@ -3396,7 +3415,7 @@ function foreignConflictedPRs(mine, all, me, opts = {}) {
     return distrust ? { pr, trusted: false, distrust } : { pr, trusted: true };
   });
 }
-var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", MERGED_UNREVIEWED_REASON = "merged_unreviewed", REVIEW_ROUND_CEILING_REASON = "review_round_ceiling", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", LOOP_REVIEWED_MARKER, INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_OVERRIDE_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, INTAKE_GATE_AUDIT_MARKER, INTAKE_GATE_AUDIT_LINE, INTAKE_TRUSTED_MARKER, INTAKE_TRUSTED_LINE, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, PART_OF_ISSUE_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
+var FAILING, PENDING, NO_VERDICT, APPROVAL_LABELS, REPORTER_REVIEW_REASON, REPORTER_CORRECTION_REASON = "reporter_correction", REWORK_CEILING_REASON = "rework_ceiling", CORRECTION_UNREADABLE_REASON = "correction_unreadable", REPORTER_GATE_STALE_REASON = "reporter_gate_stale", MERGED_UNREVIEWED_REASON = "merged_unreviewed", REVIEW_ROUND_CEILING_REASON = "review_round_ceiling", ESCALATE_ONCE_REASONS, APPROVED_HEAD_MARKER, APPROVED_HEAD_LINE, STALE_APPROVAL_BLOCKER = "stale-approval", INTENT_GATE_NOTICE_HEADLINE = "⏸️ **Merge blocked — awaiting the reporter's confirmation**", LOOP_REVIEWED_MARKER, INTENT_BLOCKER = "unconfirmed interpretation — needs reporter confirmation", INTENT_BLOCKED_BY_DETAIL, INTENT_GATE_OVERRIDE_DETAIL, INTENT_GATE_AUDIT_MARKER, INTENT_GATE_AUDIT_LINE, INTENT_GATE_AUDIT_AUTHOR_SLUG, INTAKE_GATE_AUDIT_MARKER, INTAKE_GATE_AUDIT_LINE, INTAKE_TRUSTED_MARKER, INTAKE_TRUSTED_LINE, REWORK_FROM_MARKER, DEFAULT_MAX_REWORKS = 3, REWORK_FROM_RE, CONFIRMATION_TOKENS, MAX_CORRECTION_CANDIDATES = 5, CORRECTION_EXCERPT_CHARS = 200, SHIPFLOW_FOOTER_PREFIX, ISSUE_LINK_RE, NO_CI_GRACE_HOURS = 0.25, REVIEW_SETTLE_MS = 120000, REVIEW_SETTLE_BLOCKER = "external reviews still settling — last head is too recent and no external review has landed since", REVIEW_SETTLE_UNAVAILABLE = "last-head clock unavailable — never merge on unknown review-settle state", TRUSTED_AUTHOR_ASSOCIATIONS;
 var init_pr_state = __esm(() => {
   init_shipflow_contract_data();
   FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
@@ -3434,7 +3453,8 @@ var init_pr_state = __esm(() => {
   REWORK_FROM_MARKER = SHIPFLOW_CONTRACT.markers.reworkFrom;
   REWORK_FROM_RE = new RegExp(`${REWORK_FROM_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+id=(\\S+?)\\s*-->`, "g");
   CONFIRMATION_TOKENS = new Set(SHIPFLOW_CONTRACT.intentGate.confirmationTokens.map((t) => t.toLowerCase()));
-  PART_OF_ISSUE_RE = /Part of #(\d+)/gi;
+  SHIPFLOW_FOOTER_PREFIX = SHIPFLOW_CONTRACT.prLinks.footerPrefix;
+  ISSUE_LINK_RE = /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?|part of)[:\t\n\f\r ]+#(\d+)/gi;
   TRUSTED_AUTHOR_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 });
 
@@ -3675,24 +3695,37 @@ function hasCompleteReplyChoices(reason) {
     }
     columns = undefined;
     lastN = undefined;
-    const displayed = line.replace(/[*_]+(?=\d+:)/g, "").replace(/(\d+:)[*_]+(?=[ \t]|$)/g, "$1");
-    const first = /^([ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?)(\d+):(?!\d)[ \t]*/.exec(displayed);
-    if (!first)
-      continue;
-    const alternatives = displayed.slice(first[1].length);
-    const urls = [...alternatives.matchAll(/https?:\/\/[^\s<>]+/gi)];
-    const replies = [...alternatives.matchAll(/(?:^|[·/;,|][ \t]*)(?:[-*+][ \t]+)?(\d+):(?!\d)[ \t]*/g)].filter((reply) => {
-      const numberIndex = reply.index + reply[0].indexOf(reply[1]);
-      return !urls.some((url) => numberIndex >= url.index && numberIndex < url.index + url[0].length);
-    });
-    for (let i = 0;i < replies.length; i++) {
-      const reply = replies[i];
-      const option = alternatives.slice(reply.index + reply[0].length, replies[i + 1]?.index).trim().replace(/[·/;,|]$/, "").trim();
-      const arrow = option.indexOf("→");
-      add(reply[1], arrow < 0 ? option : option.slice(0, arrow), arrow < 0 ? "" : option.slice(arrow + 1));
-    }
+    for (const c of replyChoicesOnLine(line))
+      add(String(c.n), c.answer, c.consequence);
   }
   return complete && choices.size >= 2;
+}
+function replyChoiceText(value) {
+  return value.trim().replace(/^[*_]+|[*_]+$/g, "").trim();
+}
+function replyChoicesOnLine(line) {
+  const displayed = line.replace(/[*_]+(?=\d+:)/g, "").replace(/(\d+:)[*_]+(?=[ \t]|$)/g, "$1");
+  const first = /^([ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?)(\d+):(?!\d)[ \t]*/.exec(displayed);
+  if (!first)
+    return [];
+  const alternatives = displayed.slice(first[1].length);
+  const urls = [...alternatives.matchAll(/https?:\/\/[^\s<>]+/gi)];
+  const replies = [...alternatives.matchAll(/(?:^|[·/;,|][ \t]*)(?:[-*+][ \t]+)?(\d+):(?!\d)[ \t]*/g)].filter((reply) => {
+    const numberIndex = reply.index + reply[0].indexOf(reply[1]);
+    return !urls.some((url) => numberIndex >= url.index && numberIndex < url.index + url[0].length);
+  });
+  const out = [];
+  for (let i = 0;i < replies.length; i++) {
+    const reply = replies[i];
+    const option = alternatives.slice(reply.index + reply[0].length, replies[i + 1]?.index).trim().replace(/[·/;,|]$/, "").trim();
+    const arrow = option.indexOf("→");
+    out.push({
+      n: Number(reply[1]),
+      answer: replyChoiceText(arrow < 0 ? option : option.slice(0, arrow)),
+      consequence: replyChoiceText(arrow < 0 ? "" : option.slice(arrow + 1))
+    });
+  }
+  return out;
 }
 function isRecommendationCell(cell) {
   const match = /^([*_]*)recommendation([*_]*)$/i.exec(cell.trim());
@@ -3829,7 +3862,7 @@ function parseDecisionReplies(body) {
     return [];
   const byNumber = new Map;
   const marker = /(?:^|,)\s*(\d+)\s*:\s*([^]*?)(?=,\s*\d+\s*:|$)/g;
-  for (const line of body.split(`
+  for (const line of normalizeReplyText(body).split(`
 `)) {
     if (!/^\s*\d+\s*:/.test(line))
       continue;
@@ -3841,11 +3874,15 @@ function parseDecisionReplies(body) {
   }
   return [...byNumber].map(([n, answer]) => ({ n, answer }));
 }
+function normalizeReplyText(body) {
+  return body.replace(/\r\n?/g, `
+`).replace(REPLY_ODD_SPACE, " ");
+}
 function parseDecisionRepliesLoose(body) {
   if (!body)
     return [];
   const byNumber = new Map;
-  for (const line of body.split(`
+  for (const line of normalizeReplyText(body).split(`
 `)) {
     if (/^\s*\d+\s*:/.test(line)) {
       for (const d of parseDecisionReplies(line))
@@ -3888,7 +3925,7 @@ function findHumanReplyAfterEscalation(comments) {
     if (c.viewerDidAuthor !== true && !TRUSTED_AUTHOR_ASSOCIATIONS.has((c.authorAssociation ?? "").trim().toUpperCase()))
       continue;
     const typed = stripQuotedLines(c.body).trim();
-    if (!typed || isEscalationBanner(typed) || typed.includes(SHIPFLOW_CONTRACT.markers.markerPrefix))
+    if (!typed || bodyIsMachinery(typed))
       continue;
     return { index: i, body: typed };
   }
@@ -4074,7 +4111,7 @@ function rfc3339UTC(at) {
     return null;
   return at.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
-var ESCALATION_CATEGORIES, ACTION_SECTION_LINE_CAP = 10, ACTION_LINE_WORD_LIMIT, FOLDED_SECTION_WORD_CAP = 60, STANDALONE_RECOMMENDATION_RE, DECISION_LOOSE_LINE, CONFIRMATION_POINTER_REASONS, POINTER_REPO, RE_ESCAPE, ESCALATION_BANNER;
+var ESCALATION_CATEGORIES, ACTION_SECTION_LINE_CAP = 10, ACTION_LINE_WORD_LIMIT, FOLDED_SECTION_WORD_CAP = 60, STANDALONE_RECOMMENDATION_RE, REPLY_ODD_SPACE, DECISION_LOOSE_LINE, CONFIRMATION_POINTER_REASONS, POINTER_REPO, RE_ESCAPE, ESCALATION_BANNER;
 var init_escalation_format = __esm(() => {
   init_shipflow_contract_data();
   init_pr_state();
@@ -4089,6 +4126,7 @@ var init_escalation_format = __esm(() => {
   };
   ACTION_LINE_WORD_LIMIT = SHIPFLOW_CONTRACT.readability.visibleLineWordCap;
   STANDALONE_RECOMMENDATION_RE = /^\s*\*\*recommendation:?\*\*/im;
+  REPLY_ODD_SPACE = /[\v\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/g;
   DECISION_LOOSE_LINE = /^\s*(\d+)(?:[.)]\s+|\s+[-–]\s+)(\S.*)$/;
   CONFIRMATION_POINTER_REASONS = [REWORK_CEILING_REASON, CORRECTION_UNREADABLE_REASON, REPORTER_GATE_STALE_REASON];
   POINTER_REPO = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/;
@@ -10230,11 +10268,12 @@ var MAX_BULLET_WORDS = 12;
 var MAX_CELL_WORDS = 15;
 var MAX_VISIBLE_WORDS = 300;
 var RISK_WITHIN_LINES = 8;
-function visibleProseLines(body) {
+function visibleLines(body) {
   let depth = 0;
   let fenced = false;
   const out = [];
-  for (const line of body.split(`
+  for (const line of body.replace(/\r\n/g, `
+`).split(`
 `)) {
     if (/^\s*(```|~~~)/.test(line)) {
       fenced = !fenced;
@@ -10266,7 +10305,7 @@ var OUTCOME_LINE = /^(?:>\s*)?(?:#+\s*)?(?:\p{Extended_Pictographic}\s*)?(?:\*\*
 var CALLOUT_OPENER = /^>\s*\[![A-Z]+\]\s*$/;
 var RISK_LINE = /^(?:>\s*)?\*\*Risk:?\*\*/i;
 function lintReadability(body, kind) {
-  const lines = visibleProseLines(body);
+  const lines = visibleLines(body);
   if (!lines.length)
     return [];
   const problems = [];
@@ -10433,7 +10472,7 @@ function issueVisualGap(body, { hasImageAttachment = false } = {}) {
   return { words, suggestions: [...new Set(suggestions)].slice(0, MAX_VISUAL_SUGGESTIONS) };
 }
 function visibleWords(body) {
-  return visibleProseLines(body).reduce((n, l) => n + proseWords(l), 0);
+  return visibleLines(body).reduce((n, l) => n + proseWords(l), 0);
 }
 function formatVisualGap(gap) {
   return `no table, diagram or image in ${gap.words} visible words — add one (first that fits): ${gap.suggestions.join("; ")}`;
@@ -10675,16 +10714,17 @@ function upsertJudgeBlock(body, block) {
 ${body.replace(/^\s+/, "")}`;
 }
 function extractImpact(body) {
-  const rest = body.replace(BLOCK_RE, "");
-  const m = /^\*\*Impact\*\*\s+(.+?)\s*$/m.exec(rest);
-  return m ? m[1].trim() : undefined;
+  for (const line of visibleLines(body.replace(BLOCK_RE, ""))) {
+    const m = /^\*\*Impact\*\*\s+(.+?)\s*$/.exec(line);
+    if (m)
+      return m[1].trim();
+  }
+  return;
 }
 function extractAcceptance(body) {
-  const rest = body.replace(BLOCK_RE, "");
   let done = 0;
   let total = 0;
-  for (const line of rest.split(`
-`)) {
+  for (const line of visibleLines(body.replace(BLOCK_RE, ""))) {
     if (/^\s*[-*]\s+\[[xX]\]\s/.test(line)) {
       done++;
       total++;
@@ -13853,8 +13893,10 @@ ${footer}` : footer;
     }
     const diff = ghPRDiffText(repo, number);
     let issue = null;
-    const closing = prView.closingIssuesReferences?.[0];
-    const linkedNum = closing?.number ?? partOfIssueNumbers(prView.body)[0] ?? 0;
+    const bodyRef = linkedIssueRef(prView.body);
+    const closingRef = prView.closingIssuesReferences?.[0];
+    const linkedNum = bodyRef?.number ?? closingRef?.number ?? 0;
+    const closing = bodyRef ? bodyRef.closing : closingRef !== undefined;
     let specUnavailable = null;
     let specNotReadable = null;
     if (linkedNum > 0) {
@@ -14395,7 +14437,6 @@ function evidenceReminder(prNumber, issueNumber, surface) {
     return `\uD83D\uDCA1 evidence: no UI change, so attach the test summary: ${tests}`;
   return `\uD83D\uDCA1 evidence: attach proof of the fix. UI change: ${shots} · No UI change: ${tests}`;
 }
-var SHIPFLOW_FOOTER_PREFIX = "ShipFlow · ";
 function buildShipFlowFooter(project, issueNumber, linkMode = "closes") {
   const parts = [`${SHIPFLOW_FOOTER_PREFIX}${project}`];
   if (issueNumber)

@@ -34,8 +34,11 @@ Rules that hold for every format:
 - Asking a human to choose? Render a **decision table** —
   `| # | Decision | Recommendation | If chosen |` — whose `#` matches the
   `N: answer` reply protocol (**one `#` per decision**; continuation option
-  rows leave `#` blank). Do not rename those columns — the decision-panel
-  parser keys on them. Every option row carries the loop's recommendation
+  rows leave `#` blank). Use those column names: the lint and the
+  decision-panel parser read columns by name, and the only other names both
+  accept are Option, Answer or Choice for Decision, and Consequence,
+  Outcome, Then or Result for If chosen. Every option row carries the
+  loop's recommendation
   AND what happens when that option is picked (#969: 2 of 25 live tables
   said; the lint now requires the column, or a `→` in every option cell);
   never a bare open question.
@@ -229,14 +232,17 @@ mentioning “confirm PR” alone never proves confirmation is its only ask.
 Measured on 38 live escalations: median 38 lines and 215 words, three
 `<details>` folds each, the same footer and rationale paragraph on every
 one, and 13 that asked the reader to reply on a PR they had to go find.
-The comment the escalate command renders is now **≤ 8 visible lines**:
+The comment the escalate command renders keeps only the header, the
+Action-needed section (**≤ 10 non-blank lines**, the lint's
+`ACTION_SECTION_LINE_CAP`; the `###` heading is not counted), one fold
+and one footer line visible:
 
 | Line | Carries |
 |---|---|
 | 1 | `🚧 **Needs a human** — \`<category>\` · @<owner> decides` (validated category is an inline-code badge) |
 | 2 (only when the reply belongs elsewhere) | `**Reply on PR #N, not here →** <PR comment-box URL>` — auto-added when the reason says "confirm … PR #N" |
-| 3–7 | the `### 👤 Action needed` section: **one short context line** (what's stuck / who decides what), then the decision table — no vague ask, no wireframe jammed between ask and table; **≤ 10 lines** (lint) |
-| 8 | ONE `<details>` holding every other section (`Why it's blocked · Ready once unblocked`) — each **≤ 60 words of prose, ≤ 30 a line** (lint) |
+| 3 onward | the `### 👤 Action needed` section: **one short context line** (what's stuck / who decides what), then the decision table — no vague ask, no wireframe jammed between ask and table; **≤ 10 lines** (lint) |
+| next | ONE `<details>` holding every other section (`Why it's blocked · Ready once unblocked`) — each **≤ 60 words of prose, ≤ 30 a line** (lint) |
 | footer | one `<sub>` line: the reply protocol, 14 words — the category is the badge on line 1, never repeated here |
 
 Pass multiline source text with `issue escalate <n> --reason-file reason.md`;
