@@ -9,7 +9,9 @@ Create a ShipFlow issue with `renaiss-shipflow issue create --lint=strict --titl
 
 **Every body over 120 visible words carries a picture** (#1491): a table, a mermaid diagram, a screenshot or a GIF. The ladder's element 3 below says which.
 
-Without either, `--lint=strict` exits 2, files nothing, and prints what is missing; fix the body and run the command again.
+**A UI change carries a UI proposal, drawn before filing** (#1496): screenshot the screen now, draw the proposed screen (`skills/shipflow/references/browser-testing.md` § 7), and pass `--screenshot now.png --proposal proposal.png --proposal-caption "<what changed>"`. The image is for visualization and reference only, not a requirement: write what must be built in the text and the acceptance checklist. Show the person the proposal next to the issue link. A body that only mentions UI writes `**UI proposal:** none — <why>`.
+
+Without any of these, `--lint=strict` exits 2, files nothing, and prints what is missing; fix the body and run the command again.
 
 **Who it lands on (#673).** Under `pickup-scope=assigned` (the default) the
 filing is **auto-assigned to the current gh login** — assignment is the
@@ -66,7 +68,7 @@ first row that fits; a big issue can carry two:
 
 | The issue has | Draw |
 |---|---|
-| A UI change | Screenshot of the screen now (`--screenshot`) + a mockup or GIF of the expected screen |
+| A UI change | A **UI proposal** (below): screenshot of the screen now (`--screenshot`) + the proposed screen (`--proposal`) |
 | A bug you can see | Screenshot of the actual state, broken element outlined, or a GIF of the repro |
 | A clicked or typed flow | GIF recording, ≤8 MB (`--screenshot repro.gif`) |
 | 3+ tables or entities | mermaid `erDiagram` (data) or `flowchart` (parts) |
@@ -84,6 +86,42 @@ Agents always file with `issue create --lint=strict`: it prints what to
 draw (read from the body's tables, plans and repeated bullets) and exits 2
 with nothing filed. A person filing without the flag gets a `💡 picture:`
 line instead.
+
+**UI proposal** — drawn BEFORE the issue is filed (#1496). An issue
+that changes what a person sees shows the proposed screen, so the reader
+looks at the change instead of picturing it (of 80 recent issues, 23 read
+as a UI change and 4 of those had an image). It needs one when the
+reporter would want to see it before it is built: a new page, screen,
+dialog, component or empty state; a layout, navigation or visual change; a
+new interaction; user-visible copy beyond a fix. It needs none for a bug
+(it restores the screen it had: screenshot the actual state), back-end or
+data work with no visible surface, tests or refactors. When in doubt, draw it.
+
+**The image is for visualization and reference only, never a requirement.**
+Write what must be built in the issue text and its acceptance checklist;
+the drawing only helps a reader picture it. Nobody builds to its pixels,
+colours or copy, and no PR is held for differing from it.
+
+1. Screenshot the screen now: `--screenshot now.png`. A new screen has no
+   "now"; skip this.
+2. Draw the proposal on the live page: edit it in the browser (add the
+   part, change the copy, hide what goes), outline what changed, and
+   screenshot it. A screen that does not exist yet is one static HTML page
+   in the repo's `DESIGN.md` tokens. Recipe: `browser-testing.md` § 7.
+3. File with `--proposal proposal.png --proposal-caption "<what changed>"`.
+   The CLI hosts it under `## UI proposal`, marked "for visualization and
+   reference only — not a requirement", with the screenshots at the same
+   width. Put `<!-- media -->` on its
+   own line right under the body core: both sections go there (without
+   it, at the end of the body).
+
+In a session with a person, show them the proposal next to the issue link.
+`--lint=strict` exits 2 and files nothing when the body reads as a UI
+change (one word like button, dialog or layout, or two like page and tab)
+and has no proposal. A body that only mentions UI says so in one line:
+`**UI proposal:** none — <why>`. Filing approves nothing: the loop's
+intake may draw option A of its design from the image, and the reporter
+approves that wireframe, not the image (`loop-reviewer-intake.md` 4c).
 
 **Bug-body core** — element 2's shape (blank lines are load-bearing):
 

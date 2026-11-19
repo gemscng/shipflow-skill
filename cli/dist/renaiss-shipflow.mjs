@@ -10360,8 +10360,8 @@ var MIN_WORDS_FOR_VISUAL = SHIPFLOW_CONTRACT.bodyRules.minWordsForVisual;
 var MAX_VISUAL_SUGGESTIONS = 5;
 var MERMAID_FENCE = /^\s*(?:```|~~~)\s*mermaid\b/im;
 var IMAGE_EMBED = /<img\b|<picture\b|!\[[^\]\n]*\]\(\s*\S+/i;
-var UI_STRONG = /\b(?:screens?|buttons?|modals?|dialogs?|pickers?|dropdowns?|sidebars?|toolbars?|toasts?|tooltips?|banners?|layouts?|mockups?)\b/i;
-var UI_WEAK = /\b(?:pages?|tabs?|menus?|badges?|dashboards?)\b/gi;
+var UI_STRONG = /\b(?:buttons?|modals?|dialogs?|pickers?|dropdowns?|sidebars?|toolbars?|toasts?|tooltips?|banners?|layouts?|mockups?)\b/i;
+var UI_WEAK = /\b(?:screens?|pages?|tabs?|menus?|badges?|dashboards?)\b/gi;
 var BUG_SHAPE = /\*\*\s*(?:repro|actual)\b/i;
 var SNAKE_IDENT = /`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)(?:\.[A-Za-z_]\w*)?`/g;
 var PLAN_LEAD = /\b(?:plan|slices?|phases?|milestones?|rollout|one PR each)\b/i;
@@ -10425,9 +10425,8 @@ function issueVisualGap(body, { hasImageAttachment = false } = {}) {
   if (BUG_SHAPE.test(body)) {
     suggestions.push("bug → screenshot of the actual state (`--screenshot`, broken element outlined) or a GIF of the repro");
   }
-  const weakUi = new Set([...prose.matchAll(UI_WEAK)].map((m) => m[0].toLowerCase().replace(/s$/, "")));
-  if (UI_STRONG.test(prose) || weakUi.size >= 2) {
-    suggestions.push("UI change → screenshot of the current screen (`--screenshot`) and a mockup or GIF of the expected one");
+  if (readsAsUiChange(body)) {
+    suggestions.push("UI change → screenshot of the current screen (`--screenshot`) and a UI proposal of the expected one (`--proposal`)");
   }
   const tables = [...new Set([...body.matchAll(SNAKE_IDENT)].map((m) => m[1]))];
   if (tables.length >= 3) {
@@ -10562,6 +10561,40 @@ function checkBusinessFlow(body) {
 }
 function formatBusinessFlowCodeNames(names) {
   return `business flow names code (${names.map((n) => `\`${n.replace(/`/g, "")}\``).join(", ")}) — ` + "write roles, screens and business objects; keep code names in Changed or the technical part";
+}
+var UI_PROPOSAL_HEADING = "UI proposal";
+var UI_PROPOSAL_MISSING = `reads as a UI change but has no ${UI_PROPOSAL_HEADING} — draw the proposed screen before filing and pass it with ` + `\`--proposal <png>\` (the screen now with \`--screenshot\`), or add one line: "**${UI_PROPOSAL_HEADING}:** none — <why>"`;
+var UI_PROPOSAL_LINE = new RegExp(`^${escapeRegExp(UI_PROPOSAL_HEADING)}\\b\\s*(?:[:—–-]\\s*)?(.*)$`, "i");
+var UI_PROPOSAL_NONE = /^none(?![\p{L}\p{N}])\s*(?:[:—–,-]\s*)?(.*)$/iu;
+function readsAsUiChange(body) {
+  const prose = withoutCode(body);
+  const weak = new Set([...prose.matchAll(UI_WEAK)].map((m) => m[0].toLowerCase().replace(/s$/, "")));
+  return UI_STRONG.test(prose) || weak.size >= 2;
+}
+function checkUiProposal(body, { hasProposalAttachment = false } = {}) {
+  if (hasProposalAttachment || BUG_SHAPE.test(body) || !readsAsUiChange(body))
+    return null;
+  const lines = withoutCode(body).split(`
+`);
+  for (let i = 0;i < lines.length; i++) {
+    const m = UI_PROPOSAL_LINE.exec(plainLine(lines[i]));
+    if (!m)
+      continue;
+    const none = UI_PROPOSAL_NONE.exec(m[1].trim());
+    if (none) {
+      const why = (none[1] ?? "").replace(/[.*_]/g, "").trim();
+      if (why.split(/\s+/).filter(Boolean).length >= 2)
+        return null;
+      return `"**${UI_PROPOSAL_HEADING}:** none" needs a reason — write "none — <why>"`;
+    }
+    for (const next of lines.slice(i + 1)) {
+      if (/^\s*#{1,6}\s/.test(next))
+        break;
+      if (IMAGE_EMBED.test(next))
+        return null;
+    }
+  }
+  return UI_PROPOSAL_MISSING;
 }
 var MAX_VISIBLE_BODY_LINES = 50;
 function lintBodyLength(body) {
@@ -11184,14 +11217,14 @@ function screenshotCaptionText(s) {
 function markdownLinkText(s) {
   return s.replace(/([\[\]`\\])/g, "\\$1");
 }
-function renderScreenshotsSection(shots) {
+function renderScreenshotsSection(shots, width = 480) {
   if (shots.length === 0)
     return "";
   const parts = ["## Screenshots"];
   for (const s of shots) {
-    const embed = isVideoPath(s.filename) ? `<video src="${s.url}" controls width="480"></video>
+    const embed = isVideoPath(s.filename) ? `<video src="${s.url}" controls width="${width}"></video>
 
-[▶ ${markdownLinkText(s.filename)}](${s.url})` : `<img src="${s.url}" alt="${screenshotCaptionText(s.filename)}" width="480">`;
+[▶ ${markdownLinkText(s.filename)}](${s.url})` : `<img src="${s.url}" alt="${screenshotCaptionText(s.filename)}" width="${width}">`;
     const caption = s.caption?.trim() ? `
 <br><sub>${screenshotCaptionText(s.caption.trim())}</sub>` : "";
     parts.push(`${embed}${caption}`);
@@ -11199,6 +11232,67 @@ function renderScreenshotsSection(shots) {
   return parts.join(`
 
 `);
+}
+function validateProposalSelection(paths, captions) {
+  if (paths.length === 0 && captions.length > 0) {
+    return "--proposal-caption without --proposal — captions describe proposal images by position.";
+  }
+  for (const p of paths) {
+    if (!isImagePath(p)) {
+      return `${p}: a UI proposal is an image (${IMAGE_EXTS.join(" ")}); GitHub strips video, so record motion as a GIF.`;
+    }
+  }
+  if (captions.length > paths.length) {
+    return `${captions.length} --proposal-caption(s) for ${paths.length} --proposal(s) — captions describe proposal images by position, at most one per image.`;
+  }
+  return null;
+}
+var UI_PROPOSAL_NOTE = "**For visualization and reference only — not a requirement.** The issue text and its checklist say what to build; " + "this drawing only helps picture it. Nothing here is built yet.";
+var PROPOSAL_IMAGE_WIDTH = 720;
+function renderProposalSection(shots) {
+  if (shots.length === 0)
+    return "";
+  const parts = [`## ${UI_PROPOSAL_HEADING}`, UI_PROPOSAL_NOTE];
+  for (const s of shots) {
+    const caption = s.caption?.trim() ? `
+<br><sub>${screenshotCaptionText(s.caption.trim())}</sub>` : "";
+    parts.push(`<img src="${s.url}" alt="${screenshotCaptionText(s.caption?.trim() || s.filename)}" width="${PROPOSAL_IMAGE_WIDTH}">${caption}`);
+  }
+  return parts.join(`
+
+`);
+}
+var MEDIA_PLACEHOLDER = "<!-- media -->";
+function placeMediaSections(body, sections) {
+  const lines = body.split(`
+`);
+  const at = lines.findIndex((l) => l.trim() === MEDIA_PLACEHOLDER);
+  if (at < 0) {
+    if (!sections)
+      return body;
+    return body.trimEnd() ? `${body.trimEnd()}
+
+${sections}` : sections;
+  }
+  return lines.map((l, i) => i === at ? sections : l).filter((l, i) => i === at || l.trim() !== MEDIA_PLACEHOLDER).join(`
+`);
+}
+function packMediaBatches(files) {
+  const batches = [];
+  let batch = [];
+  let bytes = 0;
+  for (const f of files) {
+    if (batch.length > 0 && (batch.length + 1 > MAX_EVIDENCE_FILES_PER_UPLOAD || bytes + f.data.byteLength > MAX_EVIDENCE_BYTES_PER_UPLOAD)) {
+      batches.push(batch);
+      batch = [];
+      bytes = 0;
+    }
+    batch.push(f);
+    bytes += f.data.byteLength;
+  }
+  if (batch.length > 0)
+    batches.push(batch);
+  return batches;
 }
 function evidenceNeedsMediaStaging(fileCount, totalBytes) {
   if (fileCount > MAX_EVIDENCE_FILES_PER_UPLOAD) {
@@ -11387,17 +11481,19 @@ async function loadTriage(ctx, repo, number) {
 var EXIT_DUPLICATE_ISSUE = 12;
 var ISSUE_LINT_MODES = ["warn", "strict"];
 var EXIT_ISSUE_NO_VISUAL = 2;
-function issueStrictRefusal({ gap, flowMissing }, strict) {
-  if (!strict || !gap && !flowMissing)
+function issueStrictRefusal({ gap, flowMissing, uiProposalMissing = null }, strict) {
+  if (!strict || !gap && !flowMissing && !uiProposalMissing)
     return null;
   const out = ["⛔ issue NOT created. Fix the body, then run the same command again:"];
   if (flowMissing)
     out.push(`   • ${flowMissing}`);
+  if (uiProposalMissing)
+    out.push(`   • ${uiProposalMissing}`);
   if (gap) {
     out.push(`   • no table, diagram or image in ${gap.words} visible words. Add one (first that fits):`);
     out.push(...gap.suggestions.map((s) => `     - ${s}`));
   }
-  out.push("   Shapes: skills/shipflow/references/message-style.md § Business flow, and § Issue-body ladder element 3 (Picture).");
+  out.push("   Shapes: skills/shipflow/references/message-style.md § Business flow, and § Issue-body ladder element 3 (Picture) with its UI proposal rule.");
   return out.join(`
 `);
 }
@@ -11546,7 +11642,7 @@ function routeLine(r) {
 }
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
-  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--assignee <login...>", "Assignee(s) for the new issue (@me = the gh login). Default under pickup-scope=assigned: the current login — assignment is the queueing gesture (#600), so an unassigned filing is invisible to `issue next`").option("--no-assign", "File UNASSIGNED, overriding the pickup-scope=assigned auto-assign default — the per-invocation opt-out for a human filing a backlog item that the loop should NOT pick up. Mutually exclusive with --assignee").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).addOption(new Option("--lint <mode>", `Body checks on --body: warn (print \uD83D\uDCA1 lines, file the issue) or strict (exit ${EXIT_ISSUE_NO_VISUAL}, nothing filed) when the body has no **Business flow** section (issue #1493), or runs over ${MIN_WORDS_FOR_VISUAL} visible words with no table, mermaid diagram or image (issue #1491). Agents pass strict; the other body lint lines stay warnings`).choices([...ISSUE_LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--assignee <login...>", "Assignee(s) for the new issue (@me = the gh login). Default under pickup-scope=assigned: the current login — assignment is the queueing gesture (#600), so an unassigned filing is invisible to `issue next`").option("--no-assign", "File UNASSIGNED, overriding the pickup-scope=assigned auto-assign default — the per-invocation opt-out for a human filing a backlog item that the loop should NOT pick up. Mutually exclusive with --assignee").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--proposal <path...>", `UI proposal: image(s) of the proposed screen, drawn before filing, for visualization and reference only (not a requirement) — hosted and embedded under \`## UI proposal\` (issue #1496), with the --screenshot shots, on the body line \`${MEDIA_PLACEHOLDER}\` or else at the end. Required by --lint=strict when the body reads as a UI change`).option("--proposal-caption <text...>", "Caption for each --proposal image, by position — says what THAT mockup shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).addOption(new Option("--lint <mode>", `Body checks on --body: warn (print \uD83D\uDCA1 lines, file the issue) or strict (exit ${EXIT_ISSUE_NO_VISUAL}, nothing filed) when the body has no **Business flow** section (issue #1493), runs over ${MIN_WORDS_FOR_VISUAL} visible words with no table, mermaid diagram or image (issue #1491), or reads as a UI change with no --proposal (issue #1496). Agents pass strict; the other body lint lines stay warnings`).choices([...ISSUE_LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     if (!ISSUE_LINT_MODES.includes(opts.lint ?? "warn")) {
       console.error(`Unknown lint mode "${opts.lint}" — valid: ${ISSUE_LINT_MODES.join(", ")}. Nothing was created.`);
       process.exit(1);
@@ -11554,7 +11650,9 @@ function registerIssueCommand(program2) {
     requireFlagWhenMachine(opts, "--title", opts.title);
     const shots = opts.screenshot ?? [];
     const shotCaptions = opts.screenshotCaption ?? [];
-    const shotErr = validateScreenshotSelection(shots, shotCaptions);
+    const proposals = opts.proposal ?? [];
+    const proposalCaptions = opts.proposalCaption ?? [];
+    const shotErr = validateScreenshotSelection(shots, shotCaptions) ?? validateProposalSelection(proposals, proposalCaptions);
     if (shotErr) {
       console.error(shotErr);
       process.exit(1);
@@ -11566,13 +11664,14 @@ function registerIssueCommand(program2) {
     const lint = [...lintIssueTitle(title), ...lintMessageBody(body), ...lintBodyLength(body), ...lintIssueOutcome(body), ...lintJargonGloss(body), ...lintReadability(body, "issue")];
     for (const p of lint)
       console.warn(`⚠️  body lint: ${p}`);
-    const visualGap = issueVisualGap(body, { hasImageAttachment: shots.some(isImagePath) });
+    const visualGap = issueVisualGap(body, { hasImageAttachment: shots.some(isImagePath) || proposals.length > 0 });
     const flow = checkBusinessFlow(body);
-    const refusal = issueStrictRefusal({ gap: visualGap, flowMissing: flow.missing }, opts.lint === "strict");
+    const uiProposalMissing = checkUiProposal(body, { hasProposalAttachment: proposals.length > 0 });
+    const refusal = issueStrictRefusal({ gap: visualGap, flowMissing: flow.missing, uiProposalMissing }, opts.lint === "strict");
     if (refusal) {
-      const blocked = [...flow.missing ? ["no-business-flow"] : [], ...visualGap ? ["no-visual"] : []];
+      const blocked = [...flow.missing ? ["no-business-flow"] : [], ...uiProposalMissing ? ["no-ui-proposal"] : [], ...visualGap ? ["no-visual"] : []];
       if (opts.json)
-        console.log(JSON.stringify({ error: "issue NOT created", blocked, businessFlow: flow.missing, suggestions: visualGap?.suggestions ?? [], lint }));
+        console.log(JSON.stringify({ error: "issue NOT created", blocked, businessFlow: flow.missing, uiProposal: uiProposalMissing, suggestions: visualGap?.suggestions ?? [], lint }));
       else
         console.error(refusal);
       process.exit(EXIT_ISSUE_NO_VISUAL);
@@ -11585,12 +11684,15 @@ function registerIssueCommand(program2) {
       advise("business flow", flow.missing);
     if (flow.codeNames.length)
       advise("business flow", formatBusinessFlowCodeNames(flow.codeNames));
+    if (uiProposalMissing)
+      advise("ui proposal", uiProposalMissing);
     if (visualGap)
       advise("picture", formatVisualGap(visualGap));
     duplicatePreflight(repo, title, opts);
     const { assignees, auto: assigneesAuto } = resolveCreateAssignees(opts.assignee, opts.assign === false);
-    if (shots.length > 0) {
-      for (const p of shots) {
+    const media = [...shots, ...proposals];
+    if (media.length > 0) {
+      for (const p of media) {
         const size = statSync(p).size;
         if (size > MAX_SCREENSHOT_BYTES) {
           const msg = `${p}: ${(size / (1 << 20)).toFixed(1)}MB exceeds the 8MB per-file limit — issue NOT created.`;
@@ -11601,36 +11703,40 @@ function registerIssueCommand(program2) {
           process.exit(1);
         }
       }
-      const files = shots.map((p) => ({ filename: basename2(p), data: new Uint8Array(readFileSync4(p)) }));
-      let urls;
+      const files = media.map((p) => ({ filename: basename2(p), data: new Uint8Array(readFileSync4(p)) }));
+      const urls = [];
       try {
-        ({ urls } = await ctx.client.uploadMedia(ctx.creds.org, ctx.project.projectId, files));
+        for (const batch of packMediaBatches(files)) {
+          urls.push(...(await ctx.client.uploadMedia(ctx.creds.org, ctx.project.projectId, batch)).urls);
+        }
       } catch (e) {
-        const msg = `Screenshot upload failed — issue NOT created: ${e.message}`;
+        const msg = `${proposals.length ? "Screenshot or proposal" : "Screenshot"} upload failed — issue NOT created: ${e.message}`;
         if (opts.json)
           console.log(JSON.stringify({ error: msg }));
         else {
           console.error(msg);
-          console.error("Retry, or create without --screenshot and attach via `issue evidence --image` once the issue exists.");
+          console.error("Retry, or create without --screenshot/--proposal and attach via `issue evidence --image` once the issue exists.");
         }
         process.exit(1);
       }
       if (urls.length !== files.length) {
-        const msg = `Screenshot upload returned ${urls.length} URL(s) for ${files.length} file(s) — issue NOT created.`;
+        const msg = `Upload returned ${urls.length} URL(s) for ${files.length} file(s) — issue NOT created.`;
         if (opts.json)
           console.log(JSON.stringify({ error: msg }));
         else
           console.error(msg);
         process.exit(1);
       }
-      const section = renderScreenshotsSection(files.map((f, i) => ({
-        filename: f.filename,
-        url: urls[i],
-        caption: shotCaptions[i]
-      })));
-      body = body.trimEnd() ? `${body.trimEnd()}
+      const hosted = files.map((f, i) => ({ filename: f.filename, url: urls[i] }));
+      const sections = [
+        renderScreenshotsSection(hosted.slice(0, shots.length).map((h, i) => ({ ...h, caption: shotCaptions[i] })), proposals.length ? PROPOSAL_IMAGE_WIDTH : undefined),
+        renderProposalSection(hosted.slice(shots.length).map((h, i) => ({ ...h, caption: proposalCaptions[i] })))
+      ].filter(Boolean).join(`
 
-${section}` : section;
+`);
+      body = placeMediaSections(body, sections);
+    } else {
+      body = placeMediaSections(body, "");
     }
     createIssueGuarded({ repo, title, body, labels: opts.label ?? [], assignees, assigneesAuto, lint }, opts, { skipPreflight: true });
   }));
@@ -12389,31 +12495,12 @@ ${block}`));
         }
       }
       const hosted = [];
-      let batch = [];
-      let batchBytes = 0;
-      const flush = async () => {
-        if (batch.length === 0)
-          return;
+      for (const batch of packMediaBatches(allImgs)) {
         const uploaded = await ctx.client.uploadMedia(ctx.creds.org, ctx.project.projectId, batch).catch(onEvidenceErr);
         if (!uploaded)
           return;
-        const { urls } = uploaded;
-        for (let i = 0;i < batch.length; i++) {
-          hosted.push({ filename: batch[i].filename, url: urls[i] ?? "" });
-        }
-        batch = [];
-        batchBytes = 0;
-      };
-      for (const img of allImgs) {
-        const nextCount = batch.length + 1;
-        const nextBytes = batchBytes + img.data.byteLength;
-        if (batch.length > 0 && (nextCount > MAX_EVIDENCE_FILES_PER_UPLOAD || nextBytes > MAX_EVIDENCE_BYTES_PER_UPLOAD)) {
-          await flush();
-        }
-        batch.push(img);
-        batchBytes += img.data.byteLength;
+        batch.forEach((f, i) => hosted.push({ filename: f.filename, url: uploaded.urls[i] ?? "" }));
       }
-      await flush();
       if (hosted.some((h) => !h.url)) {
         console.error("media staging returned fewer URLs than files — retry the evidence call; never host the shots on a git branch.");
         process.exit(1);

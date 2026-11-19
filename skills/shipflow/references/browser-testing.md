@@ -234,3 +234,40 @@ first. `--no-api-scan` skips the diff scan. Nothing here blocks the upload.
   commit of the images to any repo, no third-party image host. A side
   branch puts the images in every clone of the repo, and its links break
   when the branch is deleted.
+
+## 7. Draft a UI proposal — before the issue is filed (#1496)
+
+An issue that changes what a person sees carries a picture of the proposed
+screen (`message-style.md` § Issue-body ladder, UI proposal). The picture
+is for visualization and reference only, not a requirement: what must be
+built goes in the issue text, so a quick drawing is enough. Get the
+browser (§1) and the app (§3) running, then edit the live page into the
+proposal. It keeps the app's real styles, so there is no design file to
+keep in step:
+
+```bash
+EV="${TMPDIR:-/tmp}/shipflow-evidence/proposal-<slug>"; mkdir -p "$EV"
+$BROWSE goto <url of the screen that changes>
+$BROWSE screenshot "$EV/now.png"                  # the screen as it is today
+# Add, rename or hide parts. Copy a neighbour's class so a new part looks native.
+$BROWSE js 'document.querySelectorAll("<row selector>").forEach(r=>{
+  const b=r.querySelector("button").cloneNode(); b.textContent="Unlink"; r.append(b);
+  b.style.outline="3px solid #ff3b30"; b.style.outlineOffset="3px" })'
+$BROWSE screenshot "$EV/proposal.png"             # the proposed screen, change outlined
+renaiss-shipflow issue create --lint=strict --title "<outcome>" --body - \
+  --screenshot "$EV/now.png" --screenshot-caption "<screen> today" \
+  --proposal "$EV/proposal.png" --proposal-caption "<what changed>" < body.md
+```
+
+- **A screen that does not exist yet**: write one static HTML page in the
+  repo's `DESIGN.md` tokens (colours, type, spacing), or link the app's
+  built stylesheet, then `$BROWSE goto "file://$EV/proposal.html"` and
+  screenshot it. No "now" shot.
+- **Outline only what is new or changed** (§ Mark what changed); the rest
+  of the screen is context.
+- **States**: when the acceptance names an empty, error or loading state,
+  draw it as another `--proposal` image, one caption each.
+- **Motion**: an interaction that only makes sense moving is a GIF of the
+  edited page (`--proposal flow.gif`); GitHub strips video.
+- **App out of reach** (auth wall, no local server, native app): the static
+  page above. Never attach the HTML file: GitHub shows images, not pages.

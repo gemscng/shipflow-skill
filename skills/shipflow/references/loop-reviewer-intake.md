@@ -124,18 +124,18 @@ Input: issue + `triage`. Produce an **acceptance brief**:
    leaks data (intake counterpart of the automerge interpretation gate,
    `loop-worker.md` §5d). Brief only after confirmation (or `loop-proceed`).
 4c. **Design-bearing issues need an APPROVED DESIGN — don't admit without
-   one.** Design-bearing = the reporter would want to see it before it is
-   built: a new page, screen, dialog, component or empty state; a layout,
-   navigation or visual change; a new user-facing flow or interaction;
-   user-visible copy beyond a fix. NOT design-bearing: restoring existing
-   behaviour, backend/API/data work with no visible surface, tests,
-   refactors, a typo. When in doubt, it is design-bearing.
+   one.** Design-bearing = the issue needs a UI proposal: the list of what
+   does and does not is in `message-style.md` § Issue-body ladder, UI
+   proposal. When in doubt, it is design-bearing.
    - **Propose, then stop.** Write the design proposal and escalate it —
      `issue escalate <n> --category design --reason-file <path>` — in the
      🚧 shape (`message-style.md` § Design proposal). Action-needed
      (≤ 10 non-blank lines) leads with **one short context line**, then
      the decision table — one row per reply (`approve` recommended · **one
-     alternative** · `change`), each with an If chosen cell; **one `#` on
+     alternative** · `change`), each with an If chosen cell; when the issue
+     carries a `## UI proposal` (filed with `issue create --proposal`), draw
+     option A's wireframe from that image and link it as reference only —
+     the image is never the spec; **one `#` on
      the first option row, blank `#` on continuations** (never all rows
      `1`). Put the ASCII wireframe (≤ 4 rows: boxes, labels, order — no
      fence) in `### Design notes` with the **states** (empty · loading ·
@@ -163,12 +163,15 @@ Input: issue + `triage`. Produce an **acceptance brief**:
      placement, and every `change` the reporter asked for — acceptance
      criteria, not background. The worker builds exactly that
      (`loop-worker.md` §5c); the PR reviewer compares the after-shots to
-     it (`loop-reviewer.md` § Design discipline).
+     it (`loop-reviewer.md` § Design discipline). A `## UI proposal`
+     image goes in the brief as a link marked "reference only".
    - `loop-proceed` / "just build it" = approve the **recommended**
      option; record `design: approved by proceed — option A` in the
-     brief. A design the reporter drew in the issue body (mockup,
+     brief. A design the reporter drew in the issue body (sketch,
      screenshot, wireframe) is already approved — brief it, don't
-     re-propose.
+     re-propose. A `## UI proposal` section is not a design to brief: it
+     is for visualization and reference only, so the reporter approves
+     the wireframe drawn from it, never the image's pixels, colours or copy.
 5. **Unknowns & assumptions (blind-spot pass) — mandatory section.** Every
    open ambiguity + the assumption chosen; flag those that would change the
    architecture. A listed assumption costs one veto reply; a silent one is

@@ -153,7 +153,8 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    proposal at intake (`loop-reviewer-intake.md` 4c); the brief's
    **Approved design** section is the acceptance criterion: same
    structure, states and placement as drawn, tokens per the repo's
-   `DESIGN.md`. Your after-screenshots must match it. The code forces a
+   `DESIGN.md`. Your after-screenshots must match it; the issue's
+   `## UI proposal` image is reference only, not a target. The code forces a
    deviation (a component that cannot do X, a route that already exists)?
    Take the smallest deviation, log it under **Deviations from brief**
    (5b) — a design deviation is always a reporter-gate row, never silent.

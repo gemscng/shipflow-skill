@@ -75,7 +75,9 @@ against it — structure, states, placement, tokens. A mismatch is
 Deviations row is a reporter-gate row (5b), not an approval. A
 design-bearing diff (new screen, layout, flow, visual) with NO approved
 design in the brief is `request_changes`: the reporter has not seen it,
-and "looks fine to me" is not their approval.
+and "looks fine to me" is not their approval. The issue's `## UI proposal`
+image is for visualization and reference only: differing from it is never
+a finding on its own (#1496).
 
 **Degradation discipline: a gate that could not RUN blocks approve.** The
 packet marks every input it failed to obtain, in its own body:
