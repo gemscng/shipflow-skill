@@ -1,0 +1,161 @@
+---
+name: shipflow-loop
+description: "Run the ShipFlow autonomous issue→PR reconciler — continuous by default (re-checks every ~15 min); pass `once` for a single pass"
+---
+
+Run the ShipFlow CLI from this plugin. Its entry point is `../../cli/dist/renaiss-shipflow.mjs` relative to this skill directory. Run Node with that absolute path from the user's current project. Use the arguments from this invocation. For host-specific setup and loop behavior, see `../shipflow/references/antigravity.md`.
+
+Enter ShipFlow **Loop mode**: a reconciler that drives every issue/PR you own
+toward `merged`. The usual "don't auto-branch / auto-fix" guardrails are lifted.
+**This file covers invocation only** — argument parsing and the continuous-mode
+trigger. The loop's semantics are canonical in
+`skills/shipflow/references/loop-mode.md`; every step below points at that
+file's real section headings (§) — follow them there, never from memory.
+
+## Arguments (`$ARGUMENTS`)
+
+**Continuous mode is the default** — the loop re-runs on an interval (default
+`15m`; override with `watch=<dur>`) until stopped (see *Continuous mode* below).
+
+| Token | Meaning |
+|---|---|
+| `once` | run a single pass and stop, no trigger (the old one-shot behavior) |
+| `stop` | stop continuous mode (delete the trigger; an in-session loop ends after the current pass) |
+| `watch=<dur>` | override the re-run interval (default `15m`) |
+| `cap=N` | how many PRs to open per pass before pausing; `cap=all` drains the queue |
+| `concurrency=N` | max issues/PRs worked at once (#744); `concurrency=1` = fully serial |
+| `usage-max=N` | do not start a tick once the Claude 5-hour **or** weekly usage is at/above N% (default **90**) |
+| `takeover=on` | take the tenant over for this machine's local agent (#1151): `renaiss-shipflow agent takeover` at run start and again every tick as the heartbeat, `agent release` on `stop`. The server hands this loop the automatic issue-triage, PR-review and test-runner events meanwhile (the rest keep running server-side) and the dashboard names you. Default **off**. To take over *all* server workload (every workflow's model calls) run `/shipflow-engine` alongside instead — a separate mode, see `references/agent-engine.md` |
+| `reset-at=N` | spend the once-a-week `/limit-reset` only once the blocking 5-hour window is at/above N% (default **99**; between `usage-max` and this the tick just pauses) |
+| `limit-reset=off` | never spend Claude Code's once-a-week `/limit-reset` when the 5-hour window stops a tick (default: spend it, 5-hour window only, at/over `reset-at`) |
+| `refill=on` | after an empty bug sweep, also file work from `priorities`, uncovered `test_priority: high` features, and flaky tests (`auto-refill`; default **off** — `loop-bug-sweep.md` step 4) |
+| anything else | an `issue next` filter (e.g. `--label bug`) |
+
+**Cap precedence:** a user `cap=N` token → `$SHIPFLOW_LOOP_CAP` → **5**.
+**Concurrency precedence:** a user `concurrency=N` token →
+`$SHIPFLOW_LOOP_CONCURRENCY` → **3**. Not a CLI preference — do not
+`config get` / `config set` a `loop-concurrency` key (unknown key, exit 1).
+**Usage-max precedence:** a user `usage-max=N` token →
+`$SHIPFLOW_LOOP_USAGE_MAX` → **90**. Also invocation-only.
+**Session reset:** a `limit-reset=off` token → export
+`SHIPFLOW_LOOP_LIMIT_RESET=off` for the run so the tool refuses the spend
+too; `$SHIPFLOW_LOOP_LIMIT_RESET` → **on**. **Reset floor:** a user
+`reset-at=N` token → `$SHIPFLOW_LOOP_RESET_AT` → **99**. Also invocation-only.
+**Takeover:** a `takeover=on` token → `$SHIPFLOW_LOOP_TAKEOVER` → **off**.
+Invocation-only; exit 3 from `agent takeover` (another member holds the
+tenant) ends the run before any dispatch — two loops must never drive one
+tenant.
+**Refill:** a `refill=on` token → `$SHIPFLOW_LOOP_REFILL` → **off**. Also
+invocation-only; the sweep's `bug-hunt` / `bug-hunt-cap` config knobs still
+bound it.
+
+## The tick — skeleton (each step lives in loop-mode.md at the § named)
+
+1. **Setup, once** — orchestrator worktree, never the live checkout: prefer
+   `EnterWorktree` named `shipflow-loop`, else `git worktree add
+   .worktrees/shipflow-loop -b shipflow-loop/base origin/<default>`; reuse if it
+   exists. Serial claims/inbox/merges run here. Workers never checkout here —
+   each adds `.worktrees/shipflow-loop-<issue>` (fix) or
+   `.worktrees/shipflow-loop-pr-<n>` (reconcile) (#744). § "Setup — run in a
+   worktree (once, before the cycle)".
+2. Honour the policy knobs (`renaiss-shipflow config list`) and dispatch
+   through the three roles — thin orchestrator, mandatory reviewer, worker —
+   as fresh subagents: § "Policies — the three knobs (set once, then trust
+   them)" · § "Roles — three subagents the orchestrator dispatches".
+3. **Usage gate — EVERY tick, first thing, before the plan and before ANY
+   dispatch.** Run
+   `"$PLUGIN_DIR/bin/shipflow-usage" check --text`
+   (`PLUGIN_DIR=$(ls -d ~/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/null | sort -V | tail -1)`).
+   Pass `--max N` only for an explicit `usage-max=N` token; otherwise the
+   tool reads `$SHIPFLOW_LOOP_USAGE_MAX`, then 90.
+   Exit **3** = at/over the threshold → try the once-a-week session reset
+   first: `"$PLUGIN_DIR/bin/shipflow-usage" limit-reset --text` (pass
+   `--reset-at N` only for an explicit `reset-at=N` token; the tool spends
+   only at/over 99% by default). It exits
+   **0** → the 5-hour window cleared, re-run `check` and run the tick
+   normally. Exit **5** (under the 99% floor / already used / disabled) or
+   **2** (outcome unreadable) → post
+   `⏸ paused · usage <reason> ≥ N% · <reset outcome> · next check at the
+   next tick` and **end the tick** — nothing else runs, the cron stays.
+   Exit **2** from `check` = cannot tell → continue, say so in the summary
+   line, and on tick 1 run `shipflow-usage install-statusline` (idempotent,
+   never overwrites a foreign statusLine). Exit **0** → continue. § "Usage
+   gate — TICK-START, before everything else".
+4. **Tick 1 only — the Initial Plan (pass ledger)** before ANY dispatch
+   (#600); later ticks print only the summary line: § "The cycle — each tick".
+5. CLI drift check: § "0. CLI drift check — POST-MERGE (primary) · TICK-START
+   (backstop)".
+6. **A. Reconcile in-flight first** — `renaiss-shipflow inbox --json`, act per
+   `state` until nothing `needsAttention`: § "A. Reconcile in-flight work —
+   dispatch a worker per item" and § "Reconcile playbook (inbox `state` →
+   action)".
+7. **B. Admit new work** under the WIP limit, up to `cap` per pass and up to
+   `loop-concurrency` (default 3) issues in flight at once — serial Picks,
+   parallel fix workers each in its own worktree (#744) —
+   `renaiss-shipflow issue next --json` claims only issues **assigned to the
+   loop's account** (`pickup-scope` default `assigned`, #600; assign an issue
+   to queue it, `config set pickup-scope all` for repo-wide). **Route first**
+   (serial, once per tick, `pickup-scope=assigned` only): `renaiss-shipflow
+   issue route --all --json` names a dev for every open unassigned issue via
+   the Issue Triage picker, or leaves it when nobody fits — `routed N` on the
+   summary line: § "B. Admit new work — under the WIP limit, every issue
+   reviewed first", step 0.
+8. **C. Bug sweep** when B is empty and A is clean: § "C. Bug sweep — when
+   there's nothing left to fix, hunt for new bugs".
+9. **D. Repeat** A→B→C to the cap or a truly empty queue; the cap counter
+   resets every tick: § "D. Repeat / stop".
+
+## Continuous mode (default) — invocation; run-start copy is `loop-setup.md`
+
+Unless `once` was passed, set the trigger up once, idempotently, at run start:
+
+- Check `CronList`; if no shipflow-loop job exists, `CronCreate` a **recurring** job
+  at the interval (default every 15 min — pick an off-`:00`/`:30` minute, e.g.
+  `7,22,37,52 * * * *`) whose prompt is the **fully-qualified** command
+  **`/shipflow:shipflow-loop`** — **not** the bare `/shipflow-loop`, which a
+  scheduler-fired prompt can't resolve (it errors with `Unknown command:
+  /shipflow-loop`); always use the exact `<plugin>:<command>` form you were invoked
+  as. Then run the first pass now. Re-entry is **idempotent** — a tick sees the
+  existing job via `CronList` and skips re-creating it, so crons never stack.
+- **No `CronCreate` in this harness** (Codex CLI, Cursor, any harness without an
+  in-session scheduler): do NOT stop after one pass, and do NOT report "no
+  scheduler configured". Loop in-session: run the pass, post the summary line,
+  then `sleep` the interval in chunks of at most 300 s (raise the shell tool's
+  timeout above each chunk), then run the next pass — repeat until the user says
+  `stop` or interrupts. `once` is still one pass. Always-on (survives the
+  session): `shipflow-codex-loop` runs one `codex exec … once` per tick —
+  `references/codex.md` § "Continuous mode".
+- Each tick is one ordinary pass — it ends with the summary line and **does not
+  pause to ask**; an empty queue is fine. Reuse the one loop worktree across
+  ticks (don't tear it down between passes).
+- **`once`** runs a single pass and stops — no trigger created. **Stop** an
+  active continuous loop with `/shipflow:shipflow-loop stop` → `CronDelete` the
+  job, then the run-end worktree cleanup (§ "Setup — run in a worktree (once,
+  before the cycle)"). Always stop the loop before tearing down the worktree.
+- **Caveat:** the trigger fires only while Claude Code is running and the REPL is
+  idle, and in some environments (e.g. cmux) it is session-scoped and auto-expires
+  after ~7 days. For a true always-on reconciler independent of this session, drive
+  `/shipflow:shipflow-loop once` from an external scheduler (system cron / launchd /
+  GitHub Actions) instead.
+
+## Every other rule → loop-mode.md
+
+| Topic | loop-mode.md § |
+|---|---|
+| Policy knobs, `app-slug`, what "approval" is, continuous `CronCreate` | "Policies — the three knobs (set once, then trust them)" + `loop-setup.md` |
+| Usage gate — `shipflow-usage check` exit 0/2/3, the once-a-week `limit-reset` spend and its rails, the paused line, statusline sink install | "Usage gate — TICK-START, before everything else" + `loop-setup.md` § "Usage gate sink" |
+| Orchestrator/reviewer/worker contracts, model tiers, `TaskStop`, `/goal` | "Roles — three subagents the orchestrator dispatches" |
+| Per-`state` actions: `ci_failing`, review feedback, merge-order, `approved_ready`/automerge, "behind base", `conflict` + sweep scope, `reporter_corrected`, `awaiting_reporter`/escalate-once, `needs-human` replies | "A. Reconcile in-flight work — dispatch a worker per item" + "Reconcile playbook (inbox `state` → action)" |
+| Intent gate, comment markers, `pr note` / `--rework-from` | "A. Reconcile in-flight work — dispatch a worker per item" + `loop-gate.md` |
+| Intake gate, dependency waits, capability requests, reviewer intake brief, worker fix contract, reviewer PR review + security diff scan + approve flags, escalation (`autoResolved`, `signoff-owner`), health gate | "B. Admit new work — under the WIP limit, every issue reviewed first" |
+| Sweep procedure, dedupe / exit 12, filing caps | "C. Bug sweep — when there's nothing left to fix, hunt for new bugs" |
+| Pass ledger (`tokensReadPerTick`), cap / empty-queue summary | "D. Repeat / stop" |
+| Merge path (`pr automerge` only), dispatch-don't-do, WTF brake | "Guardrails" |
+| GitHub comment/PR/issue formats, issue-body ladder, commit messages | `references/message-style.md` |
+
+**End of every pass (mandatory):** post the ONE emoji-coded summary line — `✅ N
+merged · 🔀 N opened · ⏸ N parked (reason) · 🚧 N open decisions (oldest Nd)` — rules
+(incl. what a `once` run may ask, and gated-row wording) in § "D. Repeat /
+stop".
+**Tick 1's Initial Plan block (pass ledger) is mandatory** before any dispatch —
+shape and sections in § "The cycle — each tick".

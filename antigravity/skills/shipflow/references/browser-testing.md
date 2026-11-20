@@ -1,0 +1,273 @@
+# Browser end-to-end testing (the loop's E2E verify step)
+
+How the loop verifies a fix in a real browser and captures screenshot evidence
+before opening a PR. **Required** for UI/behavior changes; backend/library-only
+changes may verify with the project's own tests (still capture relevant output).
+
+## 1. Resolve + ensure a healthy browser
+
+ShipFlow drives the **gstack headed browser** (`browse`). Resolve *and*
+health-check in one step:
+
+```bash
+BROWSE="$("$PLUGIN_DIR/bin/shipflow-browser" --ensure)" || { echo "$BROWSE" >&2; exit 1; }
+```
+
+`--ensure` resolves gstack `browse` **and heals a wedged server** (stale port /
+"Auth failed — server may have restarted"); the chromium profile (cookies,
+auth) persists on disk. No gstack → fall back to the project's E2E runner
+(Playwright/Cypress) and still produce a screenshot — never skip visual
+verification for a UI change.
+
+## 2. Scope the test from the branch diff
+
+Map the diff to the pages it affects — don't just verify the one line you
+edited:
+
+```bash
+git diff origin/<default>...HEAD --name-only
+git log origin/<default>..HEAD --oneline
+```
+
+- route/controller files → the URL paths they serve
+- view/template/component files → the pages that render them
+- model/service files → pages whose features use them
+  (`renaiss-shipflow features --json` → each feature's `paths`)
+- **adjacent pages** — features sharing paths with the changed ones are the
+  regression risk; test them too
+- API/backend-only change → exercise it (`$BROWSE js "await fetch('/api/...')"`)
+  and still load the main flow
+
+Affected + adjacent pages = the step-3 test plan. No page mapped → smoke-pass
+the homepage + top nav.
+
+## 3. Get the app under test running
+
+- The browser is already healthy (step 1) — **reuse** the session, don't
+  relaunch.
+- Point it at the **running app** (local dev server, the PR's `--preview-url`,
+  or production), at the page the issue is about.
+  **Starting a dev server: DETACH it, never foreground** (#490) — a foreground
+  `npm run dev` blocks the whole tool call. Also (#491): isolate per run (a
+  shared PID file/port makes parallel workers kill each other's servers), kill
+  the PROCESS TREE, and ABORT when readiness never comes:
+  ```bash
+  RUN_DIR=$(mktemp -d)
+  # Reserve a FREE port — a colliding draw makes the probe "ready" against the wrong app (#492).
+  PORT=$((3100 + RANDOM % 900))
+  while lsof -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; do PORT=$((3100 + RANDOM % 900)); done
+  ( PORT=$PORT nohup npm run dev > "$RUN_DIR/dev.log" 2>&1 & echo $! > "$RUN_DIR/dev.pid" )
+  # Teardown takes the whole DESCENDANT tree — the saved PID is the npm
+  # wrapper; `pkill -P` misses grandchildren reparented to PID 1.
+  kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill "$1" 2>/dev/null; }
+  READY=
+  for i in $(seq 1 30); do
+    curl -fsS -o /dev/null "http://localhost:$PORT" && { READY=1; break; }
+    sleep 2
+  done
+  if [ -z "$READY" ]; then
+    tail -40 "$RUN_DIR/dev.log"           # the finding IS the failed startup
+    kill_tree "$(cat "$RUN_DIR/dev.pid")"
+    exit 1                                 # HARD STOP — never fall through into browser steps
+  fi
+  # … drive the browser against http://localhost:$PORT …
+  kill_tree "$(cat "$RUN_DIR/dev.pid")"
+  ```
+- Auth-walled pages: `--ensure` already persists cookies — **never re-import
+  on a healthy session**. Order:
+  1. `$BROWSE goto <url>`
+  2. If already authenticated, **STOP**.
+  3. If still on a login wall, run `--import-if-needed` (do not treat leftover domain cookies as success):
+     ```bash
+     "$PLUGIN_DIR/bin/shipflow-browser" --import-if-needed chrome --domain <domain>
+     ```
+     Never omit `--domain` (that opens the Chrome picker). The helper
+     skips only after a successful import stamp
+     (`$HOME/.cache/shipflow/cookie-import.$DOMAIN`) and serializes via a
+     `mkdir` lock under `$TMPDIR` (picker/Keychain at most once; `flock`
+     is missing on macOS).
+
+## 4. Drive the fix end-to-end (before → after, one pair PER changed surface)
+
+**One before/after pair per surface or state the fix touches — not one pair
+total.** List the affected surfaces from the issue/PR, then loop:
+
+```bash
+EV="${TMPDIR:-/tmp}/shipflow-evidence/issue-<n>"; mkdir -p "$EV"
+# For EACH affected surface/state (name the files after it):
+$BROWSE goto <url>
+$BROWSE snapshot -i                          # interactive elements → @e1, @e2 refs
+$BROWSE screenshot "$EV/<surface>-before.png" # state before exercising the fix
+# Reproduce the issue's scenario using refs from the snapshot:
+$BROWSE click @e3
+$BROWSE fill @e4 "value"
+$BROWSE press Enter
+$BROWSE snapshot -D                          # DIFF — proves what changed, the heart of the check
+$BROWSE console --errors                     # no new console errors introduced
+# Outline AROUND the changed element — never an overlay/arrow ACROSS it:
+$BROWSE js 'document.querySelectorAll("<changed-el-selector>").forEach(e=>{e.style.outline="3px solid #ff3b30";e.style.outlineOffset="3px"})'
+$BROWSE screenshot "$EV/<surface>-after.png" # the fix working, change outlined
+```
+
+- The `snapshot -D` diff IS the verification — the DOM changed the way the fix
+  intends.
+- A surface only reachable via interaction (a result card, an open overlay) is
+  still a surface — drive to it and capture its pair.
+- Optional layout check: `$BROWSE responsive "$EV/layout"` (mobile/tablet/desktop).
+
+### Mark what changed — every image (#1375)
+
+Every after-shot and every defect shot shows a red outline (`3px solid
+#ff3b30`, offset 3px) AROUND the region its caption names. Never draw boxes,
+arrows or overlays across the content. A before-shot needs no mark.
+
+- **Live web page** — the CSS outline before the capture (the `$BROWSE js`
+  line above). A defect capture (`issue evidence --actual`, `issue create
+  --screenshot`) outlines the broken element the same way. A PR's
+  `### Verification manifest` evidence line gets the outline from the
+  server: `evidence: <url> highlight "<css selector>"`. A selector that
+  matches nothing marks the check ⚠️ Error.
+- **An image that is not a live page** — a before/after composite, a
+  simulator, device or native-app screenshot, a design mock (`--image`),
+  terminal output, an image captured earlier. CSS cannot reach it: draw the
+  outline onto the image with the browser (recipe below) and upload the
+  marked copy.
+- **Composite before/after** — mark the after panel. Mark the same region on
+  the before panel too when that helps the comparison.
+- **Whole-screen or layout change** — outline the 1–3 regions that differ
+  most (a new rail, a moved edge, an empty-pane message), not the whole
+  frame.
+- **Caption** — name each marked region ("rail on the right edge, 'Pick a
+  card' pane").
+
+Recipe for an image that is not a live page: `mark.html` next to the image
+(`src` set to its file name), one `.m` box per region.
+
+```bash
+cat > "$EV/mark.html" <<'EOF'
+<!doctype html><meta charset="utf-8">
+<style>body{margin:0;background:#0d0d10}#shot{display:inline-block;padding:8px}
+#img{position:relative}#img img{display:block}
+.m{position:absolute;outline:3px solid #ff3b30;outline-offset:3px;border-radius:6px}</style>
+<div id="shot"><div id="img"><img src="after.png">
+<div class="m" style="left:878px;top:190px;width:48px;height:300px"></div>
+</div></div>
+EOF
+$BROWSE viewport 3000x1600                        # at least the image size + 16px
+$BROWSE goto "file://$EV/mark.html"
+$BROWSE screenshot '#shot' "$EV/after-marked.png" # the image plus 8px padding each side
+```
+
+A box's `left` / `top` / `width` / `height` are the region's pixels in the
+image itself (`file after.png` prints the image size; scale what you measure
+on a downscaled view). Read the marked PNG and move any box that misses its
+region before you upload it. The loop reviewer blocks an after-shot or defect
+shot with no mark on the region its caption names
+(`references/loop-reviewer.md` Mode 2, item 4).
+
+## 5. Make the screenshots visible, score, then gate
+
+- **Read** each PNG with the Read tool — an unread screenshot is invisible.
+- **Score the affected page(s)** with the rubric in `references/qa-report.md`
+  (0–100, weighted), **before** and **after**, for a delta. Re-score
+  **adjacent** pages — a dropped neighbour = the fix regressed it (revert/fix
+  before the PR, never ship it).
+- **Pass/fail gate:** proceed to evidence + PR only if genuinely verified
+  (expected change present, no new console errors, **no negative neighbour
+  delta**). Otherwise fix, or release the issue as blocked — never open a PR
+  for an unverified fix.
+
+## 6. Hand the evidence to the PR
+
+Once the PR is open, attach the screenshot(s) **to the PR** with `--pr`, health
+delta in the caption (the reviewer and merge gate read it):
+
+```bash
+renaiss-shipflow issue evidence <n> --pr <pr> \
+  --before "$EV/mode-row-before.png" "$EV/ladder-before.png" "$EV/sheet-before.png" \
+  --after  "$EV/mode-row-after.png"  "$EV/ladder-after.png"  "$EV/sheet-after.png" \
+  --label  "Mode row" "Grade ladder" "Photo sheet" \
+  --caption "Verified: <what you tested> · health <before>→<after> (Δ<+/-N>) · 0 new console errors"
+```
+
+Any number of `--before`/`--after` pairs (and `--image`/`--file` extras) is
+fine: the CLI stages them through `/media` in server-sized batches and still
+posts **one** evidence comment and **one** gallery for the call (#1404). Do
+not split the command yourself to dodge the per-upload file cap, and never
+commit screenshots to the repo.
+
+Pair/mix: `validateEvidenceSelection`
+(`apps/renaissshipflow-cli/src/evidence.ts`). `--pr` lands the comment on
+the PR (plus the reporter's chat thread; the PR footer links the issue);
+without it, an issue comment. For a PR with no tracking issue, use
+`issue evidence <pr> --pr <pr>` so both the path number and `--pr` are the
+PR. A flow that needs motion gets a GIF (`--image repro.gif`): GitHub
+plays a GIF inline but strips an mp4 (`message-style.md` § Issue-body ladder,
+element 3). A change with no UI surface (schema, persistence,
+API-only, test-only) has nothing to screenshot: attach the test-runner summary
+instead, `--file "$EV/issue-<n>-vitest.txt" --caption "Verified: <what the
+tests prove>"`. The server renders the text inline on the PR.
+
+**API changes and public exposure** (#1489): with `--pr`, the command reads
+the PR diff and attaches `api-changes.diff`. It lists the routes added (`+`) and
+removed (`-`), and `! check:` lines for added secrets, email addresses and
+personal-data fields in API code (kind and `file:line`, never the value). Add
+what detection missed with `--api-change "+ GET /api/v1/items" "- field email in
+GET /users"`. State the sensitive data the change makes public, and to whom,
+with `--exposure "none"` or `--exposure "<what, to whom>"`: the command warns
+when routes changed and it is missing. Text files (`--file`) are uploaded to a
+public bucket, so secrets and personal email addresses in them are redacted
+first. `--no-api-scan` skips the diff scan. Nothing here blocks the upload.
+
+**If the upload fails** (issue #1366), read the error first:
+
+- **Usage error** (a bad flag, a file over 8 MB, `API error 4xx` with a
+  reason): fix the command and run it again.
+- **Server or network error** (`API error 5xx`, including Cloudflare's 530,
+  or `fetch failed`): the API or its media store is down. Keep the files in `$EV`, add
+  `⚠ no screenshot — evidence upload failed: <error> (<request id>)` to the
+  PR's Testing list, and run the same `issue evidence` command again once
+  the API answers: later in the session, or on the PR's next loop pass.
+  Recapture if `$EV` is gone. Until then the reviewer's evidence gate
+  holds the PR.
+- **Never host the shots anywhere else**: no `evidence/*` side branch, no
+  commit of the images to any repo, no third-party image host. A side
+  branch puts the images in every clone of the repo, and its links break
+  when the branch is deleted.
+
+## 7. Draft a UI proposal — before the issue is filed (#1496)
+
+An issue that changes what a person sees carries a picture of the proposed
+screen (`message-style.md` § Issue-body ladder, UI proposal). The picture
+is for visualization and reference only, not a requirement: what must be
+built goes in the issue text, so a quick drawing is enough. Get the
+browser (§1) and the app (§3) running, then edit the live page into the
+proposal. It keeps the app's real styles, so there is no design file to
+keep in step:
+
+```bash
+EV="${TMPDIR:-/tmp}/shipflow-evidence/proposal-<slug>"; mkdir -p "$EV"
+$BROWSE goto <url of the screen that changes>
+$BROWSE screenshot "$EV/now.png"                  # the screen as it is today
+# Add, rename or hide parts. Copy a neighbour's class so a new part looks native.
+$BROWSE js 'document.querySelectorAll("<row selector>").forEach(r=>{
+  const b=r.querySelector("button").cloneNode(); b.textContent="Unlink"; r.append(b);
+  b.style.outline="3px solid #ff3b30"; b.style.outlineOffset="3px" })'
+$BROWSE screenshot "$EV/proposal.png"             # the proposed screen, change outlined
+renaiss-shipflow issue create --lint=strict --title "<outcome>" --body - \
+  --screenshot "$EV/now.png" --screenshot-caption "<screen> today" \
+  --proposal "$EV/proposal.png" --proposal-caption "<what changed>" < body.md
+```
+
+- **A screen that does not exist yet**: write one static HTML page in the
+  repo's `DESIGN.md` tokens (colours, type, spacing), or link the app's
+  built stylesheet, then `$BROWSE goto "file://$EV/proposal.html"` and
+  screenshot it. No "now" shot.
+- **Outline only what is new or changed** (§ Mark what changed); the rest
+  of the screen is context.
+- **States**: when the acceptance names an empty, error or loading state,
+  draw it as another `--proposal` image, one caption each.
+- **Motion**: an interaction that only makes sense moving is a GIF of the
+  edited page (`--proposal flow.gif`); GitHub strips video.
+- **App out of reach** (auth wall, no local server, native app): the static
+  page above. Never attach the HTML file: GitHub shows images, not pages.

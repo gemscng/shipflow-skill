@@ -1,0 +1,4 @@
+interface:
+  display_name: "ShipFlow"
+  short_description: "Issues, PRs, loop mode via renaiss-shipflow"
+  default_prompt: "Use $shipflow to show my ShipFlow status and what to work on next."

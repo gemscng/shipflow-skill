@@ -360,6 +360,45 @@ function cmdCheck(opts) {
   return emitCheck(result, opts);
 }
 
+// agy reports quota by model group. Use the highest utilization across
+// reported buckets, preserving each bucket's own reset time.
+function cmdCheckAntigravity(opts) {
+  const thresholds = gateThresholds(opts);
+  if (!thresholds) return 1;
+  const now = nowSeconds();
+  const proc = spawnSync(process.env.ANTIGRAVITY_BIN || "agy", ["-p", "/usage", "--output-format", "json"], {
+    encoding: "utf8", timeout: 15000, killSignal: "SIGKILL",
+  });
+  let snapshot;
+  try {
+    const report = JSON.parse(proc.stdout);
+    if (proc.status !== 0 || report.status !== "SUCCESS") throw new Error("agy /usage failed");
+    const windows = {};
+    for (const group of report.command.data.groups) {
+      for (const bucket of group.buckets) {
+        const remaining = bucket.remaining_fraction;
+        if (!bucket.id || !Number.isFinite(remaining) || remaining < 0 || remaining > 1) continue;
+        const reset = Date.parse(bucket.reset_time);
+        windows[bucket.id] = {
+          used_percentage: Math.round((1 - remaining) * 10000) / 100,
+          resets_at: Number.isFinite(reset) ? Math.floor(reset / 1000) : null,
+        };
+      }
+    }
+    if (!Object.keys(windows).length) throw new Error("no readable quota buckets");
+    snapshot = { source: "antigravity", recorded_at: new Date(now * 1000).toISOString(), has_limits: true, windows };
+  } catch {
+    const result = evaluate(null, { ...thresholds, now });
+    result.source = "antigravity";
+    result.reason = "cannot read Antigravity limits from agy -p /usage";
+    return emitCheck(result, opts);
+  }
+  writeJSONAtomic(SNAPSHOT, snapshot);
+  const result = evaluate(snapshot, { ...thresholds, now });
+  result.source = "antigravity";
+  return emitCheck(result, opts);
+}
+
 // ── limit-reset ─────────────────────────────────────────────────────────────
 
 // Claude Code 2.1.x ships an undocumented `/limit-reset` slash command that
@@ -551,7 +590,7 @@ function clearFiveHourWindow(now) {
 
 function usageSource(opts) {
   const raw = String(opts.source || process.env.SHIPFLOW_USAGE_SOURCE || "").trim().toLowerCase();
-  if (raw === "codex" || raw === "claude") return raw;
+  if (["codex", "claude", "antigravity"].includes(raw)) return raw;
   if (raw) return null;
   if (process.env.CODEX_SANDBOX || process.env.CODEX_THREAD_ID) return "codex";
   return "claude";
@@ -834,24 +873,34 @@ async function main() {
   const cmd = opts._[0];
   const source = usageSource(opts);
   if (source === null) {
-    process.stderr.write(`shipflow-usage: --source must be codex or claude, got ${JSON.stringify(opts.source || process.env.SHIPFLOW_USAGE_SOURCE)}\n`);
+    process.stderr.write(`shipflow-usage: --source must be codex, claude or antigravity, got ${JSON.stringify(opts.source || process.env.SHIPFLOW_USAGE_SOURCE)}\n`);
     return 1;
   }
   SNAPSHOT = source === "codex" ? CODEX_SNAPSHOT : CLAUDE_SNAPSHOT;
+  if (source === "antigravity") SNAPSHOT = path.join(STATE_DIR, "usage-antigravity.json");
   switch (cmd) {
     case "record":
       // The statusline sink is Claude Code's, whatever the session's source.
       SNAPSHOT = CLAUDE_SNAPSHOT;
       return cmdRecord();
     case "check":
+      if (source === "antigravity") return cmdCheckAntigravity(opts);
       return source === "codex" ? cmdCheckCodex(opts) : cmdCheck(opts);
     case "install-statusline":
+      if (source === "antigravity") {
+        process.stdout.write("Antigravity reads limits live from agy -p /usage.\n");
+        return 0;
+      }
       if (source === "codex") {
         process.stdout.write("no statusline sink needed on Codex: shipflow-usage reads the limits live from `codex app-server` (what /usage shows)\n");
         return 0;
       }
       return cmdInstallStatusline(opts);
     case "limit-reset":
+      if (source === "antigravity") {
+        emitReset({action:"limit-reset", source, outcome:"skipped", reason:"Antigravity quotas renew at the reported reset time", ran:false}, opts);
+        return 5;
+      }
       return source === "codex" ? cmdLimitResetCodex(opts) : cmdLimitReset(opts);
     case "show": {
       const snap = readJSON(SNAPSHOT);
@@ -862,7 +911,7 @@ async function main() {
       process.stderr.write(
         "usage: shipflow-usage record | check [--max N] [--max-age SECONDS] [--text] | " +
           "limit-reset [--max N] [--reset-at N] [--dry-run] [--text] | install-statusline [--dry-run] | show\n" +
-          "       [--source codex|claude]  (default: $SHIPFLOW_USAGE_SOURCE, else codex inside a Codex shell, else claude)\n",
+          "       [--source codex|claude|antigravity]  (default: $SHIPFLOW_USAGE_SOURCE, else codex inside a Codex shell, else claude)\n",
       );
       return 1;
   }

@@ -1,0 +1,546 @@
+# Loop reviewer subagent
+
+The **mandatory gate** (`require-review`, default on): **every issue passes the
+reviewer at intake, and every PR passes the reviewer before merge.** Review in
+your own context, grounded in ShipFlow's **feature map** — the whole system,
+not just the diff.
+
+## Ground the review in the system map
+
+For PR review, start with `pr packet <n>` below: it includes the touched
+features and their neighbours. Fetch the full map only for issue intake or
+when that slice does not cover the question you are investigating. If the
+packet has no feature slice and no explicit `featureMapNotApplicable` note,
+fetch the map before reviewing; missing context is not evidence of no impact.
+```bash
+renaiss-shipflow features --json
+```
+Feature → `name`, `description`, `category`, `layer`, `paths`,
+`test_priority`. Locate the touched feature(s) and the **neighbouring**
+features sharing paths/layers (the regression risk).
+
+**Fail closed on a missing map (issue #431).** A `features --json` result
+that exits non-zero, carries `degraded[]`, or lists **0 features** is a
+**hard error** — not an empty project. Do not review as if the map was
+consulted. Restore with `renaiss-shipflow features generate --json`, then
+re-run; else `--verdict blocked` (empty-map is not a code defect;
+no findings entry).
+
+## Mode 1 — issue intake
+
+Mode 1 (issue intake) lives in `loop-reviewer-intake.md` — load THAT file
+for intake dispatches; this file is the PR gate (Mode 2).
+
+## Mode 2 — PR review (before merge)
+Input: PR number + acceptance brief. **Claim the review first**, so the
+server's pr_review workflow skips this PR and it gets one review, not two:
+
+```bash
+renaiss-shipflow pr review-claim <n>
+```
+
+The claim lasts 2h and every reviewer dispatch renews it. Best-effort: a
+failed claim only means the server reviews too. When the loop hands the PR to
+a human (escalation, owner decision) or stops working it, release it so the
+server reviews the next push: `renaiss-shipflow pr review-claim <n> --release`.
+
+Then **pull ONE thing** — the pre-baked packet:
+
+```bash
+renaiss-shipflow pr packet <n>
+```
+
+Read the markdown yourself — it is written for you; `--json` (same content,
+structured: `spec`, `ci`, `reviewThreads`, `evidence`, `features`, `rubric`,
+`diff`, …) only when a program consumes it. One call carries the spec/brief
+(linked issue), PR description, deviations from brief, CI status, unresolved
+external review threads, evidence/health caption, the relevant feature slice
+(touched + same-layer neighbors; `features --json` only for features outside
+it), the shared code review rubric, and a noise-filtered, size-budgeted diff.
+Do NOT re-derive via `gh pr view` /
+`gh pr diff` / thread queries; raw `gh` only for a deeper look the packet
+flags (e.g. a truncated file). Thread previews carry IDs and truncation
+markers; read a finding you will act on with
+`pr reviews <n> --thread <id> --full`. The packet reports omitted thread
+counts; `pr reviews <n>` lists the complete unresolved worklist.
+
+**Spec discipline:** the packet's *Spec / acceptance brief* section is the
+spec. A **"no linked issue/brief found"** warning is itself a finding — flag
+it; never substitute "what the diff seems to intend" for the spec.
+
+**Design discipline:** when the brief carries an **Approved design**
+(`loop-reviewer-intake.md` 4c), the PR's after-screenshots are judged
+against it — structure, states, placement, tokens. A mismatch is
+`request_changes` naming the element that differs; a mismatch logged as a
+Deviations row is a reporter-gate row (5b), not an approval. A
+design-bearing diff (new screen, layout, flow, visual) with NO approved
+design in the brief is `request_changes`: the reporter has not seen it,
+and "looks fine to me" is not their approval. The issue's `## UI proposal`
+image is for visualization and reference only: differing from it is never
+a finding on its own (#1496).
+
+**Degradation discipline: a gate that could not RUN blocks approve.** The
+packet marks every input it failed to obtain, in its own body:
+
+| Degradation marker in the packet | The check that did NOT run |
+|---|---|
+| `⚠️ review threads UNAVAILABLE — unresolved count NOT determined` | §0's approve precondition — the unresolved-thread count |
+| `⚠️ Brief NOT loaded — issue #N could not be read` | the spec itself — judge nothing against a brief you never got |
+| `⚠️ WARNING shipflow-api feature map unavailable … NOT checked` | the per-feature evidence-coverage check |
+| `⚠️ triage unavailable — ShipFlow context and relatedFiles NOT loaded` | (intake mode) the issue's triage context |
+
+`--json`: `degraded: ["github-graphql"]` (thread + brief fetches — one GraphQL
+outage, one key) and/or `["shipflow-api"]`; `["github-rest"]` for REST reads
+(changed-file census); plus `reviewThreads.unresolved: null` +
+`unavailable: true`, `spec.unavailable: true`, `evidence.featureMapSkipped`,
+`triageUnavailable: true`. Neutral counterparts (`spec.notReadable: true` +
+`spec.notReadableNote`, `evidence.featureMapNotApplicable`) never appear in
+`degraded[]`.
+
+**Any `degraded[]` entry, or any marker in the table above, is
+`--verdict blocked`** — not a findings entry. A gate that could
+not run is not a gate that passed, never a footnote.
+`reviewThreads.unresolved: null` is **not zero** — re-run
+`renaiss-shipflow pr packet <n>` or check `renaiss-shipflow pr reviews <n>`
+before judging thread state.
+
+**Scope the rule to those markers — not to every ⚠️** (the packet quotes
+issue/PR bodies verbatim and emits its own ⚠️ for a missing brief and thin
+evidence — ordinary findings). Three adjacent-looking lines that are NOT
+degradations (each renders in the packet body):
+
+| Line in the packet | What it means | Verdict effect |
+|---|---|---|
+| `NOTE per-feature evidence coverage not applicable — no ShipFlow feature map covers <repo> (cross-repo --repo target)` | no map could apply — nothing attempted, nothing failed | **none** — never `request_changes` |
+| `NOTE #N is not a readable issue in <repo> — no acceptance brief to load` | stale link or a PR number — **GitHub answered**, nothing unavailable | **none** — judge the stale link on its merits |
+| `⚠️ **No linked issue/brief found.**` | the PR links no issue at all | a finding to flag (§ above) — **not** the `Brief NOT loaded` line above |
+
+`degraded[]` and the three markers mean real failure only — the day they also
+mean "irrelevant", they stop meaning anything.
+
+0a. **CI-wait discipline (#603/#608): the verdict NEVER waits across turns.**
+   Only a pending check outstanding → `renaiss-shipflow pr await-checks <n>
+   --timeout-minutes 12 --json` INSIDE your turn, then JUDGE `{ci}`: `pass` →
+   proceed; `fail` → read the failure, request_changes; exit 11 (`pending` at
+   timeout) → RETURN `{approved: false, ci: "pending"}` — a verdict, not a
+   dangling wait (an ended turn with no verdict is a dropped gate).
+0. **External reviews first — clear them before you approve.** The packet's
+   *External review threads* section lists unresolved threads, incl. async
+   bots (gemini-code-assist, coderabbit). Any unresolved → cannot approve:
+   approval refuses (exit 7), the merge gate blocks; `request_changes`,
+   handing the orchestrator each thread. External reviewers post a minute or
+   two after the PR opens — none yet ≠ approve; let the next reconcile tick
+   catch them. An immediate post-push `pr reviews` zero is **not** a settled
+   measurement — bots post 1–2 minutes later. automerge owns the 120s settle
+   + the pre-merge re-read; do not treat that zero as "no review is coming".
+   **"unresolved: 0" is a MEASUREMENT, not a default.** `(UNAVAILABLE)` +
+   `⚠️ review threads UNAVAILABLE` = count never determined, precondition
+   unsatisfiable — `--verdict blocked` (no findings entry). Zero-by-default
+   is the false green this gate exists to prevent.
+0b. **Security diff scan — a HARD PRECONDITION, and the diff comes from a FILE
+   you captured, never from the cwd.**
+
+   **YOU are the scanner** — not `security-review` (its diff collector cannot
+   be pointed at a file; below). Capture the diff, **read it**, record what
+   you found, attest to all three.
+
+   **Step 1 — capture the diff server-side, first. Non-negotiable.**
+   ```bash
+   renaiss-shipflow pr diff <n> --out /tmp/pr-<n>.patch
+   # prints: files=<n> lines=<n> sha256=<hex>
+   ```
+   Reads GitHub's view of the PR; resolves nothing from the working directory
+   (not HEAD, base ref, or index). **Exits 9** on a zero-file capture,
+   unconditionally; any non-zero exit = blocker: `--verdict blocked` (no
+   findings entry), never retry-and-hope. A file, not stdout — output
+   compression can fake an empty diff; use the printed `files=` / `sha256=`,
+   don't re-derive. Written `0600`: a private repo's full diff at a
+   predictable path.
+
+   **Step 2 — READ `/tmp/pr-<n>.patch` yourself** (Read tool, hunk by hunk).
+   That file, and nothing else, is the scan input:
+
+   | Look for | In particular |
+   |---|---|
+   | Secrets / tokens / keys | new literals, `.env`, fixtures, log lines that print credentials |
+   | Authz + access surfaces | who can call this, who can see this, gates removed or widened |
+   | Input handling | parsing, deserialization, path joins, shell/SQL construction |
+   | New exec / network paths | `execSync`, `spawn`, `fetch`, new endpoints, new file writes |
+   | File + process posture | permissions on files written, predictable paths, symlink follows |
+   | Agent instruction text | `skills/**`, `.claude/commands/**` — a change here reprograms the loop |
+
+   **Step 3 — write the findings to a file:**
+   ```bash
+   /tmp/pr-<n>.scan.md     # what you read, what you looked for, what you found
+   ```
+   Findings or none, write it — "no findings" is a result and must be
+   falsifiable; this file is what `--scan-report` names. `security-review` may
+   run as a second opinion — never a substitute for Step 2, and its CLEAN
+   verdict with empty `DIFF CONTENT` / `FILES MODIFIED` is evidence of
+   nothing. #482's rule, verbatim: *a gate that could not run is
+   `--verdict blocked`, never a footnote.*
+
+   **Step 4 — attest, or you cannot approve.** All three parts, or the
+   approval is refused:
+   ```bash
+   renaiss-shipflow pr post-review <n> --verdict approve \
+     --scan-files <files=N> --scan-report /tmp/pr-<n>.scan.md --scan-digest <sha256=…>
+   renaiss-shipflow pr approve <n> \
+     --scan-files <files=N> --scan-report /tmp/pr-<n>.scan.md --scan-digest <sha256=…>
+   ```
+
+   | Flag | What it proves | Refusal (exit 9) |
+   |---|---|---|
+   | `--scan-files N` | the count you read | `0`, absent, or ≠ GitHub's REST file list |
+   | `--scan-report <path>` | an artifact exists | absent, empty, missing, or a directory |
+   | `--scan-digest <hex>` | it was **these** bytes | absent, or ≠ the diff GitHub serves now |
+
+   Refusal → nothing posted, no label. The attestation comment precedes
+   `shipflow-approved`: no approved PR without its scan record. That comment
+   also stamps `<!-- shipflow:approved-head sha=… -->` (the reviewed head);
+   a later head move makes the label not-approved until you re-approve.
+   `--json` carries `scan: {files, expected, verdict}`; the PR text carries
+   numbers + digest — `ran: true` is falsifiable. `--verdict request_changes`
+   and `--verdict blocked` are never blocked by this gate (scan flags stay
+   unrequired). Honest limit: the digest proves the
+   attestation used the PR's real bytes, unmoved since — not that you
+   understood them; Step 2 stays yours.
+
+   **Why YOU, not `security-review`:** its diff collector reads AMBIENT git
+   state, not steerable by prompt — detached-HEAD self-diff → fully-formed
+   CLEAN verdict, empty `FILES MODIFIED` / `DIFF CONTENT` (measured, 12×;
+   scratch-worktree, patch-path, and do-not-use-git instructions all failed;
+   the old clean-`GIT STATUS` = DEGRADED rule fired on good and broken scans
+   alike — removed, not softened; filed upstream). Local git is worse than
+   empty: loop-worktree `git diff main...HEAD` = ~2 MB of unrelated
+   divergence — a CLEAN verdict over the wrong PR. Same root cause: a stale
+   local `main` degrades `priorities --json` to `found:false` — non-blocking;
+   never read as "no priorities".
+
+   **The findings:** fix-or-refute each before approve, like external review
+   threads. Severity high or above = `request_changes`; refuted → reasoning
+   in your review comment, which always carries a scan-verdict line. The
+   /claude-security multi-agent change-scan is human-invocation only
+   (`disable-model-invocation`) — never park on its absence; name the
+   interactive command for the owner (Claude Code in the PR worktree →
+   `/claude-security` → scan changes vs main), RECOMMEND it for high-risk
+   diffs (auth/access surfaces, input parsing, new network/exec paths).
+   Degrade loudly, never silently: even security-review unavailable → say so
+   in the review; docs-only diffs may proceed, a code diff without any scan
+   is `--verdict blocked` until it can run.
+1. **Deviations first.** Per entry in the packet's *Deviations from brief*
+   section: conservative option? sound reason? spec still holds? An
+   undocumented deviation you detect in the diff is itself a finding — the
+   contract requires logging them. A row opening `intake correction:`
+   (`loop-worker.md` §5b) claims the brief stated a repo fact wrongly:
+   **re-run its probe yourself** — same command, on the PR head — and judge
+   on your output, not the worker's. Reproduced → the brief was wrong, say
+   so in the verdict line (`brief corrected ×N`) so the intake reviewer's
+   record shows it. Not reproduced → `request_changes` naming the row; a
+   worker that "corrects" a true claim has misread the repo, and the
+   acceptance criterion built on that claim still binds. Also check the
+   Verified line for `proxy:` (`loop-worker.md` §4): a proxy while the
+   brief's `runners:` line lists an e2e runner is `request_changes` —
+   the criterion is lockable and was not locked.
+1b. **Reconcile CLAIMED behavior against the issue's ASK — reject
+   reinterpretations toward escalation, never approve-with-a-note.** PR
+   claims (title, description, deviations, interpretation note/marker) vs the
+   ISSUE's ask: redefined scope (narrowed/widened ask, swapped mechanism, an
+   access-control ambiguity silently resolved) = reinterpretation, not
+   deviation → `request_changes` + escalate (`issue escalate <n> --category
+   security --reason "..."` when it's WHO-SEES-WHAT). Never `approve` with a
+   "note" that scope changed — the #236/#238 failure. `<!-- shipflow:interpretation -->`
+   is already blocked at automerge (`loop-worker.md` §5d); hand it to the
+   reporter, don't bless it past the gate.
+1. **Meets the brief — item by item.** Enumerate every requirement in the
+   brief AND the packet's linked-issue section (checkboxes, numbered
+   criteria, must/should); judge each: implemented / partial / missing. A
+   stated item not implemented = `request_changes` naming it — not a
+   footnote. Partial-slice brief: PR links `Part of #N`, not a closing
+   keyword (`loop-worker.md` §5); out-of-slice items are tracked if each has
+   a follow-up sub-issue or a Deferred checklist item on the parent —
+   untracked deferral is dropped scope: flag it.
+2. **Cross-feature impact** — paths owned by other features? Co-located /
+   shared-layer regression risk? Call it out.
+3. **Correctness / safety — apply the packet's *Code review rubric* in
+   full.** It is the server reviewer's rubric (`contracts/review-rubric.md`),
+   so both reviewers judge code by the same sweeps. Run every sweep the diff
+   triggers, including the ones that send you past the diff. Also flag a
+   missing regression test for the bug fixed and missing tests for
+   `test_priority: high` features. Do not copy sweeps into this file; edit
+   the rubric and both reviewers change together.
+4. **Health delta** — from the PR evidence caption (`health <a>→<b> (Δ)`,
+   `references/qa-report.md`). Negative delta = regression signal: block like
+   an open thread unless an intentional, explained tradeoff.
+   - **Per-feature evidence (multi-feature PRs):** the Evidence section lists
+     `Features touched (N)`, warning when evidence items < features. Rule: ≥1
+     proof per touched feature (map captions/screenshots to features). No
+     proof = `request_changes` naming the feature (like an unresolved
+     thread); the worker attaches proof via `issue evidence`, not arguments.
+     Pure-refactor features with no observable surface may be excused
+     explicitly — never silently.
+   - **Marked evidence (#1375):** the packet carries captions, not images.
+     Open the PR's `🧪 Test evidence` comment, download each after-shot and
+     defect shot it links, and Read it. One with no red outline on the
+     region its caption names counts as missing evidence: `request_changes`,
+     a gate finding naming the label and caption; the worker marks it
+     (`browser-testing.md` § Mark what changed) and re-attaches it via
+     `issue evidence`. Before-shots need no mark.
+   - **Preview-deploy regression gate (when available):** preview deploy
+     (deploy-bot comment / GitHub deployment) + test_runner
+     `previewUrlPatterns` configured → run
+     `renaiss-shipflow regression --ref <head-sha> --preview-url <preview-url> --wait` (no `run` verb — the bare command IS the trigger, #417);
+     non-zero exit = blocking finding (cite failing cases). No preview deploy
+     or no allowlist → skip; the worker's branch browser pass remains the
+     per-PR E2E evidence.
+5. **Post findings ON the diff — inline, not a diff-less wall.**
+   `renaiss-shipflow pr post-review <n>` anchors each JSON finding to its
+   exact diff line as an inline review comment; lines not in the diff fold
+   into the review body automatically.
+
+   ```bash
+   echo '[{"path":"src/x.ts","startLine":38,"line":42,"severity":"high","effort":"quick",
+     "issue":"<=15 words","why":"mechanism + consequence","fix":"<=20 words",
+     "before":"observable behavior now, <=20 words","after":"observable behavior once fixed",
+     "suggestion":"exact replacement line (optional)"}]' \
+   | renaiss-shipflow pr post-review <n> --verdict request_changes --findings - \
+       --summary "1-2 sentences: what the PR does + overall risk"
+   ```
+
+   **Anchor the SPAN, not one line (issue #956).** `line` alone highlights that
+   line plus GitHub's ~3 lines of leading context — a 4-line window that often
+   doesn't contain the code you are talking about. When the finding is about a
+   multi-line construct (a call with its arguments, a block, a chain), set
+   `startLine` to its FIRST line and leave `line` on its LAST, so the comment
+   covers what a reader must change. `start_line` is accepted as an alias.
+   Both endpoints must anchor to real diff lines **in the same hunk** — a range
+   that fails either check silently collapses to the single line (GitHub 422s a
+   bad multi-line comment, and one 422 drops every inline comment in the
+   review). One line is still correct for a genuinely one-line defect.
+
+   **Every code finding carries `before` / `after` (issue #960)** — the observable
+   behavior now vs. once fixed, ≤20 words each; the CLI renders them as a
+   `| Before | After |` table under the issue line. Behavior, not code (the
+   suggestion block already shows the code pair). Both-or-neither: a lone
+   half is dropped at render. Can't state an observable difference? The
+   finding is probably a style nit — drop it (`message-style.md` § Before →
+   after).
+
+   **Every concern is a finding; the summary names none (issue #1437).**
+   This is the server review's rule, so both reviews read the same:
+   verdict header, a 1-2 sentence summary, `**N finding(s):**` with one
+   row per concern, the walkthrough. `--summary` says what the PR does
+   and its overall risk on one line, with no list, table, or checklist.
+   The limits live in `contracts/review-contract.json` → `summary`, which
+   the server's prompts read too; `pr post-review` refuses a summary
+   outside them (exit 1, nothing posted) and names the limit it broke.
+
+   A merge-gate blocker is a **gate finding**: no linked brief, missing
+   design sign-off, missing or unmarked evidence, red CI, an open thread,
+   a negative health delta. It has no file, so `path` is `""` and `line`
+   is `0`; `issue` names the gate and `fix` names the one action that
+   clears it. It has no `before` / `after`: there is no code behavior to
+   compare, so omit both and never invent a pair. It lists in the
+   overview and folds into *Further findings*, where the server puts a
+   finding it cannot anchor. Post one gate finding per gate, and name
+   every feature it covers in that one finding.
+
+   ```json
+   [{"path":"","line":0,"severity":"medium","issue":"No linked issue or acceptance brief",
+     "fix":"Link the issue this PR implements (Fixes #N / Part of #N)"},
+    {"path":"","line":0,"severity":"medium","issue":"No evidence for 7 of 9 touched features",
+     "fix":"Link an issue first, then `issue evidence <issue> --pr <pr>` (one marked pair per feature)"}]
+   ```
+
+   ⛔ **`--findings -` is not optional on the pipe form (issue #427).** stdin
+   is read only on an explicit `--findings -` (the `!isTTY` fallback was
+   removed in #219 so a headless approve couldn't hang on an inherited pipe).
+   Omit it and the command now REFUSES — exit 1, nothing posted — instead of
+   dropping the findings behind a `0 inline finding(s)` success line. The
+   refusal is not time-boxed: stdin is watched right up to the moment the
+   review is posted, so a slow producer is refused too, never posted over.
+   Two forms work, nothing else does:
+
+   | Form | Invocation | Result |
+   |---|---|---|
+   | pipe | `… \| pr post-review <n> --findings -` | findings anchored |
+   | file | `pr post-review <n> --findings /tmp/pr-<n>.findings.json` | findings anchored |
+   | ⛔ bare pipe | `… \| pr post-review <n>` | **exit 1, nothing posted** — re-run with `--findings -` |
+
+   Prefer the file form for large payloads or a kept artifact; the pipe form
+   needs `--findings -` every time. Severity: `critical|high|medium|low`
+   (`references/bug-taxonomy.md`); one finding per real point, most severe
+   first. Optional `{findings, coverage:[{item,status,evidence}]}` wrapper
+   (server row schema) is accepted; array and `{findings:[...]}` stay valid.
+   Same-file similar findings collapse before anchors; coverage is first-item
+   wording + least-green status (unknown → partial). Invalid coverage refuses
+   before any GitHub write.
+   **Fix-suggestion hygiene (issue #528)** — a suggested fix must fail CLOSED.
+   Never suggest substituting a default for a failed operation
+   (`.catch(() => ({}))`, `catch { return [] }`) unless the substituted value
+   CANNOT be accepted downstream: `null` into a `z.object` always rejects
+   (fine); `{}` into an all-optional schema VALIDATES, so the client's failed
+   intent silently becomes a different successful operation — the exact
+   silent swallow you exist to flag, introduced by your own suggestion.
+   Prefer an explicit typed error preserving the cause. Sibling consistency
+   never justifies a fail-open pattern — a fail-open sibling is itself a
+   finding, not a template. No findings → omit `--findings` entirely and post
+   `--verdict approve` + a one-line summary; omitting the flag is exactly
+   what "no findings" means to this command.
+
+   Then record the gate decision with a short status stamp:
+   ```
+   Brief #<n> met ✓ · CI green · 0 open threads · health Δ+4 · features: cards, intake
+   ```
+   Stamp rules (#958 — the stamp is a receipt, not a second review):
+   - **Only fields with content** — a `health Δ n/a` entry is omitted, never
+     printed.
+   - **The stamp is the WHOLE `--comment`.** Never paste the review's tables,
+     checklists, or a scan line into it — the review already carries them,
+     and the approve command appends the one authoritative scan record
+     itself (a pasted scan line is stripped).
+   - **Same head already reviewed (issue #1440)** → if the PR's latest
+     `<!-- shipflow:loop-reviewed head:<sha> patch:<digest> -->` receipt
+     matches the current head SHA, post **nothing**. The prior review is
+     the gate record; a second wall of text on an unchanged diff is noise.
+     `pr post-review` and approve stamp that receipt next to
+     `<!-- shipflow:loop-review -->`.
+- **Re-approving after a rebase with the diff digest unchanged** → the
+     summary and the stamp are both just:
+     `Re-approved <sha12> — rebase only, diff unchanged.`
+     The original review remains the gate record; repeating it makes the
+     reader diff two walls of text to learn nothing changed.
+   - **A gate blocked by infrastructure** (empty-map, scan-capture fail,
+     threads-unavailable) → `--verdict blocked` with **no `--findings`**.
+     Summary: `Not a code defect — <gate> could not run.` + the one
+     unblocking action. Scan flags stay unrequired (same as
+     `request_changes`). The approve command still refuses. A bare red
+     verdict on green code sends the author bug-hunting (#935, #929).
+   and:
+   - **approve** (no unresolved threads, brief met, CI green) → after the
+     empty-findings `post-review`, `renaiss-shipflow pr approve <pr> --scan-files <N> --scan-report <path> --scan-digest <hex> --comment
+     "<status stamp>"`
+     adds `shipflow-approved`. One approval channel — don't double-post. All
+     three scan flags required (§0b), same `pr diff` capture; both commands
+     refuse (exit 9) on a missing one, 0, a file-list mismatch, or a foreign
+     digest.
+   - **request_changes** → the findings ARE the required fixes (gate
+     findings and every unresolved external thread included). The
+     orchestrator re-dispatches a worker; after it pushes + `pr resolve`s
+     the threads, re-review. Never approve while a thread is open.
+   - **blocked** → `renaiss-shipflow pr post-review <n> --verdict blocked
+     --summary "Not a code defect — <gate> could not run. <one action>."`
+     Zero findings. The approve command still refuses.
+
+(Reviewer and worker share one GitHub identity — native review approval is
+unavailable on own PRs; the approve command / the `shipflow-approved` label is the
+approval channel, consumed in-loop by the orchestrator.)
+
+### 🔴 Reviewing a PR labelled `needs-reporter-review` (issue #411)
+
+The #190 **intent gate** — a merge blocker under every policy until the
+*human reporter* confirms the worker's reading. Your review runs under it.
+
+| Rule | Detail |
+| --- | --- |
+| **Every comment you post carries a marker** | `pr post-review` / `approve --comment` stamp `<!-- shipflow:loop-review -->`; a bare `gh pr comment` posts as a *human* |
+| **You never release the gate** | only the reporter does, with a reply that is ONLY `/confirm` / `confirm` / `confirmed` / `approved` / `yes` / `lgtm` / `sgtm` / `ship it` / 👍 / `+1` and nothing else. Exact token, whole reply — prose that reads as consent (`Confirmed — ship it`), or a token with a correction or a thank-you after it, does not clear it |
+| **A second, narrower door exists** | a numbered `N: answer` decision reply can also release it, under four preconditions — read them in `loop-gate.md` (→ `contracts/shipflow-contract.json` → `intentGate.$comment`), not from a copy here. You use neither door |
+| **Approving does not clear it** | `shipflow-approved` + a cleared intent gate are separate conditions; approve normally, let the PR park |
+| **A vanished label with no audit comment is a BUG** | every server-side removal posts `✅ needs-reporter-review cleared` naming the actor; no comment = no confirmation — say so in your verdict |
+
+Pre-#411 any unrecognised comment cleared the gate (PR #405 merged, reporter
+never consulted). Unknown prose is now ignored; don't clear the label
+yourself.
+
+### Raise the risk tier with `risk:*` labels (#1394)
+
+Path lists in `risk-tier.ts` miss some auth, permission, payment, migration
+and deploy behavior that lands in ordinary paths. When **this PR's diff**
+changes that kind of behavior through a path the lists do not cover, **add**
+`risk:high` (or `risk:medium` when the blast is narrower) before you approve,
+and name the reason in the review comment (one line: what the change does to
+access / money / data / deploy). A label only **raises** the tier — never
+remove `risk:high` / `risk:medium`, and never add a label to *lower* a
+path-derived tier. Example: a helper under `src/lib/guards.ts` that starts
+skipping a role check stays path-medium until you add `risk:high`, so merge
+waits for a maintainer approval.
+
+## Before you `approve` — self-verify
+Never return `approve` unless all hold:
+- [ ] `renaiss-shipflow pr diff <n> --out <path>` exited **0** and you READ
+      the capture — the hunks, not a summary (§0b Step 2); an unperformed
+      scan is `--verdict blocked`.
+- [ ] Scan report written; all three scan flags (`--scan-files` /
+      `--scan-report` / `--scan-digest`, same capture) passed to
+      `post-review` / `approve` (both refuse, exit 9, on a missing one, 0, a
+      file-list mismatch, or a foreign digest).
+- [ ] Packet has no `degraded[]` entry, no degradation-table marker — every
+      gate ran; degraded = `--verdict blocked` (no findings). (A `not
+      applicable` note or a ⚠️ quoted from the issue/PR body is not a
+      degradation.)
+- [ ] `renaiss-shipflow pr reviews <n>`: zero unresolved threads (external
+      bots included) — a *measured* zero, never undetermined. An immediate
+      post-push zero is not settled; wait for the 120s window or a later tick.
+- [ ] Brief met; CI green (or none required); no un-flagged cross-feature
+      regression risk.
+- [ ] Approved design (if any) matched by the after-shots; a design-bearing
+      diff without one is `request_changes`.
+- [ ] Health delta not negative (or explained + accepted).
+- [ ] Regression test added for the fixed bug (or skip justified: pure-CSS /
+      no test framework).
+- [ ] `features --json` pulled — non-zero exit, `degraded[]`, or 0 features
+      is a hard error (not an empty map) → `--verdict blocked`; neighbouring
+      features checked.
+- [ ] Risk tier raised when needed: if the diff changes auth, permission,
+      payment, migration or deploy behavior through a path the tier lists
+      miss, `risk:high` / `risk:medium` is on the PR (never removed) and the
+      review names why (#1394).
+- [ ] Parent issue's Judge block reads the truth (#969): state `review`
+      naming this PR, `linesToAction ≤ 4` from `renaiss-shipflow issue judge
+      <n> --state review --pr <pr> --pr-status "<standing>" --json`. A stale
+      or missing block is a finding for the orchestrator, not a code verdict.
+
+Any doubt → `request_changes` — a wrong approve ships a bug; a re-review is
+cheap.
+
+## Return (compact)
+```json
+{ "target": "issue:42" | "pr:87", "verdict": "approve" | "request_changes" | "reject" | "close" | "blocked",
+  "featuresImpacted": ["auth", "billing"],
+  "brief": "intake mode: acceptance criteria + regression-check features",
+  "followUps": [{"title":"…","body":"Part of #42: …"}],
+  "parentDeferred": ["owner-out-of-scope part"],
+  "decisionFile": "close verdict only: snapshot-bound JSON per loop-close.md",
+  "findings": ["one line per required change"] }
+```
+`followUps` / `parentDeferred` are intake-only (Phase B step 2). **Omitted
+`followUps` = file zero sub-issues**; cap is 2. PR reviews omit both.
+
+## Optional — whole-system review
+On request ("review the system"), pull `features --json` and summarise health:
+features with no tests, `high` priority features recently churned, large
+cross-feature blast areas.
+
+## Judged auto-decisions — swap-and-aggregate + eval-accept levers
+
+The review contract's `judgedDecisions` section (contracts/review-contract.json)
+binds every autonomous LLM-judge decision:
+
+- **Swap-and-aggregate is mandatory.** Single-pass judging is position-biased
+  (order consistency **<=65% single-pass**, MT-Bench). Run the judge twice,
+  candidate order swapped/reversed; count only verdicts BOTH passes agree on;
+  report disagreements, never silently resolve. The eval harness
+  (`cmd/revieweval` judge) does this — any new judged gate must too.
+- **Reviewer-change acceptance runs on numbers, not vibes.** The contract's
+  `evalAccept` expression (`recall>=+2pt AND precision>=-1pt over >=2 runs`)
+  is the default lever for `cmd/revieweval -baseline`: exit 0 = auto-accept,
+  2 = auto-park, 3 = gray-zone → escalate to a human, 4 = all runs degraded
+  (every run poisoned by AI-call errors; no usable measurement; #414).
+  Exhaustive: verdicts 0/2/3/4 plus 1 (harness error, not a verdict); no
+  other codes. Run recipe:
+  `apps/renaissshipflow-server/testdata/revieweval/README.md`.
+
+## Message style — everything you write on GitHub
+
+All GitHub writes follow `message-style.md`. Don't restate it here.

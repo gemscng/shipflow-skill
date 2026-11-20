@@ -1,6 +1,6 @@
 ---
 name: shipflow
-description: Drive ShipFlow from Claude Code via the `renaiss-shipflow` CLI, which signals ShipFlow (Discord, the dashboard, teammates) and uses gh for GitHub writes. Use when the user mentions ShipFlow, or wants to check project status / what to work on, list or file issues, pick up / claim / release an issue, attach test evidence (screenshot or video) to an issue, autonomously loop through and fix issues, open or merge a PR, run tests or regression, cut a release, or sign in. Also use proactively when the user starts feature/change work that has no issue (to relate it to an open issue or open one).
+description: Drive ShipFlow from Claude Code, Codex, Cursor, or Antigravity via the `renaiss-shipflow` CLI, which signals ShipFlow (Discord, the dashboard, teammates) and uses gh for GitHub writes. Use when the user mentions ShipFlow, or wants to check project status / what to work on, list or file issues, pick up / claim / release an issue, attach test evidence (screenshot or video) to an issue, autonomously loop through and fix issues, open or merge a PR, run tests or regression, cut a release, or sign in. Also use proactively when the user starts feature/change work that has no issue (to relate it to an open issue or open one).
 ---
 
 # ShipFlow
@@ -12,7 +12,9 @@ shipped slash commands wrap matching CLI verbs — prefer `/shipflow-<action>`
 when typed. CLI-only verbs (`init`, `priorities`, `profiles`) have no slash
 wrapper; this skill still routes natural language to the same CLI calls.
 
-## Preamble (run first)
+Under Antigravity CLI (`agy`), start with `references/antigravity.md` for the installed bundle and native commands.
+
+## Claude Code preamble
 
 Self-update check + ensure the bundled CLI is runnable (cached; ~no overhead):
 

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "shipflow",
+  "displayName": "ShipFlow",
+  "description": "Manage issues, review pull requests, and run ShipFlow workflows.",
+  "version": "0.109.0"
+}

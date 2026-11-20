@@ -1,0 +1,226 @@
+# Loop reviewer subagent — Mode 1: issue intake
+
+The issue-intake half of the mandatory gate (`require-review`, default on):
+**every issue passes the reviewer at intake.** The PR gate (Mode 2), the
+degradation discipline, self-verify, and the Return contract live in
+`loop-reviewer.md`.
+
+## Always start by pulling the system map
+(shared preamble — canonical in loop-reviewer.md)
+```bash
+renaiss-shipflow features --json
+```
+Feature → `name`, `description`, `category`, `layer`, `paths`,
+`test_priority`. Locate the touched feature(s) and the **neighbouring**
+features sharing paths/layers (the regression risk).
+
+## Mode 1 — issue intake (before any worker touches it)
+Input: issue + `triage`. Produce an **acceptance brief**:
+0. **Human override? — check first.** `loop-proceed` label, or a human
+   "proceed / go ahead / just work on it" comment after a loop escalation =
+   green-lit: skip the validity-reject; never re-`reject` a `loop-proceed`
+   issue. Go straight to feature mapping + a brief for the smallest sensible
+   slice. Sticky across re-picks (`loop-mode.md`, human-reply rule). A
+   structured `N: answer` reply to the escalation's numbered decisions is
+   equally a proceed override: answered decisions are settled — don't re-ask;
+   skip the validity-reject.
+1. **Valid? — `reject` only for a hard blocker** (it escalates to
+   `needs-human`): missing secrets/credentials or external setup; a
+   security-/trust-critical surface needing human validation; an absent
+   spec/design doc; a hard dependency on an unmerged issue; a genuine
+   duplicate/invalid issue. Otherwise proceed.
+
+   **Zero remaining slice:** before rejecting only as already shipped or a
+   duplicate, consider the guarded `close` verdict in `loop-close.md`. It requires
+   via-shipflow provenance, typed verified citation, complete snapshot-bound
+   scope attestation and no live human/reporter gate. Preserve every extant
+   needs-human gate; invalid category does not establish closure-only purpose.
+   Human-filed targets still escalate. Follow its snapshot-preserving handoff;
+   never publish a normal worker brief between the final snapshot and close.
+
+   **The escalate reason IS the comment a human reads — act-on-able,
+   not a wall of text.** Shape is `lintEscalationReason`
+   (`apps/renaissshipflow-cli/src/escalation-format.ts`) — fix a rejected
+   reason; `--force` is for humans, not the loop. Use `--reason-file <path>`
+   for multiline UTF-8 text (`-` reads stdin), or inline `--reason`, never both.
+   Source text contains no literal backticks. Structured reasons advertise
+   at least two distinct complete choices, each with its consequence.
+   Process: `--category`
+   (`money-write`, `prod-config`, `security`, `missing-secret`,
+   `external-dependency`, `invalid`, `design`); `--owner <login>` when the issue
+   names someone, else the CLI resolves `signoff-owner` → issue author.
+   Re-escalating: `--update` edits the 🚧 comment in place; shrink to what
+   remains open, mark settled "resolved by #N". One live escalation per
+   issue — a second plain escalate while `needs-human` is on is REFUSED
+   (#969), so re-escalate with `--update`. Shape (`message-style.md`
+   § Escalation comment): Action-needed ≤ 10 lines — **one short context
+   line** (what's stuck / who decides what), then the decision table
+   `| # | Decision | Recommendation | If chosen |` (one `#` per decision;
+   continuation option rows leave `#` blank — never repeat `1` on every
+   row), everything else in `### Why it's blocked` (it folds; every folded
+   section ≤ 60 words of prose, ≤ 30 a line — numbers go in a table, the
+   rest stays on the PR or issue). When the answer must land on a PR
+   ("confirm on PR #N"), say so in the reason — the banner links the
+   PR's comment box.
+1b. **Product priority — check before any "worth building now?" escalation.**
+   `renaiss-shipflow priorities --json` parses `docs/PRIORITIES.md` (owner's
+   ordered work-class greenlist + WIP share). Human-edited ONLY — the loop
+   never writes it; propose changes via escalation. Owner's intake rule
+   (#211), verbatim:
+
+   > "Loop may auto-proceed on greenlit classes for normal slices; NEVER for
+   > deploy-blast-radius work (revert/release/config paths — the #218 lesson)
+   > which always needs per-item sign-off; off-doc work escalates as today."
+
+   - Greenlit class + normal slice → no sign-off escalation; record
+     `priorities: class <rank> — <name>` in the brief.
+   - Deploy-blast-radius (reverts, releases, deployment/config paths) →
+     per-item human sign-off ALWAYS, even when greenlit.
+   - Off-doc with a doc present (the doc exists and names classes, and this
+     issue matches none) → escalate for sign-off as before: the owner wrote
+     a greenlist and this is not on it.
+   - **No doc (`found: false`) → proceed; do NOT escalate.** Under
+     `pickup-scope=assigned` (the default) the loop only ever sees issues
+     the operator assigned to it, and the assignment IS the product
+     decision — asking them to sign off on it again is asking the human to
+     approve their own queue. Record `priorities: no doc — assignment is
+     the sign-off` in the brief. Measured 2026-09-05 (renaiss-os-index, no
+     `docs/PRIORITIES.md`): #1970 and #1976, both operator-filed and
+     operator-assigned, sat 4 days under `needs-human` on a banner whose
+     own recommendation was "Yes, greenlight". Under `pickup-scope=all` the
+     assignment signal is absent, so a missing doc there still escalates.
+     A parse `warning` (doc present but unreadable) escalates — a broken
+     greenlist is a greenlist the owner meant to apply.
+   The doc settles product priority only — other step-1 hard blockers still
+   escalate. WIP share steers the admit mix, not a per-issue gate. A sign-off
+   escalation is a **product-priority** call: its Action-needed line must
+   say so ("worth doing now?"), never read as a validity or duplicate
+   question — `invalid` is the closest category the CLI has, and that badge
+   misleads the reader unless your first line corrects it.
+2. **Too big or ambiguous? — scope down, don't refuse.** Large / open-ended /
+   ambiguous / contradictory is NOT grounds to escalate. Carve the smallest
+   bounded, value-adding slice you can confidently accept; brief that slice.
+   Apply the spin-off gate (`loop-mode.md`, Phase B step 2) to every remaining
+   part: return only gated follow-ups in `followUps` (**max 2**). Remaining
+   parts go in `parentDeferred` (the orchestrator upserts them as a
+   **Deferred** checklist on the parent). **Omitted `followUps` = file zero
+   sub-issues** — never invent filings the payload did not name. If a part's
+   first action would be an escalation, do not file it; ask on the parent, in
+   one packet. Owner-out-of-scope parts stay parent Deferred; do not file
+   them. Do **not** put Deferred in the issue brief. Mark a sliced brief
+   partial — its PR links `Part of #N`, never a closing keyword
+   (`loop-worker.md` §5). `reject` only when no safe value-adding slice
+   exists.
+3. **Feature mapping** — feature(s) touched (path overlap with
+   `triage.relatedFiles` + description); note cross-feature blast radius.
+4. **Acceptance criteria** — what "done" means + which features to
+   regression-check.
+4b. **Authz / gating issues need a WHO-SEES-WHAT table — don't admit without
+   one.** Access control / permissions / visibility / roles / tenancy / any
+   gating without who-sees-what criteria: generate the table yourself — one
+   row per (role / auth state / tenant → allowed? · sees what) — and get
+   reporter confirmation via the `N: answer` reply. Unconfirmed = `security`
+   blocker: no worker until the audience is pinned — a guessed access boundary
+   leaks data (intake counterpart of the automerge interpretation gate,
+   `loop-worker.md` §5d). Brief only after confirmation (or `loop-proceed`).
+4c. **Design-bearing issues need an APPROVED DESIGN — don't admit without
+   one.** Design-bearing = the issue needs a UI proposal: the list of what
+   does and does not is in `message-style.md` § Issue-body ladder, UI
+   proposal. When in doubt, it is design-bearing.
+   - **Propose, then stop.** Write the design proposal and escalate it —
+     `issue escalate <n> --category design --reason-file <path>` — in the
+     🚧 shape (`message-style.md` § Design proposal). Action-needed
+     (≤ 10 non-blank lines) leads with **one short context line**, then
+     the decision table — one row per reply (`approve` recommended · **one
+     alternative** · `change`), each with an If chosen cell; when the issue
+     carries a `## UI proposal` (filed with `issue create --proposal`), draw
+     option A's wireframe from that image and link it as reference only —
+     the image is never the spec; **one `#` on
+     the first option row, blank `#` on continuations** (never all rows
+     `1`). Put the ASCII wireframe (≤ 4 rows: boxes, labels, order — no
+     fence) in `### Design notes` with the **states** (empty · loading ·
+     error · success), **where it lives** (route, nav entry, trigger) and
+     the style source: the repo's `DESIGN.md` (or design-system doc)
+     binds tokens, type and spacing — cite it; no doc → name the existing
+     screen that sets the style. One line each: the section folds so
+     Action-needed stays scannable, and is itself capped at 60 words of
+     prose (lint) — what an option costs (heights, widths, per-language
+     results) is a table. A rendered mock helps when cheap: write a static HTML
+     page, screenshot it with the ShipFlow browser, attach with `issue
+     evidence <n> --image <shot.png> --image-caption "design proposal A"`
+     — supplementary, never a substitute for the wireframe. Decisions:
+     `1: approve → loop builds A as drawn` · `1: B → loop builds B` ·
+     `1: change → reply with what changes; loop re-proposes`. Then
+     `issue judge <n> --state waiting --decide "1: approve → loop
+     builds A" --decide "1: change → loop re-proposes"`.
+   - **Unconfirmed = blocker.** No worker until the reporter picks; the
+     issue parks under `needs-human` like 4b. A `change` reply →
+     re-propose with `--update` (one live proposal; History folds the
+     old). Return `verdict: "reject"` with the escalation, no brief.
+   - **Approved = the spec.** On the re-pick (step 0: answered decisions
+     are settled), the brief carries an **Approved design** section:
+     the wireframe of the chosen option verbatim, the states, the
+     placement, and every `change` the reporter asked for — acceptance
+     criteria, not background. The worker builds exactly that
+     (`loop-worker.md` §5c); the PR reviewer compares the after-shots to
+     it (`loop-reviewer.md` § Design discipline). A `## UI proposal`
+     image goes in the brief as a link marked "reference only".
+   - `loop-proceed` / "just build it" = approve the **recommended**
+     option; record `design: approved by proceed — option A` in the
+     brief. A design the reporter drew in the issue body (sketch,
+     screenshot, wireframe) is already approved — brief it, don't
+     re-propose. A `## UI proposal` section is not a design to brief: it
+     is for visualization and reference only, so the reporter approves
+     the wireframe drawn from it, never the image's pixels, colours or copy.
+5. **Unknowns & assumptions (blind-spot pass) — mandatory section.** Every
+   open ambiguity + the assumption chosen; flag those that would change the
+   architecture. A listed assumption costs one veto reply; a silent one is
+   invisible until expensive. The orchestrator posts it on the issue
+   (`loop-mode.md`). Shape (#958): a table `| # | Unknown | Assumption |`
+   (or ≤6 bullets), then ONE closing line naming the veto path — not a
+   second copy of the brief. **On re-intake, supersede — never stack:** a
+   fresh assumptions comment must open `Supersedes the <date> intake
+   comment.` so the reader knows exactly one is live (issue #921 collected
+   two competing assumption sets with no ordering cue).
+5b. **A repo-fact claim carries its probe — never assert what you did not
+   run.** Any Unknown/Assumption row or acceptance criterion that states a
+   fact about the repo (a file has or lacks X · a tool is or is not
+   installed · only N files match · a route exists) must show the command
+   and the first line of its output: `grep -rn "<main" app | wc -l → 3`,
+   `jq .devDependencies package.json | grep -c playwright → 1`. No probe →
+   the row is a guess, and a guess in the brief steers the worker: the
+   #2165 intake (renaiss-os-index) asserted "no `<main` under `app/api`" and
+   "no Playwright in this repo" without running either; both were false,
+   the acceptance criterion built on the first could not be met literally
+   (a deviation row, a reporter gate, 18 minutes of operator time), and the
+   second steered the worker to a jsdom proxy when an e2e lock was
+   available. Acceptance criteria cite only probed facts.
+   **Mandatory probe — the test runners present.** Read `package.json`
+   `scripts` + `devDependencies` (and `go.mod` / `Cargo.toml` / `pyproject`
+   for other stacks) and list them in the brief as one line —
+   `runners: vitest (unit, jsdom) · playwright (e2e, test:e2e) · go test` —
+   so the worker locks the criterion at the level it is stated
+   (`loop-worker.md` §4) instead of at whichever level it found first.
+6. **Uncertainty first, references over descriptions.** Lead with the most
+   likely wrong (data-model changes, new type interfaces, user-facing
+   behavior); routine refactoring last. When target behavior exists in code
+   (this repo, sibling, vendored), cite the path — code carries semantics
+   prose loses.
+
+## Return
+
+Intake returns the same compact shape as the PR gate — see `loop-reviewer.md`
+§ "Return (compact)" (`target: "issue:<n>"`, `verdict`, `featuresImpacted`,
+`brief`, optional `followUps` / `parentDeferred`; close additionally returns
+`decisionFile` per `loop-close.md`). **Omitted `followUps` = file zero
+sub-issues**; `followUps` is capped at 2. Triage unavailable (`⚠️ triage unavailable — ShipFlow context and
+relatedFiles NOT loaded`) blocks like any un-run gate — rule and marker table
+in `loop-reviewer.md` § "Degradation discipline". Message style for every
+GitHub write: `message-style.md`.
+
+## Risk-tier labels (PR gate owns them)
+
+Do not add or remove `risk:high` / `risk:medium` at intake. The PR reviewer
+raises the tier from the diff when path lists miss auth/payment/migration/
+deploy behavior — see `loop-reviewer.md` § "Raise the risk tier with risk:*
+labels" (#1394). A label only raises; never lower.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Smart Commit"
+  short_description: "Atomic conventional commits from the staged diff"
+  default_prompt: "Use $smart-commit to split my changes into conventional commits."

@@ -1,0 +1,168 @@
+---
+name: shipflow
+description: Drive ShipFlow from Claude Code, Codex, Cursor, or Antigravity via the `renaiss-shipflow` CLI, which signals ShipFlow (Discord, the dashboard, teammates) and uses gh for GitHub writes. Use when the user mentions ShipFlow, or wants to check project status / what to work on, list or file issues, pick up / claim / release an issue, attach test evidence (screenshot or video) to an issue, autonomously loop through and fix issues, open or merge a PR, run tests or regression, cut a release, or sign in. Also use proactively when the user starts feature/change work that has no issue (to relate it to an open issue or open one).
+---
+
+# ShipFlow
+
+ShipFlow is a human-in-the-loop communication layer: each command's value is
+the side-effect signaled to ShipFlow (Discord, dashboard, teammates), not the
+local action. Run everything via the bundled `renaiss-shipflow` CLI. The 19
+shipped slash commands wrap matching CLI verbs — prefer `/shipflow-<action>`
+when typed. CLI-only verbs (`init`, `priorities`, `profiles`) have no slash
+wrapper; this skill still routes natural language to the same CLI calls.
+
+Under Antigravity CLI (`agy`), start with `references/antigravity.md` for the installed bundle and native commands.
+
+## Claude Code preamble
+
+Self-update check + ensure the bundled CLI is runnable (cached; ~no overhead):
+
+```bash
+PLUGIN_DIR=$(ls -d ~/.claude/plugins/cache/renaissshipflow/shipflow/*/ 2>/dev/null | sort -V | tail -1)
+# Link the newest plugin's CLI launcher onto PATH (next to node). ALWAYS re-point
+# our own symlink to the newest cached version so the CLI never strands on an old
+# one; never clobber a real (non-symlink) global install.
+if [ -n "$PLUGIN_DIR" ]; then
+  _ND=$(dirname "$(command -v node 2>/dev/null)" 2>/dev/null)
+  _cur=$(command -v renaiss-shipflow 2>/dev/null || true)
+  if [ -n "$_ND" ] && { [ -z "$_cur" ] || { [ -L "$_cur" ] && readlink "$_cur" 2>/dev/null | grep -q '.claude/plugins/cache/renaissshipflow/'; }; }; then
+    ln -sf "$PLUGIN_DIR/bin/renaiss-shipflow" "$_ND/renaiss-shipflow" 2>/dev/null || true
+  fi
+fi
+[ -n "$PLUGIN_DIR" ] && "$PLUGIN_DIR/bin/shipflow-update-check" 2>/dev/null || true
+```
+
+Prints `UPGRADE_AVAILABLE` (and `SHIPFLOW_AUTO_UPDATE` is not `false`) →
+`references/auto-update.md`, then continue. No output → proceed.
+
+## Platform adaptation — non-Claude harnesses
+
+Under OpenAI Codex CLI read `references/codex.md` FIRST; under Cursor,
+`references/cursor.md` (the plugin cache resolves there — Task tool /
+CronCreate still degrade). Any other harness without Claude Code's plugin
+cache / Task tool / CronCreate / AskUserQuestion: start from
+`references/codex.md` — it replaces the preamble above and maps every
+harness-specific affordance. Commands, guardrails, and message contracts
+are identical across harnesses.
+
+## Intent → command
+
+| If the user says... | Run |
+|---|---|
+| "what's my status" | `renaiss-shipflow status --json` |
+| "list issues" | `renaiss-shipflow issues list --json` |
+| "export issues to excel" | `renaiss-shipflow issues export` (gh-style filters; `--out <file.xlsx>`) |
+| "file an issue about X" | `renaiss-shipflow issue create --lint=strict --title "X" --body "..."` — body: `references/message-style.md` § "Issue-body ladder", with a **Business flow** in business words, and a picture (table, mermaid diagram, screenshot or GIF) once it runs past 120 visible words; strict exits 2 and files nothing without them; visible bug → `--screenshot <path...>`, broken element outlined (`references/browser-testing.md` § Mark what changed); UI change → draw a UI proposal first (reference only, not a requirement) and pass `--screenshot now.png --proposal proposal.png` (`references/browser-testing.md` § 7), or write `**UI proposal:** none — <why>`. **Exit 12 = duplicate, nothing created** (#580) → `references/feature-issue-detection.md` |
+| ↳ who it lands on | Under `pickup-scope=assigned` (the default) it **auto-assigns the current gh login** (#673) — assignment is the queueing gesture, so an unassigned filing is invisible to `issue next`. `--assignee <login...>` overrides; **`--no-assign`** files it unassigned so the loop does NOT pick it up |
+| feature work with no issue / PR without `Fixes #N` | → `references/feature-issue-detection.md` |
+| "auto-create issues" | `renaiss-shipflow config set auto-issue true` |
+| "pick up #42" | `renaiss-shipflow issue work 42 --json` |
+| "what should I work on" | `renaiss-shipflow issue next --json` |
+| "route unassigned issues to a dev" | `renaiss-shipflow issue route --all --json` — the Issue Triage picker names an owner per open unassigned issue; `no-fit` leaves it. `issue route <n>` for one. The loop runs it before Pick under `pickup-scope=assigned` |
+| "what needs follow-up on my PRs" | `renaiss-shipflow inbox --json` |
+| "feature map" / "what features exist" | `renaiss-shipflow features --json`. Before changing code the agent follows `references/feature-map-first.md`; the plugin's SessionStart hook adds it to every session in a GitHub repo, and `codex/install.sh` writes it into `~/.codex/AGENTS.md` (opt out: `SHIPFLOW_FEATURE_MAP_HINT=false`) |
+| "commit" / "git commit" | Never bare `git commit`. Invoke **`shipflow:smart-commit`** (message-style.md). SessionStart + PreToolUse gate enforce this after install (`references/smart-commit-first.md`; opt out: `SHIPFLOW_SMART_COMMIT_HOOK=false`) |
+| "regenerate feature map" / empty-map | `renaiss-shipflow features generate --json` |
+| "standing priorities" | `renaiss-shipflow priorities --json` (human-edited `docs/PRIORITIES.md`) |
+| "loop through issues and fix them" / `/shipflow-loop` | Loop mode → `references/loop-mode.md` |
+| "escalate #42 to a human" | `renaiss-shipflow issue escalate 42 --reason-file reason.md --category <cat>` — categories, `--update`, and the `--for-pr`/`--once-reason` once-key: `references/loop-mode.md` |
+| "set the default sign-off owner" | `renaiss-shipflow config set signoff-owner <github-login>` |
+| "unmatched commit email" | `renaiss-shipflow git-identity --fix` |
+| "I'm done with #42" | `renaiss-shipflow issue done 42` |
+| "attach test evidence to #42" | `renaiss-shipflow issue evidence 42 --pr <pr> --before … --after … --label … --caption …` — any number of labeled pairs (CLI batches uploads, one comment/gallery); each after-shot outlined around the region its caption names (`references/browser-testing.md` § Mark what changed); `--file` for a recording, or the test-runner summary (`.txt`) when there is no UI surface; bug w/o fix → `--actual`; PR with no issue → `issue evidence <pr> --pr <pr>`; upload fails → `⚠ no screenshot` line + re-run later, never a side branch (`references/browser-testing.md` §6); with `--pr` it attaches `api-changes.diff` (routes +/−, secret and personal-data checks): add `--api-change "+ …"` for missed routes and `--exposure "none"` or what is made public (#1489) |
+| "open a PR" | `renaiss-shipflow pr create --json --lint=strict` (after committing); body: `references/message-style.md` § PR body template, which lists what strict refuses (exit 2) |
+| "is PR 87 mergeable" | `renaiss-shipflow pr ready 87 --json` |
+| "open review threads on 87" | `renaiss-shipflow pr reviews 87 --json` (read-only query like `pr ready`; parse `blocking`/`unresolvedThreads` — rc is not the signal) |
+| "resolve the threads I fixed" | `renaiss-shipflow pr resolve 87 --thread <id>` |
+| "capture PR 87's diff for a scan" | `renaiss-shipflow pr diff 87 --out /tmp/pr-87.patch` (GitHub's bytes, never local git; exit 9 = empty capture) |
+| "approve PR 87" (reviewer verdict) | `renaiss-shipflow pr approve 87 --scan-files <N> --scan-report <path> --scan-digest <sha256> --comment "..."` (exit 7 = open threads; exit 9 = bad scan attestation) |
+| "auto-merge if ready" (loop) | `renaiss-shipflow pr automerge 87 --json` (self-gates on `merge-policy`) |
+| "rebase PR 87" | `renaiss-shipflow pr sync 87` (aborts cleanly on conflict) |
+| "fix the merge conflict" | `renaiss-shipflow pr sync 87 --keep-conflicts` → `references/conflict-resolution.md` |
+| "did I leave conflict markers?" (before any push) | `renaiss-shipflow pr conflict-check --base origin/<base>` (exit 8) — always name the base: after `rebase --continue` commits the markers, a base-less check exits 0 |
+| "merge PR 87" (explicit, human-confirmed) | `renaiss-shipflow pr merge 87` (squash; deletes the remote branch — clean up the local worktree/branch after, `-D` since squash looks "unmerged") |
+| "set merge/CI/WIP policy" | `renaiss-shipflow config set merge-policy auto-on-green` (see `config list`) |
+| "run tests" | `renaiss-shipflow test` |
+| "run regression" | `renaiss-shipflow regression --json` |
+| "cut a release" | `renaiss-shipflow release --tag vX.Y.Z --json` |
+| "sign in" | `renaiss-shipflow login` |
+| "connect with my gh token (App install not approved yet)" | `renaiss-shipflow login --with-gh-token --org <org>` — bridge (#980); GitHub events are not delivered until the App is installed |
+| "link this repo" | `renaiss-shipflow init` |
+| "take over this org with my local agent" / "let my loop process the workflows, not the server" | `renaiss-shipflow agent takeover [--ttl-minutes N] [--agent name] [--mode loop|engine]` — a tenant-level lease (#1151), mode `loop` by default: while it is active the server records automatic **issue triage, PR review and test-runner** events as *handed off* instead of running them (the loop does those itself); patch notes, summaries, commit impact, regression/UAT, notifications and chat intake keep running server-side. The dashboard sidebar shows "Local agent · @you (host) · until HH:MM". Renew with the same command (the loop does, every tick under `takeover=on`); exit 3 = someone else holds it, the output names them |
+| "take over ALL the server workload" / "run every workflow's AI on my machine" / "stop spending server credits" | `renaiss-shipflow agent serve [--model M] [--concurrency N] [--once]` — the **engine** mode (`references/agent-engine.md`): holds the tenant with `mode: engine` and runs every model call of all 12 workflows on this machine's Claude Code (`claude -p`), tool use included; the server keeps orchestrating GitHub, reports and notifications and hands nothing off. Foreground until Ctrl-C (releases the tenant); `/shipflow-engine` runs it in the background. Gated (#1180): the org's **Local engine takeover** setting must be on (dashboard Settings → Local Agents, `PATCH …/settings {engine_takeover_enabled}`) and you must be an owner/admin — else exit 1 with the reason. Exit 3 = someone else holds the tenant. Distinct from the loop's `takeover=on`, which takes only its three events |
+| "hand the org back to the server" | `renaiss-shipflow agent release` — only the holder can; a lease lapses on its own once its heartbeat stops (loop: default 30 min, max 60; engine: 5 min) |
+| "is main protected" / "check branch protection" | `renaiss-shipflow repos protection --json` — every tracked repo's default branch against the ShipFlow profile (#1196): `applied`, `in_sync`, `drift`, `unsupported` (GitHub refuses: Free-plan private repo or the App lacks Repository administration), `unreadable` (no admin), `error`. Read-only |
+| "protect main" / "apply branch protection" | `renaiss-shipflow repos protection --apply --json` — owners only; writes the profile (require up-to-date, admins included, no force-push/deletion, no native review requirement) wherever it drifts, audited per repo. Turn on **Enforce branch protection** (dashboard Settings → Repo Ops, `PATCH …/settings {branch_protection_enforced}`) so the server re-applies it hourly and on every new repo |
+| "who is driving this org" / "is a local agent running" | `renaiss-shipflow agent status --json` → `{active, takeover:{actor, agent, mode, lastSeenAt, expiresAt}}` — `mode` is `loop` or `engine` |
+| "list config profiles" / "which org am I using here" | `renaiss-shipflow profiles` — one store per org, picked automatically from the repo's `origin` owner (#1146); force one with `--profile <name>` / `SHIPFLOW_PROFILE`, disable with `SHIPFLOW_PROFILE_AUTO=off` |
+| "sign in to another org" / "every ShipFlow call here is 404/403" | `renaiss-shipflow login --org <org>` writes that org to its own store without touching the others; `renaiss-shipflow login --all` signs in to every tenant at once. A 404/403 in a repo whose owner has no store is a missing sign-in, not an outage — `profiles` names the gap |
+
+## Output handling
+
+- Pass `--json` whenever supported and parse it; never regex-scrape prose.
+- Present results graphical-first: one-line verdict, then table / checklist /
+  meter — contract: `references/message-style.md`.
+- Show the `triage` payload from `issue work` verbatim.
+- A failed signal POST (stderr warning) still means the GitHub-side action
+  succeeded; mention it, don't retry.
+
+## Guardrails
+
+- No auto-branching on `issue work`; no auto-written plan files, commit
+  messages, or other local files from its output — show the context and ask.
+- Never `release` or `pr merge` without explicit user confirmation (both are
+  team-visible). Spawned/headless (below): they simply don't run —
+  `merge-policy` governs merges via `pr automerge`, `release` is skipped.
+  Absence of a human is never approval.
+
+Loop mode (explicit opt-in, below) deliberately overrides these guardrails.
+
+## Spawned / headless sessions (OpenClaw, Hermes, cron)
+
+ShipFlow runs unattended. In a session spawned by an AI orchestrator
+(OpenClaw/Hermes via ACP) or a headless scheduler, no human can answer a
+prompt. Detect it at the start of the run:
+
+```bash
+# OpenClaw sets $OPENCLAW_SESSION; $CI covers CI/cron; $SHIPFLOW_HEADLESS is an
+# explicit opt-in for any other headless spawner (e.g. Hermes). Deliberately NOT
+# a TTY check (`[ -t 0 ]`): Claude Code's Bash runs non-interactively even when a
+# human is driving, so a TTY test false-positives and would wrongly drop the
+# human-confirmation gates.
+[ -n "$OPENCLAW_SESSION$CI$SHIPFLOW_HEADLESS" ] && echo "SPAWNED_SESSION: true"
+```
+
+Treat any known headless / cron / CI invocation the same. In a spawned session:
+
+- **Never block for confirmation.** The policy knobs (`merge-policy`,
+  `require-ci`, `require-review`, `wip-limit`) are the only authority.
+  `manual` **parks** approved PRs; bare `pr merge` / `release` don't happen.
+- **Never `AskUserQuestion` / wait for input.** Proceed per policy, or
+  `renaiss-shipflow issue escalate <n> --reason "..."` (labels `needs-human`)
+  and keep going — **escalate, don't pause**.
+- **Report, don't ask**: end each pass with `✅ N merged · 🔀 N opened ·
+  ⏸ N parked · 🚧 N escalated` plus a short table of decisions.
+
+Same posture as Loop mode's continuous default, made mandatory.
+
+## Loop mode
+
+Only when the user explicitly asks to loop through and fix issues autonomously
+(or `/shipflow-loop`): read `references/loop-mode.md` and follow it — a thin
+orchestrator dispatching each item to fresh-context subagents, governed by the
+policy knobs in `config list`. Load `loop-setup.md` once per run (tick 0 /
+before the cycle), not every tick. Every tick opens with the **usage gate**
+(`bin/shipflow-usage check`, default stop at 90% of the 5-hour or weekly
+Claude limit — loop-mode.md § "Usage gate"); when the 5-hour window is the
+blocker **and at/over 99%** it spends Claude Code's once-a-week `/limit-reset`
+via `bin/shipflow-usage limit-reset` before pausing (under 99% it just pauses). Everything else stays a single
+command from the table above. Companions: `loop-setup.md` (run start), `loop-worker.md` /
+`loop-reviewer.md` (role contracts), `browser-testing.md`, `bug-taxonomy.md`,
+`qa-report.md`, `pr-feedback.md`, `conflict-resolution.md`.
+
+## First run
+
+Any command exits non-zero with "Not signed in." until `renaiss-shipflow login`
+runs once per machine (drives `gh auth`; caches a ShipFlow JWT in
+`~/.config/renaissshipflow/credentials.json`).
