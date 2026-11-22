@@ -55,8 +55,10 @@ are identical across harnesses.
 | "export issues to excel" | `renaiss-shipflow issues export` (gh-style filters; `--out <file.xlsx>`) |
 | "file an issue about X" | `renaiss-shipflow issue create --lint=strict --title "X" --body "..."` — body: `references/message-style.md` § "Issue-body ladder", with a **Business flow** in business words, and a picture (table, mermaid diagram, screenshot or GIF) once it runs past 120 visible words; strict exits 2 and files nothing without them; visible bug → `--screenshot <path...>`, broken element outlined (`references/browser-testing.md` § Mark what changed); UI change → draw a UI proposal first (reference only, not a requirement) and pass `--screenshot now.png --proposal proposal.png` (`references/browser-testing.md` § 7), or write `**UI proposal:** none — <why>`. **Exit 12 = duplicate, nothing created** (#580) → `references/feature-issue-detection.md` |
 | ↳ who it lands on | Under `pickup-scope=assigned` (the default) it **auto-assigns the current gh login** (#673) — assignment is the queueing gesture, so an unassigned filing is invisible to `issue next`. `--assignee <login...>` overrides; **`--no-assign`** files it unassigned so the loop does NOT pick it up |
-| feature work with no issue / PR without `Fixes #N` | → `references/feature-issue-detection.md` |
-| "auto-create issues" | `renaiss-shipflow config set auto-issue true` |
+| feature work with no issue / PR without `Fixes #N` | → `references/feature-issue-detection.md` (always-on rule: `references/issue-track-first.md`; opt out: `SHIPFLOW_ISSUE_TRACK_HOOK=false`) |
+| "match open issues for X" | `renaiss-shipflow issue match "X" --json` (top open candidates + active claims + `issueTrack` mode) |
+| "auto-create / auto-track issues" | `renaiss-shipflow config set issue-track auto` (`auto` default · `ask` · `off`; legacy `config set auto-issue true` still maps to `auto`) |
+| "file and claim an issue for this fix" | `renaiss-shipflow issue create --claim --lint=strict --title "X" --body "..."` — files and claims atomically + records the issue on the current branch |
 | "pick up #42" | `renaiss-shipflow issue work 42 --json` |
 | "what should I work on" | `renaiss-shipflow issue next --json` |
 | "route unassigned issues to a dev" | `renaiss-shipflow issue route --all --json` — the Issue Triage picker names an owner per open unassigned issue; `no-fit` leaves it. `issue route <n>` for one. The loop runs it before Pick under `pickup-scope=assigned` |
@@ -71,7 +73,7 @@ are identical across harnesses.
 | "unmatched commit email" | `renaiss-shipflow git-identity --fix` |
 | "I'm done with #42" | `renaiss-shipflow issue done 42` |
 | "attach test evidence to #42" | `renaiss-shipflow issue evidence 42 --pr <pr> --before … --after … --label … --caption …` — any number of labeled pairs (CLI batches uploads, one comment/gallery); each after-shot outlined around the region its caption names (`references/browser-testing.md` § Mark what changed); `--file` for a recording, or the test-runner summary (`.txt`) when there is no UI surface; bug w/o fix → `--actual`; PR with no issue → `issue evidence <pr> --pr <pr>`; upload fails → `⚠ no screenshot` line + re-run later, never a side branch (`references/browser-testing.md` §6); with `--pr` it attaches `api-changes.diff` (routes +/−, secret and personal-data checks): add `--api-change "+ …"` for missed routes and `--exposure "none"` or what is made public (#1489) |
-| "open a PR" | `renaiss-shipflow pr create --json --lint=strict` (after committing); body: `references/message-style.md` § PR body template, which lists what strict refuses (exit 2) |
+| "open a PR" | `renaiss-shipflow pr create --json --lint=strict` (after committing; never bare `gh pr create` — `PreToolUse` gate enforces it, opt out: `SHIPFLOW_ISSUE_TRACK_HOOK=false`; pass `--no-issue` only for trivial/chore PRs); body: `references/message-style.md` § PR body template, which lists what strict refuses (exit 2) |
 | "is PR 87 mergeable" | `renaiss-shipflow pr ready 87 --json` |
 | "open review threads on 87" | `renaiss-shipflow pr reviews 87 --json` (read-only query like `pr ready`; parse `blocking`/`unresolvedThreads` — rc is not the signal) |
 | "resolve the threads I fixed" | `renaiss-shipflow pr resolve 87 --thread <id>` |

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# ShipFlow PreToolUse gate — block bare `gh pr create` so local agents open PRs
+# through `renaiss-shipflow pr create --lint=strict` with a tracked issue
+# (skills/shipflow/references/issue-track-first.md, issue #1499).
+#
+# Supports both Claude Code (`tool_input.command` → hookSpecificOutput) and
+# Antigravity CLI (`toolCall.args.CommandLine` → {decision, reason}).
+#
+# Allow when the command carries SHIPFLOW_ALLOW_GH_PR=1. Opt out:
+# SHIPFLOW_ISSUE_TRACK_HOOK=false. Exit 0 always; deny via JSON body.
+set -euo pipefail
+
+input="$(cat || true)"
+
+is_agy=false
+case "$input" in
+  *'"toolCall"'*) is_agy=true ;;
+esac
+
+allow_exit() {
+  if [ "$is_agy" = true ]; then
+    printf '{"decision":"allow"}\n'
+  fi
+  exit 0
+}
+
+[ "${SHIPFLOW_ISSUE_TRACK_HOOK:-}" = "false" ] && allow_exit
+
+cmd=""
+if command -v jq >/dev/null 2>&1; then
+  if [ "$is_agy" = true ]; then
+    cmd="$(printf '%s' "$input" | jq -r '.toolCall.args.CommandLine // .toolCall.args.command // empty' 2>/dev/null || true)"
+  else
+    cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
+  fi
+else
+  if [ "$is_agy" = true ]; then
+    cmd="$(printf '%s' "$input" | sed -n 's/.*"CommandLine"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  else
+    cmd="$(printf '%s' "$input" | sed -n 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  fi
+fi
+[ -n "$cmd" ] || allow_exit
+
+# Explicit escape hatch for non-ShipFlow repos or intentional raw gh use.
+# Strip quoted strings first so a --body mentioning SHIPFLOW_ALLOW_GH_PR=1
+# cannot accidentally bypass the gate.
+unquoted="$(printf '%s' "$cmd" | sed -E "s/'[^']*'//g; s/\"([^\"\\\\]|\\\\.)*\"//g")"
+if printf '%s' "$unquoted" | grep -Eq '(^|[[:space:];|&])SHIPFLOW_ALLOW_GH_PR=1([[:space:]]|$)'; then
+  allow_exit
+fi
+
+# Only gate real `gh … pr create` invocations (word boundary before `gh`,
+# allowing optional global flags like `-R owner/repo`).
+if ! printf '%s' "$cmd" | grep -Eq '(^|[[:space:];|&])gh([[:space:]]+(-R|--repo)[[:space:]]+[^[:space:]]+)*[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
+  allow_exit
+fi
+
+# Help is not creating a PR.
+if printf '%s' "$cmd" | grep -Eq '[[:space:]]create[[:space:]]+(-h|--help)([[:space:]]|$)'; then
+  allow_exit
+fi
+
+reason='Bare `gh pr create` is blocked by the ShipFlow plugin so PRs stay linked to a tracked issue and send ShipFlow signals. Match/claim or file an issue (`renaiss-shipflow issue match` / `issue work <N>` / `issue create --claim --lint=strict`), then open the PR with `renaiss-shipflow pr create --json --lint=strict --issue <N>` (or `--no-issue` for a trivial/chore PR). Escape hatch: `SHIPFLOW_ALLOW_GH_PR=1 gh pr create …`. Opt out: SHIPFLOW_ISSUE_TRACK_HOOK=false. See skills/shipflow/references/issue-track-first.md.'
+
+json_reason="$(printf '%s' "$reason" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+if [ "$is_agy" = true ]; then
+  printf '{"decision":"deny","reason":"%s"}\n' "$json_reason"
+else
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$json_reason"
+fi
+exit 0

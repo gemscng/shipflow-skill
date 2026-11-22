@@ -4200,6 +4200,22 @@ function resolveAutoIssue() {
     return parseBool(process.env.SHIPFLOW_AUTO_ISSUE);
   return loadConfig().autoIssue === true;
 }
+function resolveIssueTrack() {
+  const envTrack = process.env.SHIPFLOW_ISSUE_TRACK?.trim().toLowerCase();
+  if (envTrack) {
+    return ISSUE_TRACK_MODES.includes(envTrack) ? envTrack : "auto";
+  }
+  const cfg = loadConfig();
+  if (cfg.issueTrack && ISSUE_TRACK_MODES.includes(cfg.issueTrack)) {
+    return cfg.issueTrack;
+  }
+  const envAuto = process.env.SHIPFLOW_AUTO_ISSUE;
+  if (envAuto != null && envAuto !== "")
+    return parseBool(envAuto) ? "auto" : "ask";
+  if (cfg.autoIssue !== undefined)
+    return cfg.autoIssue ? "auto" : "ask";
+  return "auto";
+}
 function resolveLiveReload() {
   const env = process.env.SHIPFLOW_LIVE_RELOAD;
   if (env != null && env !== "")
@@ -4336,7 +4352,7 @@ function resolveApiKey() {
   const a = resolveAuthToken();
   return a?.token;
 }
-var INTAKE_APPROVAL_MODES, DEFAULT_BASE, configFile = () => join(configDir(), "config.json"), credsFile = () => join(configDir(), "credentials.json"), projectsFile = () => join(configDir(), "projects.json"), MERGE_POLICIES, PICKUP_SCOPES, INTENT_GATE_MODES, loadConfig = () => readJsonOr(configFile(), {}), saveConfig = (c) => writeJson(configFile(), c), clearConfig = () => {
+var INTAKE_APPROVAL_MODES, DEFAULT_BASE, configFile = () => join(configDir(), "config.json"), credsFile = () => join(configDir(), "credentials.json"), projectsFile = () => join(configDir(), "projects.json"), MERGE_POLICIES, PICKUP_SCOPES, INTENT_GATE_MODES, ISSUE_TRACK_MODES, loadConfig = () => readJsonOr(configFile(), {}), saveConfig = (c) => writeJson(configFile(), c), clearConfig = () => {
   try {
     unlinkSync(configFile());
   } catch {}
@@ -4354,6 +4370,7 @@ var init_config = __esm(() => {
   MERGE_POLICIES = ["manual", "auto-on-green", "auto-timeout"];
   PICKUP_SCOPES = ["assigned", "all"];
   INTENT_GATE_MODES = ["strict", "trusted"];
+  ISSUE_TRACK_MODES = ["off", "ask", "auto"];
   BOOL_TRUE_WORDS = ["true", "1", "on", "yes"];
   BOOL_FALSE_WORDS = ["false", "0", "off", "no"];
   APP_SLUG_RE = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/;
@@ -6871,6 +6888,61 @@ function findSuspiciousEmails(emails, hostname) {
   }
   return out;
 }
+function isDefaultOrDetachedBranch(branch, repoDefaultBranch) {
+  const b = (branch ?? "").trim();
+  if (!b || b === "HEAD")
+    return true;
+  if (b === "main" || b === "master" || b === "develop" || b === "trunk" || b === "release")
+    return true;
+  if (b.startsWith("release/") || b.startsWith("backup/"))
+    return true;
+  if (repoDefaultBranch && b === repoDefaultBranch.trim())
+    return true;
+  return false;
+}
+function currentLocalBranch() {
+  try {
+    return _exec("git rev-parse --abbrev-ref HEAD").toString().trim();
+  } catch {
+    return "";
+  }
+}
+function originDefaultBranch() {
+  try {
+    const ref = _exec("git symbolic-ref --quiet --short refs/remotes/origin/HEAD").toString().trim();
+    const m = ref.match(/^[^/]+\/(.+)$/);
+    return m ? m[1] : undefined;
+  } catch {
+    return;
+  }
+}
+function recordBranchIssue(issueNumber, branch) {
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0)
+    return false;
+  const target = (branch ?? currentLocalBranch()).trim();
+  if (isDefaultOrDetachedBranch(target, originDefaultBranch()))
+    return false;
+  try {
+    _exec(`git config --local ${shellQuote(`branch.${target}.shipflowIssue`)} ${shellQuote(String(issueNumber))}`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function readBranchIssue(branch) {
+  const target = (branch ?? currentLocalBranch()).trim();
+  if (isDefaultOrDetachedBranch(target, originDefaultBranch()))
+    return;
+  try {
+    const raw = _exec(`git config --local --get ${shellQuote(`branch.${target}.shipflowIssue`)}`).toString().trim();
+    if (!/^\d+$/.test(raw))
+      return;
+    const n = parseInt(raw, 10);
+    return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+  } catch {
+    return;
+  }
+}
 
 // src/commands/git-identity.ts
 init_helpers();
@@ -7675,6 +7747,103 @@ function findDuplicateCandidates(title, openIssues, opts = {}) {
     }
   }
   out.sort((a, b) => b.score - a.score || a.number - b.number);
+  return out.slice(0, limit);
+}
+var MATCH_BODY_MAX_CHARS = 1200;
+var MATCH_SNIPPET_MAX_CHARS = 120;
+function issueSnippet(body) {
+  if (!body)
+    return "";
+  for (const raw of body.split(`
+`)) {
+    const line = raw.trim();
+    if (!line)
+      continue;
+    if (line.startsWith(">") || line.startsWith("<!--") || line.startsWith("#") || line.startsWith("|"))
+      continue;
+    const clean = line.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/^[-*]\s+/, "").trim();
+    if (!clean)
+      continue;
+    return clean.length > MATCH_SNIPPET_MAX_CHARS ? `${clean.slice(0, MATCH_SNIPPET_MAX_CHARS - 1)}…` : clean;
+  }
+  return "";
+}
+function tokenMatches(q, c) {
+  if (q === c)
+    return true;
+  if (q.length >= 4 && c.length >= 4 && (c.startsWith(q) || q.startsWith(c)))
+    return true;
+  return false;
+}
+function tokenOverlapScore(queryTokens, candidateTokens) {
+  if (queryTokens.length === 0 || candidateTokens.length === 0)
+    return 0;
+  const qSet = new Set(queryTokens);
+  const cArr = [...new Set(candidateTokens)];
+  let qHits = 0;
+  for (const q of qSet) {
+    if (cArr.some((c) => tokenMatches(q, c)))
+      qHits++;
+  }
+  if (qHits === 0)
+    return 0;
+  let cHits = 0;
+  for (const c of cArr) {
+    if ([...qSet].some((q) => tokenMatches(q, c)))
+      cHits++;
+  }
+  const recall = qHits / qSet.size;
+  const precision = cHits / cArr.length;
+  return 0.65 * recall + 0.35 * precision;
+}
+function matchOpenIssues(query, openIssues, opts = {}) {
+  const limit = opts.limit ?? 10;
+  const minScore = opts.minScore ?? 0.15;
+  const rawQuery = (query ?? "").trim();
+  if (!rawQuery || limit <= 0)
+    return [];
+  const citedNumbers = new Set;
+  for (const m of rawQuery.matchAll(/(?<![\w/])#(\d+)\b/g)) {
+    const n = parseInt(m[1], 10);
+    if (Number.isSafeInteger(n) && n > 0)
+      citedNumbers.add(n);
+  }
+  if (/^\d+$/.test(rawQuery)) {
+    const n = parseInt(rawQuery, 10);
+    if (Number.isSafeInteger(n) && n > 0)
+      citedNumbers.add(n);
+  }
+  const qNorm = normalizeTitle(rawQuery);
+  const qLower = rawQuery.toLowerCase();
+  const out = [];
+  for (const issue of openIssues) {
+    let score = 0;
+    if (citedNumbers.has(issue.number)) {
+      score = 1;
+    } else if (qNorm.tokens.length > 0) {
+      const titleNorm = normalizeTitle(issue.title);
+      const titleScore = tokenOverlapScore(qNorm.tokens, titleNorm.tokens);
+      const bodySample = (issue.body ?? "").slice(0, MATCH_BODY_MAX_CHARS);
+      const bodyTokens = bodySample ? normalizeTitle(bodySample).tokens : [];
+      const bodyScore = bodyTokens.length > 0 ? tokenOverlapScore(qNorm.tokens, bodyTokens) : 0;
+      score = titleScore > 0 ? Math.min(1, 0.75 * titleScore + 0.25 * Math.max(titleScore, bodyScore)) : 0.45 * bodyScore;
+      if (qLower.length >= 4 && issue.title.toLowerCase().includes(qLower)) {
+        score = Math.min(1, Math.max(score, 0.85));
+      }
+    }
+    if (score >= minScore) {
+      out.push({
+        number: issue.number,
+        title: issue.title,
+        score: Math.round(score * 1000) / 1000,
+        labels: (issue.labels ?? []).map((l) => l.name),
+        assignees: (issue.assignees ?? []).map((a) => a.login),
+        ...issue.url ? { url: issue.url } : {},
+        snippet: issueSnippet(issue.body)
+      });
+    }
+  }
+  out.sort((a, b) => b.score - a.score || b.number - a.number);
   return out.slice(0, limit);
 }
 
@@ -11530,7 +11699,7 @@ function duplicatePreflight(repo, title, opts) {
   }
   process.exit(EXIT_DUPLICATE_ISSUE);
 }
-function createIssueGuarded(args, opts, { skipPreflight = false } = {}) {
+function createIssueGuarded(args, opts, { skipPreflight = false, skipEmit = false } = {}) {
   const { repo, title, body, labels, assigneesAuto = false, lint = [] } = args;
   const requested = args.assignees ?? [];
   if (!skipPreflight)
@@ -11539,7 +11708,10 @@ function createIssueGuarded(args, opts, { skipPreflight = false } = {}) {
     ghEnsureLabel(repo, l);
   const created = ghIssueCreate(repo, title, body, labels);
   const assignees = attachAssignees(repo, created, requested, assigneesAuto);
-  emit(opts, { number: created.number, url: created.url, labels, assignees, lint }, () => console.log(assignees.length > 0 ? `${created.url} — assigned to ${assignees.map((a) => `@${a}`).join(", ")}` : created.url));
+  if (!skipEmit) {
+    emit(opts, { number: created.number, url: created.url, labels, assignees, lint }, () => console.log(assignees.length > 0 ? `${created.url} — assigned to ${assignees.map((a) => `@${a}`).join(", ")}` : created.url));
+  }
+  return { number: created.number, url: created.url, labels, assignees, lint };
 }
 function attachAssignees(repo, created, requested, auto) {
   if (requested.length === 0)
@@ -11642,7 +11814,7 @@ function routeLine(r) {
 }
 function registerIssueCommand(program2) {
   const issue = program2.command("issue").description("Issue actions");
-  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--assignee <login...>", "Assignee(s) for the new issue (@me = the gh login). Default under pickup-scope=assigned: the current login — assignment is the queueing gesture (#600), so an unassigned filing is invisible to `issue next`").option("--no-assign", "File UNASSIGNED, overriding the pickup-scope=assigned auto-assign default — the per-invocation opt-out for a human filing a backlog item that the loop should NOT pick up. Mutually exclusive with --assignee").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--proposal <path...>", `UI proposal: image(s) of the proposed screen, drawn before filing, for visualization and reference only (not a requirement) — hosted and embedded under \`## UI proposal\` (issue #1496), with the --screenshot shots, on the body line \`${MEDIA_PLACEHOLDER}\` or else at the end. Required by --lint=strict when the body reads as a UI change`).option("--proposal-caption <text...>", "Caption for each --proposal image, by position — says what THAT mockup shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).addOption(new Option("--lint <mode>", `Body checks on --body: warn (print \uD83D\uDCA1 lines, file the issue) or strict (exit ${EXIT_ISSUE_NO_VISUAL}, nothing filed) when the body has no **Business flow** section (issue #1493), runs over ${MIN_WORDS_FOR_VISUAL} visible words with no table, mermaid diagram or image (issue #1491), or reads as a UI change with no --proposal (issue #1496). Agents pass strict; the other body lint lines stay warnings`).choices([...ISSUE_LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  issue.command("create").description("Open a new issue (and signal ShipFlow)").option("--repo <fullname>", "Override target repo").option("--title <title>", "Issue title").option("--body <body>", "Issue body (- for stdin)").option("--label <name...>", "Label(s) to apply (created if missing) — e.g. bug auto-qa").option("--assignee <login...>", "Assignee(s) for the new issue (@me = the gh login). Default under pickup-scope=assigned: the current login — assignment is the queueing gesture (#600), so an unassigned filing is invisible to `issue next`").option("--no-assign", "File UNASSIGNED, overriding the pickup-scope=assigned auto-assign default — the per-invocation opt-out for a human filing a backlog item that the loop should NOT pick up. Mutually exclusive with --assignee").option("--screenshot <path...>", "Screenshot/recording file(s) documenting the problem — hosted and embedded in the issue body (issue #457)").option("--screenshot-caption <text...>", "Caption for each --screenshot, by position — says what THAT shot shows").option("--proposal <path...>", `UI proposal: image(s) of the proposed screen, drawn before filing, for visualization and reference only (not a requirement) — hosted and embedded under \`## UI proposal\` (issue #1496), with the --screenshot shots, on the body line \`${MEDIA_PLACEHOLDER}\` or else at the end. Required by --lint=strict when the body reads as a UI change`).option("--proposal-caption <text...>", "Caption for each --proposal image, by position — says what THAT mockup shows").option("--allow-duplicate", `File even when an open issue looks like a near-duplicate (title similarity ≥${DUPLICATE_THRESHOLD}). Without it, a match creates nothing and exits ${EXIT_DUPLICATE_ISSUE}, listing the matches`).option("--claim", "Immediately acquire an exclusive claim on the newly created issue for this agent and record it on the current branch (prevents /shipflow-loop from racing a local fix, issue #1499)").option("--agent <name>", "Agent label recorded on the claim when --claim is set (default: $SHIPFLOW_AGENT or hostname)").option("--ttl <minutes>", "Claim lifetime in minutes when --claim is set (default 120)").addOption(new Option("--lint <mode>", `Body checks on --body: warn (print \uD83D\uDCA1 lines, file the issue) or strict (exit ${EXIT_ISSUE_NO_VISUAL}, nothing filed) when the body has no **Business flow** section (issue #1493), runs over ${MIN_WORDS_FOR_VISUAL} visible words with no table, mermaid diagram or image (issue #1491), or reads as a UI change with no --proposal (issue #1496). Agents pass strict; the other body lint lines stay warnings`).choices([...ISSUE_LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     if (!ISSUE_LINT_MODES.includes(opts.lint ?? "warn")) {
       console.error(`Unknown lint mode "${opts.lint}" — valid: ${ISSUE_LINT_MODES.join(", ")}. Nothing was created.`);
       process.exit(1);
@@ -11738,7 +11910,79 @@ function registerIssueCommand(program2) {
     } else {
       body = placeMediaSections(body, "");
     }
-    createIssueGuarded({ repo, title, body, labels: opts.label ?? [], assignees, assigneesAuto, lint }, opts, { skipPreflight: true });
+    if (!opts.claim) {
+      createIssueGuarded({ repo, title, body, labels: opts.label ?? [], assignees, assigneesAuto, lint }, opts, { skipPreflight: true });
+      return;
+    }
+    const created = createIssueGuarded({ repo, title, body, labels: opts.label ?? [], assignees, assigneesAuto, lint }, opts, { skipPreflight: true, skipEmit: true });
+    const agent = opts.agent ?? process.env.SHIPFLOW_AGENT ?? hostname2();
+    let claimed = false;
+    let claimConflict;
+    let claimWarning;
+    try {
+      const claim = await ctx.client.claimIssue(ctx.creds.org, ctx.project.projectId, created.number, {
+        repo,
+        agent,
+        ttlMinutes: opts.ttl ? parseInt(opts.ttl, 10) : undefined
+      });
+      reportClaimReflection(repo, created.number, claim.reflectionWarnings);
+      claimed = true;
+    } catch (e) {
+      if (e instanceof ClaimConflictError) {
+        claimConflict = e.message;
+      } else {
+        claimWarning = flattenCause(e);
+        console.warn(`⚠️  Issue #${created.number} created, but claim failed (continuing unlocked): ${claimWarning}`);
+      }
+    }
+    if (claimed && localRepoMatches(repo))
+      recordBranchIssue(created.number);
+    if (claimConflict) {
+      emit(opts, { ...created, claimed: false, claimConflict }, () => {
+        console.error(`⛔ Issue #${created.number} created (${created.url}), but claim is taken: ${claimConflict}`);
+      });
+      process.exit(3);
+    }
+    emit(opts, { ...created, claimed, ...claimWarning ? { claimWarning } : {} }, () => {
+      const who = created.assignees.length > 0 ? ` — assigned to ${created.assignees.map((a) => `@${a}`).join(", ")}` : "";
+      const tag = claimed ? ` (claimed by ${agent})` : " (claim failed — unlocked)";
+      console.log(`${created.url}${who}${tag}`);
+    });
+  }));
+  issue.command("match <query>").description("Find open issues matching a short fix/feature description, annotated with active claims (issue #1499)").option("--repo <fullname>", "Override target repo").option("--limit <n>", "Max candidates to return (default 10)").option("--scan-limit <n>", `Open issues to scan (default ${DUPLICATE_SCAN_LIMIT})`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (query, opts) => {
+    const ctx = await loadCtx(program2);
+    const repo = opts.repo ?? ctx.project.repoFullName;
+    const limit = opts.limit ? Math.max(1, parseInt(opts.limit, 10)) : 10;
+    const scanLimit = opts.scanLimit ? Math.max(1, parseInt(opts.scanLimit, 10)) : DUPLICATE_SCAN_LIMIT;
+    const open = ghIssueList(repo, "open", scanLimit);
+    let claimsUnavailable = false;
+    const claims = await ctx.client.listClaims(ctx.creds.org, ctx.project.projectId).catch(() => {
+      claimsUnavailable = true;
+      return [];
+    });
+    const claimByNumber = new Map(claims.filter((c) => c.repo.toLowerCase() === repo.toLowerCase()).map((c) => [c.issueNumber, { agent: c.agent ?? null, actor: c.actor, expiresAt: c.expiresAt }]));
+    const matches = matchOpenIssues(query, open, { limit }).map((m) => ({
+      ...m,
+      claimedBy: claimByNumber.get(m.number) ?? null
+    }));
+    const issueTrack = resolveIssueTrack();
+    const truncated = open.length >= scanLimit;
+    emit(opts, { repo, query, issueTrack, scanned: open.length, truncated, claimsUnavailable, matches }, () => {
+      if (matches.length === 0) {
+        console.log(`No matching open issues in ${repo} (scanned ${open.length}; issue-track=${issueTrack}).`);
+        return;
+      }
+      const rows = matches.map((m) => [
+        `#${m.number}`,
+        m.score.toFixed(2),
+        m.claimedBy ? `@${m.claimedBy.actor}${m.claimedBy.agent ? ` (${m.claimedBy.agent})` : ""}` : "—",
+        m.title
+      ]);
+      for (const l of renderTable(["Issue", "Score", "Claimed", "Title"], rows))
+        console.log(l);
+      if (truncated)
+        console.warn(`⚠️  scan window full (${open.length}) — older open issues were not scanned.`);
+    }, { pretty: true });
   }));
   issue.command("route [number]").description("Name a developer for an open, unassigned issue via the Issue Triage picker (feature-map contributors); --all sweeps the repo. Best effort: no clear fit leaves the issue unassigned").option("--all", "Route every open, unassigned issue in the repo").option("--limit <n>", "Open unassigned issues to scan with --all (default 200)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     if (!numberStr && !opts.all) {
@@ -11814,6 +12058,8 @@ function registerIssueCommand(program2) {
       }
       console.warn(`Claim failed (continuing unlocked): ${e.message}`);
     }
+    if (localRepoMatches(repo))
+      recordBranchIssue(number);
     const issueData = ghIssueView(repo, number);
     const t = await loadTriage(ctx, repo, number);
     printIssueContext(issueData, t.triage, repo, ctx.project, opts, t.unavailable);
@@ -13594,7 +13840,7 @@ async function automergeOnce(ctx, repo, number, opts) {
 }
 function registerPRCommand(program2) {
   const pr = program2.command("pr").description("Pull request actions");
-  pr.command("create").description("Open a PR; appends a ShipFlow footer (project, issue link) to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch if omitted)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (the ShipFlow footer is added after it)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--loop-review", "The ShipFlow loop reviews this PR itself: claim its review so the server's pr_review workflow skips it (see `pr review-claim`)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").addOption(new Option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR). Anything else is REFUSED (exit 1, no PR) — never treated as warn (issue #648)").choices([...LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  pr.command("create").description("Open a PR; appends a ShipFlow footer (project, issue link) to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch or branch config if omitted)").option("--no-issue", "Explicitly open this PR without a linked issue (escape hatch for trivial/chore PRs under --lint=strict)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (the ShipFlow footer is added after it)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--loop-review", "The ShipFlow loop reviews this PR itself: claim its review so the server's pr_review workflow skips it (see `pr review-claim`)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").addOption(new Option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR). Anything else is REFUSED (exit 1, no PR) — never treated as warn (issue #648)").choices([...LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const rawLint = opts.lint ?? "";
     if (!LINT_MODES.includes(rawLint)) {
       console.error(`Unknown lint mode "${opts.lint ?? ""}" — valid: ${LINT_MODES.join(", ")}. Nothing was created.`);
@@ -13636,18 +13882,23 @@ function registerPRCommand(program2) {
       console.warn(`\uD83D\uDCA1 business flow: ${formatBusinessFlowCodeNames(flow.codeNames)}`);
     const ctx = await loadCtx(program2);
     const branch = currentBranch();
-    const issueNumber = opts.issue ? parseInt(opts.issue, 10) : detectIssueFromBranch(branch);
+    const allowNoIssue = opts.issue === false;
+    const issueNumber = allowNoIssue ? undefined : typeof opts.issue === "string" ? parseInt(opts.issue, 10) : detectIssueFromBranch(branch) ?? readBranchIssue(branch);
     const baseRef = opts.base ? refExists(opts.base) ? opts.base : refExists(`origin/${opts.base}`) ? `origin/${opts.base}` : null : originHeadRef() ?? defaultBranchRef();
     const changed = baseRef ? changedPaths(baseRef) : { paths: [], ok: false, cmd: "" };
     if (!issueNumber) {
       if (changed.ok && hasVisibleSurface(changed.paths)) {
         const msg = unlinkedVisibleSurfaceWarning(branch);
-        if (opts.lint === "strict") {
+        if (opts.lint === "strict" && !allowNoIssue) {
           console.error(msg);
           process.exit(2);
         }
         console.warn(msg);
       } else {
+        if (opts.lint === "strict" && !allowNoIssue) {
+          console.error(unlinkedPrStrictError(branch));
+          process.exit(2);
+        }
         console.warn(unlinkedPrWarning(branch));
       }
     }
@@ -14489,11 +14740,15 @@ function currentBranch() {
   return execSync6("git rev-parse --abbrev-ref HEAD").toString().trim();
 }
 function detectIssueFromBranch(branch) {
-  const m = branch.match(/^(?:issue|fix|feat)\/(?:issue-)?(\d+)/);
+  const m = branch.match(/^(?:issue|fix|feat|refactor|perf|chore|docs)\/(?:issue-)?(\d+)/);
   return m ? parseInt(m[1], 10) : undefined;
 }
+var ACCEPTED_ISSUE_BRANCH_FORMS = "issue/<n>, fix/<n>, feat/<n>, refactor/<n>, perf/<n>, chore/<n>, docs/<n> (with optional issue- infix)";
 function unlinkedPrWarning(branch) {
-  return `⚠️  No linked issue: --issue was not given and branch "${branch}" carries no detectable issue number ` + "(accepted: issue/<n>, fix/<n>, feat/<n>, fix/issue-<n>, feat/issue-<n>). " + "The PR will open UNLINKED — merging it closes nothing, and any `issue wait --on` timer " + "parked on the intended issue waits forever. Pass --issue <n> to link it.";
+  return `⚠️  No linked issue: --issue was not given and branch "${branch}" carries no detectable issue number ` + `(accepted: ${ACCEPTED_ISSUE_BRANCH_FORMS}, or branch.<name>.shipflowIssue). ` + "The PR will open UNLINKED — merging it closes nothing, and any `issue wait --on` timer " + "parked on the intended issue waits forever. Pass --issue <n> to link it.";
+}
+function unlinkedPrStrictError(branch) {
+  return `⛔ Refusing to open unlinked PR under --lint=strict: --issue was not given and branch "${branch}" carries no detectable issue number ` + `(accepted: ${ACCEPTED_ISSUE_BRANCH_FORMS}, or branch.<name>.shipflowIssue). ` + "Pass --issue <n> to link an issue, or --no-issue for a trivial/chore PR.";
 }
 function isVisibleSurfacePath(path) {
   const p = path.replace(/\\/g, "/");
@@ -15878,6 +16133,17 @@ var SETTINGS = [
     field: "autoIssue",
     set: (v, c) => String(c.autoIssue = parseBoolStrict("auto-issue", v)),
     effective: resolveAutoIssue
+  },
+  {
+    key: "issue-track",
+    field: "issueTrack",
+    set: (v, c) => {
+      const m = v.trim().toLowerCase();
+      if (!ISSUE_TRACK_MODES.includes(m))
+        throw new Error(`issue-track must be one of: ${ISSUE_TRACK_MODES.join(", ")}`);
+      return c.issueTrack = m;
+    },
+    effective: resolveIssueTrack
   },
   {
     key: "live-reload",

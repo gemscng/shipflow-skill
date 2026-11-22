@@ -16,26 +16,31 @@ un-tracked; never create duplicate issues.
    or user-facing behavior.
 1. **Summarize the work** in a sentence or two (the user's description, the
    branch name, and/or `git diff` / recent commits) — that intent is the query.
-2. **List candidates:** `renaiss-shipflow issues list --json`.
-   Default window is 1000 (same as the create pre-flight). If the envelope
-   has `truncated: true`, the window is FULL — older issues were not
-   returned; raise `--limit` before treating the list as complete
-   (#582; the old default `--limit 30` is how #579 restated #427).
-3. **Match (you do this — it's semantic).** Compare the work against each open
-   issue's title + body; be conservative — only a match when the work plainly
-   implements or fixes that issue.
-   - **Match →** "This looks covered by **#N — <title>**. Work under it?" On
-     yes: `renaiss-shipflow issue work N`. Do **not** open a duplicate.
-4. **No match →** check `renaiss-shipflow config get auto-issue --json`.
-   - **`autoIssue: true`** → create automatically:
-     `renaiss-shipflow issue create --lint=strict --title "<concise>" --body "<ladder body>"`,
+2. **Find candidates:** `renaiss-shipflow issue match "<summary>" --json`
+   (scans the full 1,000-issue open window, joins active claims, and returns
+   the top matches plus `issueTrack`: `auto` | `ask` | `off`). If `truncated: true`,
+   raise `--scan-limit` or fall back to `renaiss-shipflow issues list --json --limit 2000`
+   before treating the list as complete (#582).
+3. **Match (you verify — it's semantic).** Compare the work against the top
+   candidates; be conservative — only a match when the work plainly implements
+   or fixes that issue.
+   - **Match →** if `claimedBy` is another agent/person, warn before touching
+     code. Under `issueTrack: "auto"`, claim directly with
+     `renaiss-shipflow issue work N --json` and report `Tracking under #N — <title>`;
+     under `"ask"`, confirm *"This looks covered by **#N — <title>**. Work under it?"*
+     first. Do **not** open a duplicate.
+4. **No match →** act on `issueTrack` (or `renaiss-shipflow config get issue-track --json`):
+   - **`issueTrack: "auto"`** (default; also enabled by `auto-issue true`) → create
+     and claim atomically:
+     `renaiss-shipflow issue create --claim --lint=strict --title "<concise>" --body "<ladder body>"`,
      report which issue you opened, and continue — **don't ask**.
-   - **`autoIssue: false`** (default) → **ask** first: "No open issue covers
-     this — want me to open one? (proposed title: …)". Create only on a yes.
+   - **`issueTrack: "ask"`** → **ask** first: "No open issue covers this — want
+     me to open one? (proposed title: …)". Create with `--claim` only on a yes.
+   - **`issueTrack: "off"`** → skip creating an issue.
    - **Either way, `issue create` may exit 12** — its near-verbatim duplicate
      guard found an open issue restating your title and created nothing
      (#580). Treat that as a step-3 **Match**, not a failure: surface the
-     candidates it printed and offer `issue work <n>`, or re-run with
+     candidates it printed and claim with `issue work <n>`, or re-run with
      `--allow-duplicate` when the work is genuinely separate. The guard
      catches restatements only — your semantic step-3 pass still catches
      paraphrases.
@@ -197,11 +202,15 @@ screens, cards and payouts, never table names or routes; those go in
 
 ## Auto mode
 
-Enable auto-create with:
+Auto-tracking defaults to `auto` (`issue-track`):
 
 ```
-renaiss-shipflow config set auto-issue true     # or env SHIPFLOW_AUTO_ISSUE=true
+renaiss-shipflow config set issue-track auto   # default (or env SHIPFLOW_ISSUE_TRACK=auto)
+renaiss-shipflow config set issue-track ask    # prompt before claiming fuzzy matches or filing
+renaiss-shipflow config set issue-track off    # disable ambient tracking
 ```
 
-With it on, step 4 never prompts — it opens the issue and proceeds. Turn off
-with `renaiss-shipflow config set auto-issue false`.
+Legacy `renaiss-shipflow config set auto-issue true|false` (or env
+`SHIPFLOW_AUTO_ISSUE`) continues to work when `issue-track` is unset. To
+disable the session hint and `gh pr create` gate completely, set
+`SHIPFLOW_ISSUE_TRACK_HOOK=false`. See `references/issue-track-first.md`.

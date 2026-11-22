@@ -9,6 +9,8 @@
 #      code" instruction (#1364)                         shipflow:feature-map-first markers
 #   5. the "use shipflow:smart-commit" instruction       → same AGENTS.md, between
 #      (#1415)                                           shipflow:smart-commit-first markers
+#   6. the "auto-track issues for fixes" instruction     → same AGENTS.md, between
+#      (#1499)                                           shipflow:issue-track-first markers
 #
 # After this, `$shipflow` (and `$smart-commit`) invoke the skills in Codex, and
 # Codex also auto-selects `shipflow` from its description when you mention
@@ -171,6 +173,38 @@ else
   cat "$kept.new" > "$AGENTS_MD"
   rm -f "$kept" "$kept.new"
   echo "agents:  smart-commit instruction -> $AGENTS_MD (between shipflow:smart-commit-first markers)"
+fi
+
+# 6. issue-track-first (#1499): auto-track non-trivial fixes/features before editing.
+IT_HINT="$ROOT/skills/shipflow/references/issue-track-first.md"
+IT_BEGIN="<!-- shipflow:issue-track-first BEGIN"
+IT_END="<!-- shipflow:issue-track-first END -->"
+it_count() { if [ -f "$AGENTS_MD" ]; then grep -c -F -- "$1" "$AGENTS_MD" || true; else echo 0; fi; }
+if [ "${SHIPFLOW_ISSUE_TRACK_HOOK:-}" = "false" ]; then
+  echo "agents:  issue-track hint skipped (SHIPFLOW_ISSUE_TRACK_HOOK=false)"
+elif [ ! -f "$IT_HINT" ]; then
+  echo "agents:  issue-track hint skipped ($IT_HINT not found)"
+elif [ "$(it_count "$IT_BEGIN")" != "$(it_count "$IT_END")" ] || [ "$(it_count "$IT_BEGIN")" -gt 1 ]; then
+  echo "agents:  issue-track hint skipped — $AGENTS_MD has unmatched shipflow:issue-track-first markers; fix or remove them and re-run"
+else
+  kept="$(mktemp)"
+  if [ -f "$AGENTS_MD" ]; then
+    awk -v b="$IT_BEGIN" -v e="$IT_END" '
+      index($0, b) == 1 { skip = 1; next }
+      skip && index($0, e) == 1 { skip = 0; next }
+      !skip' "$AGENTS_MD" |
+      awk '/^[[:space:]]*$/ { blank++; next } { for (; blank > 0; blank--) print ""; print }' > "$kept"
+  fi
+  mkdir -p "$CODEX_HOME"
+  {
+    [ -s "$kept" ] && { cat "$kept"; echo; }
+    echo "$IT_BEGIN (written by ShipFlow codex/install.sh; a re-run replaces this block) -->"
+    cat "$IT_HINT"
+    echo "$IT_END"
+  } > "$kept.new"
+  cat "$kept.new" > "$AGENTS_MD"
+  rm -f "$kept" "$kept.new"
+  echo "agents:  issue-track instruction -> $AGENTS_MD (between shipflow:issue-track-first markers)"
 fi
 
 cat <<MSG

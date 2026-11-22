@@ -1,0 +1,21 @@
+{
+  "shipflow-gates": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./bin/shipflow-smart-commit-gate",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "./bin/shipflow-pr-create-gate",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -21,12 +21,16 @@ continue).
 A **SessionStart hook** (`hooks/hooks.json` → `bin/shipflow-session-start`)
 silently installs any pending update at each session start, so updates load
 **automatically next session** — you run nothing. The same hook also adds
-`references/feature-map-first.md` to the session context in a GitHub repo
-(again after `/clear` and compaction); `SHIPFLOW_FEATURE_MAP_HINT=false` turns
-that off. In any git repo it also adds `references/smart-commit-first.md`, and
-`hooks.json` registers a PreToolUse Bash gate (`bin/shipflow-smart-commit-gate`)
-that denies bare `git commit` unless the command carries `SHIPFLOW_SMART_COMMIT=1`
-(issue #1415). Opt out: `SHIPFLOW_SMART_COMMIT_HOOK=false`.
+`references/feature-map-first.md` and `references/issue-track-first.md` to the
+session context in a GitHub repo (again after `/clear` and compaction);
+`SHIPFLOW_FEATURE_MAP_HINT=false` and `SHIPFLOW_ISSUE_TRACK_HOOK=false` turn
+those off. In any git repo it also adds `references/smart-commit-first.md`, and
+`hooks.json` registers PreToolUse Bash gates: `bin/shipflow-smart-commit-gate`
+denies bare `git commit` unless the command carries `SHIPFLOW_SMART_COMMIT=1`
+(issue #1415; opt out: `SHIPFLOW_SMART_COMMIT_HOOK=false`), and
+`bin/shipflow-pr-create-gate` denies bare `gh pr create` unless the command
+carries `SHIPFLOW_ALLOW_GH_PR=1` (issue #1499; opt out:
+`SHIPFLOW_ISSUE_TRACK_HOOK=false`).
 
 **Opt-in same-session apply (asked once):** live-reload is tri-state —
 `renaiss-shipflow config get live-reload` is `true`, `false`, or `unset` (env

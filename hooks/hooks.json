@@ -41,6 +41,12 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/shipflow-smart-commit-gate",
             "timeout": 10,
             "statusMessage": "ShipFlow smart-commit gate"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/shipflow-pr-create-gate",
+            "timeout": 10,
+            "statusMessage": "ShipFlow PR create gate"
           }
         ]
       }
