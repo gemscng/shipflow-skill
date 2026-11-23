@@ -6705,9 +6705,389 @@ import { execFileSync, execSync as execSync4 } from "node:child_process";
 import { hostname } from "node:os";
 
 // src/git-local.ts
-init_sh();
+import { realpathSync as realpathSync2 } from "node:fs";
+import { basename as basename2 } from "node:path";
+
+// src/orca.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, resolve as resolve2 } from "node:path";
+var ORCA_TIMEOUT_MS = 5000;
+var ORCA_MAX_BUFFER = 2 * 1024 * 1024;
+function defaultOrcaRunner(args) {
+  try {
+    const r = spawnSync2("orca", args, {
+      timeout: ORCA_TIMEOUT_MS,
+      maxBuffer: ORCA_MAX_BUFFER,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    return {
+      status: r.status ?? null,
+      stdout: typeof r.stdout === "string" ? r.stdout : "",
+      stderr: typeof r.stderr === "string" ? r.stderr : ""
+    };
+  } catch {
+    return { status: null, stdout: "", stderr: "" };
+  }
+}
+function defaultGitProbe() {
+  try {
+    const top = spawnSync2("git", ["rev-parse", "--show-toplevel"], {
+      timeout: ORCA_TIMEOUT_MS,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    if (top.status !== 0 || !top.stdout?.trim())
+      return null;
+    const br = spawnSync2("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      timeout: ORCA_TIMEOUT_MS,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    const branch = br.status === 0 ? (br.stdout ?? "").trim() : "";
+    let defaultBranch;
+    try {
+      const sym = spawnSync2("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
+        timeout: ORCA_TIMEOUT_MS,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      if (sym.status === 0) {
+        const m = (sym.stdout ?? "").trim().match(/^[^/]+\/(.+)$/);
+        if (m)
+          defaultBranch = m[1];
+      }
+    } catch {
+      defaultBranch = originDefaultBranch();
+    }
+    let originUrl;
+    try {
+      const rem = spawnSync2("git", ["remote", "get-url", "origin"], {
+        timeout: ORCA_TIMEOUT_MS,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      if (rem.status === 0 && rem.stdout?.trim()) {
+        originUrl = rem.stdout.trim();
+      }
+    } catch {
+      originUrl = undefined;
+    }
+    return { topLevel: top.stdout.trim(), branch, defaultBranch, originUrl };
+  } catch {
+    return null;
+  }
+}
+var customRunner = null;
+var customGitProbe = null;
+function runOrca(args) {
+  return (customRunner ?? defaultOrcaRunner)(args);
+}
+function probeGit() {
+  return (customGitProbe ?? defaultGitProbe)();
+}
+function isOrcaSyncEnabled(env = process.env) {
+  const raw = env.SHIPFLOW_ORCA_SYNC?.trim().toLowerCase();
+  if (raw === "false" || raw === "0" || raw === "off" || raw === "no")
+    return false;
+  if (raw === "true" || raw === "1" || raw === "on" || raw === "yes")
+    return true;
+  if (env.NODE_ENV === "test" && customRunner === null)
+    return false;
+  return true;
+}
+function hasOrcaWorkspaceEnv(env = process.env) {
+  return Boolean(env.ORCA_WORKSPACE_ID?.trim() || env.ORCA_WORKTREE_ID?.trim());
+}
+function hasOrcaRuntimeHint(env = process.env) {
+  return hasOrcaWorkspaceEnv(env) || Boolean(env.ORCA_CLI_BIN_DIR?.trim() || env.TERM_PROGRAM === "Orca");
+}
+function canonicalPath(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve2(p);
+  }
+}
+function samePath(a, b) {
+  if (!a || !b)
+    return false;
+  return canonicalPath(a) === canonicalPath(b);
+}
+function pathWithinOrEqual(child, parent) {
+  if (!child || !parent)
+    return false;
+  const c = canonicalPath(child).replace(/\\/g, "/").replace(/\/+$/, "");
+  const p = canonicalPath(parent).replace(/\\/g, "/").replace(/\/+$/, "");
+  return c === p || c.startsWith(`${p}/`);
+}
+function parseOrcaWorktreeIdPath(rawId) {
+  const trimmed = (rawId ?? "").trim();
+  if (!trimmed || trimmed.startsWith("folder:"))
+    return null;
+  const idx = trimmed.indexOf("::");
+  if (idx <= 0 || idx + 2 >= trimmed.length)
+    return null;
+  return trimmed.slice(idx + 2);
+}
+function extractLinkedNumber(val) {
+  if (typeof val === "number" && Number.isSafeInteger(val) && val > 0)
+    return val;
+  if (val && typeof val === "object" && "number" in val) {
+    const n = val.number;
+    if (typeof n === "number" && Number.isSafeInteger(n) && n > 0)
+      return n;
+  }
+  return null;
+}
+function normalizeBranchRef(branch) {
+  const b = (branch ?? "").trim();
+  return b.startsWith("refs/heads/") ? b.slice("refs/heads/".length) : b;
+}
+function gitOriginMatchesRepo(originUrl, repoFullName) {
+  if (originUrl === undefined)
+    return true;
+  const url = originUrl.trim();
+  const host = url.match(/^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?([^:/]+)[:/]/i)?.[1] ?? "";
+  if (host.toLowerCase() !== "github.com")
+    return false;
+  const m = url.match(/[/:]([^/:]+\/[^/]+?)(?:\.git)?$/);
+  return m ? m[1].toLowerCase() === repoFullName.trim().toLowerCase() : false;
+}
+function orcaWorktreeMatchesRepo(wt, repoFullName) {
+  const pid = (wt.projectId ?? "").trim();
+  if (pid.toLowerCase().startsWith("github:")) {
+    return pid.slice("github:".length).toLowerCase() === repoFullName.trim().toLowerCase();
+  }
+  return true;
+}
+function parseOrcaWorktreeJson(stdout) {
+  if (!stdout.trim())
+    return null;
+  try {
+    const parsed = JSON.parse(stdout);
+    if (parsed?.ok === false)
+      return null;
+    const wt = parsed?.result?.worktree;
+    return wt && typeof wt === "object" ? wt : null;
+  } catch {
+    return null;
+  }
+}
+function isReusableLoopCheckout(worktreePath, branch) {
+  return basename(worktreePath) === "shipflow-loop" || branch === "shipflow-loop/base";
+}
+function isFixedMainWorkspace(wt) {
+  if (wt.isMainWorktree === true)
+    return true;
+  const name = (wt.displayName ?? "").trim().toLowerCase();
+  return (name === "main" || name === "master") && wt.displayNameMode === "fixed";
+}
+function resolveActiveOrcaTarget(repoFullName, env = process.env) {
+  if (!isOrcaSyncEnabled(env) || !hasOrcaWorkspaceEnv(env))
+    return null;
+  const rawId = env.ORCA_WORKTREE_ID?.trim() || env.ORCA_WORKSPACE_ID?.trim() || "";
+  const isFolder = rawId.startsWith("folder:");
+  const git = probeGit();
+  if (!git)
+    return null;
+  if (!isFolder && !gitOriginMatchesRepo(git.originUrl, repoFullName))
+    return null;
+  if (!isFolder) {
+    const envPath = parseOrcaWorktreeIdPath(rawId);
+    if (!envPath || !samePath(git.topLevel, envPath))
+      return null;
+    if (isReusableLoopCheckout(git.topLevel, git.branch))
+      return null;
+    if (isDefaultOrDetachedBranch(git.branch, git.defaultBranch))
+      return null;
+  } else {
+    if (isReusableLoopCheckout(git.topLevel, git.branch))
+      return null;
+  }
+  const cur = runOrca(["worktree", "current", "--json"]);
+  if (cur.status !== 0)
+    return null;
+  const wt = parseOrcaWorktreeJson(cur.stdout);
+  if (!wt)
+    return null;
+  if (isFolder || (wt.id ?? "").startsWith("folder:")) {
+    if (wt.path && !pathWithinOrEqual(git.topLevel, wt.path))
+      return null;
+    return { kind: "folder", worktree: wt };
+  }
+  if (!orcaWorktreeMatchesRepo(wt, repoFullName))
+    return null;
+  if (isFixedMainWorkspace(wt))
+    return null;
+  return { kind: "git", worktree: wt };
+}
+function githubIssueUrl(repoFullName, issueNumber) {
+  return `https://github.com/${repoFullName}/issues/${issueNumber}`;
+}
+function githubPrUrl(repoFullName, prNumber) {
+  return `https://github.com/${repoFullName}/pull/${prNumber}`;
+}
+function syncOrcaIssueClaimed(params, env = process.env) {
+  try {
+    if (!Number.isSafeInteger(params.issueNumber) || params.issueNumber <= 0)
+      return false;
+    const target = resolveActiveOrcaTarget(params.repo, env);
+    if (!target)
+      return false;
+    const existingIssue = extractLinkedNumber(target.worktree.linkedIssue);
+    if (target.kind === "git" && existingIssue !== null && existingIssue !== params.issueNumber) {
+      return false;
+    }
+    const url = params.issueUrl?.trim() || githubIssueUrl(params.repo, params.issueNumber);
+    runOrca(["reference", "add", url, "--worktree", "current", "--json"]);
+    const setArgs = target.kind === "folder" ? ["worktree", "set", "--worktree", "current", "--workspace-status", "in-progress", "--json"] : ["worktree", "set", "--worktree", "current", "--issue", String(params.issueNumber), "--workspace-status", "in-progress", "--json"];
+    return runOrca(setArgs).status === 0;
+  } catch {
+    return false;
+  }
+}
+function syncOrcaIssueEscalated(params, env = process.env) {
+  try {
+    if (!Number.isSafeInteger(params.issueNumber) || params.issueNumber <= 0)
+      return false;
+    const target = resolveActiveOrcaTarget(params.repo, env);
+    if (!target)
+      return false;
+    const existingIssue = extractLinkedNumber(target.worktree.linkedIssue);
+    if (target.kind === "git" && existingIssue !== null && existingIssue !== params.issueNumber) {
+      return false;
+    }
+    if (existingIssue === null) {
+      runOrca(["reference", "add", githubIssueUrl(params.repo, params.issueNumber), "--worktree", "current", "--json"]);
+    }
+    const cat = params.category?.trim();
+    const comment = `Needs human${cat ? ` (${cat})` : ""} on #${params.issueNumber}`;
+    const setArgs = ["worktree", "set", "--worktree", "current"];
+    if (target.kind === "git" && existingIssue === null) {
+      setArgs.push("--issue", String(params.issueNumber));
+    }
+    setArgs.push("--comment", comment, "--unread", "--json");
+    return runOrca(setArgs).status === 0;
+  } catch {
+    return false;
+  }
+}
+function syncOrcaPrOpened(params, env = process.env) {
+  try {
+    if (!Number.isSafeInteger(params.prNumber) || params.prNumber <= 0)
+      return false;
+    const target = resolveActiveOrcaTarget(params.repo, env);
+    if (!target)
+      return false;
+    const existingPr = extractLinkedNumber(target.worktree.linkedPR);
+    if (target.kind === "git" && existingPr !== null && existingPr !== params.prNumber) {
+      return false;
+    }
+    const existingIssue = extractLinkedNumber(target.worktree.linkedIssue);
+    const validIssue = typeof params.issueNumber === "number" && Number.isSafeInteger(params.issueNumber) && params.issueNumber > 0 ? params.issueNumber : undefined;
+    const canLinkIssue = validIssue !== undefined && (existingIssue === null || existingIssue === validIssue);
+    const urls = [];
+    if (canLinkIssue && existingIssue === null) {
+      urls.push(githubIssueUrl(params.repo, validIssue));
+    }
+    urls.push(params.prUrl?.trim() || githubPrUrl(params.repo, params.prNumber));
+    runOrca(["reference", "add", ...urls, "--worktree", "current", "--json"]);
+    const setArgs = ["worktree", "set", "--worktree", "current"];
+    if (target.kind === "git") {
+      setArgs.push("--pr", String(params.prNumber));
+      if (canLinkIssue && existingIssue === null) {
+        setArgs.push("--issue", String(validIssue));
+      }
+    }
+    setArgs.push("--workspace-status", "in-review", "--json");
+    return runOrca(setArgs).status === 0;
+  } catch {
+    return false;
+  }
+}
+function syncOrcaPrMerged(params, env = process.env) {
+  try {
+    if (!isOrcaSyncEnabled(env) || !hasOrcaRuntimeHint(env))
+      return false;
+    if (hasOrcaWorkspaceEnv(env)) {
+      const target = resolveActiveOrcaTarget(params.repo, env);
+      if (target) {
+        const linkedPr = extractLinkedNumber(target.worktree.linkedPR);
+        const linkedIssue = extractLinkedNumber(target.worktree.linkedIssue);
+        const wtBranch = normalizeBranchRef(target.worktree.branch);
+        const matchesCurrent = linkedPr === params.prNumber || Boolean(params.headBranch) && wtBranch === normalizeBranchRef(params.headBranch) || linkedIssue !== null && Boolean(params.issueNumbers?.includes(linkedIssue));
+        if (matchesCurrent) {
+          return runOrca([
+            "worktree",
+            "set",
+            "--worktree",
+            "current",
+            "--workspace-status",
+            "completed",
+            "--read",
+            "--json"
+          ]).status === 0;
+        }
+      }
+    }
+    const selectors = [];
+    const cleanHead = normalizeBranchRef(params.headBranch);
+    if (cleanHead)
+      selectors.push(`branch:${cleanHead}`);
+    for (const n of params.issueNumbers ?? []) {
+      if (Number.isSafeInteger(n) && n > 0)
+        selectors.push(`issue:${n}`);
+    }
+    for (const sel of selectors) {
+      const shown = runOrca(["worktree", "show", "--worktree", sel, "--json"]);
+      if (shown.status !== 0)
+        continue;
+      const wt = parseOrcaWorktreeJson(shown.stdout);
+      if (!wt || isFixedMainWorkspace(wt) || !orcaWorktreeMatchesRepo(wt, params.repo))
+        continue;
+      const exactSelector = wt.id ? `id:${wt.id}` : sel;
+      return runOrca([
+        "worktree",
+        "set",
+        "--worktree",
+        exactSelector,
+        "--workspace-status",
+        "completed",
+        "--read",
+        "--json"
+      ]).status === 0;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+function isOrcaManagedWorktreePath(worktreePath, env = process.env) {
+  if (!worktreePath)
+    return false;
+  const normalized = worktreePath.replace(/\\/g, "/");
+  if (normalized.includes("/orca/workspaces/"))
+    return true;
+  const envPath = parseOrcaWorktreeIdPath(env.ORCA_WORKTREE_ID ?? env.ORCA_WORKSPACE_ID);
+  if (envPath && samePath(worktreePath, envPath))
+    return true;
+  if (!isOrcaSyncEnabled(env) || !hasOrcaRuntimeHint(env))
+    return false;
+  try {
+    const shown = runOrca(["worktree", "show", "--worktree", `path:${worktreePath}`, "--json"]);
+    if (shown.status !== 0)
+      return false;
+    const wt = parseOrcaWorktreeJson(shown.stdout);
+    return Boolean(wt?.id);
+  } catch {
+    return false;
+  }
+}
+
+// src/git-local.ts
+init_sh();
 function parseWorktrees(porcelain) {
   const records = [];
   let cur = null;
@@ -6737,15 +7117,16 @@ function cleanupMergedLocalBranch(headBranch) {
     if (held) {
       try {
         const currentTop = _exec("git rev-parse --show-toplevel").toString().trim();
-        const isReusableLoopWorktree = basename(held.path) === "shipflow-loop";
+        const isReusableLoopWorktree = basename2(held.path) === "shipflow-loop";
         const isCurrentCwd = (() => {
           try {
-            return realpathSync(held.path) === realpathSync(currentTop);
+            return realpathSync2(held.path) === realpathSync2(currentTop);
           } catch {
             return held.path === currentTop;
           }
         })();
-        if (!held.isMain && !isReusableLoopWorktree && !isCurrentCwd) {
+        const isOrcaWorktree = isOrcaManagedWorktreePath(held.path);
+        if (!held.isMain && !isReusableLoopWorktree && !isCurrentCwd && !isOrcaWorktree) {
           _exec(`git worktree remove --force ${shellQuote(held.path)}`, { stdio: "ignore" });
         } else {
           _exec(`git -C ${shellQuote(held.path)} checkout --detach`, { stdio: "ignore" });
@@ -7004,7 +7385,7 @@ init_config();
 init_project();
 init_prompts();
 init_helpers();
-import { resolve as resolve2 } from "node:path";
+import { resolve as resolve3 } from "node:path";
 function registerInitCommand(program2) {
   program2.command("init").description("Link the current repo to a ShipFlow project").action(runAction(async () => {
     const { creds, client } = loadJwtCtx(program2);
@@ -7022,7 +7403,7 @@ function registerInitCommand(program2) {
     }
     const chosen = lookup.projects.length === 1 ? lookup.projects[0] : lookup.projects[await promptSelect("Pick a project to link:", lookup.projects.map((p) => p.name))];
     const cache = loadProjectCache();
-    cache[projectCacheKeyForRepoPath(resolve2(root))] = {
+    cache[projectCacheKeyForRepoPath(resolve3(root))] = {
       projectId: chosen.id,
       projectName: chosen.name,
       org: creds.org,
@@ -7072,7 +7453,7 @@ init_client();
 init_sh();
 import { execSync as execSync5 } from "node:child_process";
 import { createRequire as createRequire2 } from "node:module";
-import { existsSync as existsSync2, readdirSync as readdirSync2, realpathSync as realpathSync2 } from "node:fs";
+import { existsSync as existsSync2, readdirSync as readdirSync2, realpathSync as realpathSync3 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7165,7 +7546,7 @@ function resolveCliChannel() {
     if (!candidate)
       continue;
     try {
-      real = realpathSync2(candidate);
+      real = realpathSync3(candidate);
       break;
     } catch {}
   }
@@ -7474,7 +7855,7 @@ function registerVersionCommand(program2, cliVersion2) {
 // src/commands/issues.ts
 init_gh();
 import { writeFileSync as writeFileSync2 } from "node:fs";
-import { resolve as resolve3 } from "node:path";
+import { resolve as resolve4 } from "node:path";
 
 // src/issue-similarity.ts
 var STOPWORDS = new Set([
@@ -8010,7 +8391,7 @@ function registerIssuesCommand(program2) {
       search: opts.search,
       limit: parseInt(opts.limit, 10)
     });
-    const out = resolve3(opts.out ?? `shipflow-issues-${repo.replace("/", "-")}-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    const out = resolve4(opts.out ?? `shipflow-issues-${repo.replace("/", "-")}-${new Date().toISOString().slice(0, 10)}.xlsx`);
     writeFileSync2(out, buildXlsx("Issues", EXPORT_HEADERS, list.map(issueRow)));
     console.log(`Exported ${list.length} issue${list.length === 1 ? "" : "s"} from ${repo} to ${out}`);
   }));
@@ -8471,7 +8852,7 @@ init_gh();
 init_gh();
 import { hostname as hostname2 } from "node:os";
 import { readFileSync as readFileSync4, statSync } from "node:fs";
-import { basename as basename2 } from "node:path";
+import { basename as basename3 } from "node:path";
 
 // src/review-contract-data.ts
 var REVIEW_CONTRACT = {
@@ -11875,7 +12256,7 @@ function registerIssueCommand(program2) {
           process.exit(1);
         }
       }
-      const files = media.map((p) => ({ filename: basename2(p), data: new Uint8Array(readFileSync4(p)) }));
+      const files = media.map((p) => ({ filename: basename3(p), data: new Uint8Array(readFileSync4(p)) }));
       const urls = [];
       try {
         for (const batch of packMediaBatches(files)) {
@@ -11935,8 +12316,10 @@ function registerIssueCommand(program2) {
         console.warn(`⚠️  Issue #${created.number} created, but claim failed (continuing unlocked): ${claimWarning}`);
       }
     }
-    if (claimed && localRepoMatches(repo))
+    if (claimed && localRepoMatches(repo)) {
       recordBranchIssue(created.number);
+      syncOrcaIssueClaimed({ repo, issueNumber: created.number, issueUrl: created.url });
+    }
     if (claimConflict) {
       emit(opts, { ...created, claimed: false, claimConflict }, () => {
         console.error(`⛔ Issue #${created.number} created (${created.url}), but claim is taken: ${claimConflict}`);
@@ -12058,9 +12441,11 @@ function registerIssueCommand(program2) {
       }
       console.warn(`Claim failed (continuing unlocked): ${e.message}`);
     }
-    if (localRepoMatches(repo))
-      recordBranchIssue(number);
     const issueData = ghIssueView(repo, number);
+    if (localRepoMatches(repo)) {
+      recordBranchIssue(number);
+      syncOrcaIssueClaimed({ repo, issueNumber: number, issueUrl: issueData.url });
+    }
     const t = await loadTriage(ctx, repo, number);
     printIssueContext(issueData, t.triage, repo, ctx.project, opts, t.unavailable);
   }));
@@ -12273,6 +12658,10 @@ function registerIssueCommand(program2) {
       }
       reportClaimReflection(repo, cand.number, claim.reflectionWarnings);
       const issueData = ghIssueView(repo, cand.number);
+      if (localRepoMatches(repo)) {
+        recordBranchIssue(cand.number);
+        syncOrcaIssueClaimed({ repo, issueNumber: cand.number, issueUrl: issueData.url });
+      }
       const t = await loadTriage(ctx, repo, cand.number);
       printIssueContext(issueData, t.triage, repo, ctx.project, opts, t.unavailable, healed.length ? { healed } : {});
       return;
@@ -12493,6 +12882,7 @@ ${formatPrecedentSuggestion(precedent)}`;
     if (opts.release) {
       released = await signalBestEffort(ctx, "issues", number, "release-claim", { repo, reason: `escalated: ${reason}` }, "Escalated, but the release signal failed");
     }
+    syncOrcaIssueEscalated({ repo, issueNumber: number, category: opts.category });
     emit(opts, {
       number,
       escalated: true,
@@ -12663,10 +13053,10 @@ ${block}`));
     const toImg = (p) => {
       const data = new Uint8Array(readFileSync4(p));
       if (data.byteLength > MAX_SCREENSHOT_BYTES) {
-        console.error(evidenceUploadLimitMessage("file-bytes", basename2(p)));
+        console.error(evidenceUploadLimitMessage("file-bytes", basename3(p)));
         process.exit(1);
       }
-      return { filename: basename2(p), data };
+      return { filename: basename3(p), data };
     };
     const beforeImgs = before.map(toImg);
     const afterImgs = after.map(toImg);
@@ -13833,6 +14223,12 @@ async function automergeOnce(ctx, repo, number, opts) {
     }
     throw err;
   }
+  syncOrcaPrMerged({
+    repo,
+    prNumber: number,
+    headBranch: result.headBranch,
+    issueNumbers: linkedIssueNumbers(prView)
+  });
   cleanupMergedLocalBranch(result.headBranch);
   await signalBestEffort(ctx, "prs", number, "merged", { repo, mergedSha: result.mergedSha }, "Merged but ShipFlow signal failed");
   const closed = await releaseClaimsAfterAutomerge(ctx, repo, number, prView);
@@ -13924,6 +14320,12 @@ ${footer}` : footer;
       issueRefs: issueNumber ? [issueNumber] : [],
       previewUrl: opts.previewUrl ?? ""
     }, "PR opened but ShipFlow signal failed");
+    syncOrcaPrOpened({
+      repo: ctx.project.repoFullName,
+      prNumber: created.number,
+      prUrl: created.url,
+      issueNumber: issueNumber && Number.isInteger(issueNumber) && issueNumber > 0 ? issueNumber : undefined
+    });
     emit(opts, created, () => console.log(created.url));
     const surface = !changed.ok ? "unknown" : hasVisibleSurface(changed.paths) ? "visible" : "none";
     console.warn(evidenceReminder(created.number, issueNumber || undefined, surface));
@@ -13959,6 +14361,12 @@ ${footer}` : footer;
       }
       throw err;
     }
+    syncOrcaPrMerged({
+      repo,
+      prNumber: number,
+      headBranch: result.headBranch,
+      issueNumbers: linkedIssueNumbers(prView)
+    });
     if (!opts.keepBranch)
       cleanupMergedLocalBranch(result.headBranch);
     const signalOk = await signalBestEffort(ctx, "prs", number, "merged", {
@@ -14705,7 +15113,7 @@ function watchStdinBytes() {
         return Promise.resolve(true);
       if (closed)
         return Promise.resolve(false);
-      return new Promise((resolve4) => {
+      return new Promise((resolve5) => {
         let settled = false;
         const settle = () => {
           if (settled)
@@ -14719,7 +15127,7 @@ function watchStdinBytes() {
             else
               release();
           }
-          resolve4(saw);
+          resolve5(saw);
         };
         wake = settle;
         const timer = setTimeout(settle, ms);
@@ -16554,12 +16962,12 @@ function startToolBridge(tools, run, token = newBridgeToken()) {
       });
     });
   });
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : 0;
-      resolve4({
+      resolve5({
         url: `http://127.0.0.1:${port}`,
         token,
         toolCalls: () => counter.calls,
@@ -16639,7 +17047,7 @@ async function runAgentJob(job, client, org, opts) {
   }
 }
 function spawnClaude(bin, args, stdin, env, timeoutMs) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const child = spawn(bin, args, { env, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "", stderr = "", timedOut = false;
     child.stdout.setEncoding("utf8").on("data", (d) => {
@@ -16658,14 +17066,14 @@ function spawnClaude(bin, args, stdin, env, timeoutMs) {
     });
     child.once("close", (code, signal) => {
       clearTimeout(timer);
-      resolve4({ stdout, stderr, exitCode: code, signal, timedOut });
+      resolve5({ stdout, stderr, exitCode: code, signal, timedOut });
     });
     child.stdin.on("error", () => {});
     child.stdin.end(stdin);
   });
 }
 function detectClaude(bin, env = claudeEnv()) {
-  const probe = (flag) => new Promise((resolve4) => {
+  const probe = (flag) => new Promise((resolve5) => {
     const child = spawn(bin, [flag], { env, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     child.stdout.setEncoding("utf8").on("data", (d) => {
@@ -16677,11 +17085,11 @@ function detectClaude(bin, env = claudeEnv()) {
     const timer = setTimeout(() => child.kill("SIGKILL"), 15000);
     child.once("error", (e) => {
       clearTimeout(timer);
-      resolve4(`ERROR: ${e.message}`);
+      resolve5(`ERROR: ${e.message}`);
     });
     child.once("close", () => {
       clearTimeout(timer);
-      resolve4(out);
+      resolve5(out);
     });
   });
   return Promise.all([probe("--version"), probe("--help")]).then(([version, help]) => {
@@ -16707,19 +17115,19 @@ async function serveEngine(client, org, opts) {
   opts.stop.addEventListener("abort", () => stopAll("stopped"), { once: true });
   if (opts.stop.aborted)
     stopAll("stopped");
-  const pause = (ms) => new Promise((resolve4) => {
+  const pause = (ms) => new Promise((resolve5) => {
     if (controller.signal.aborted)
-      return resolve4();
+      return resolve5();
     let timer;
     const onAbort = () => {
       if (timer)
         clearTimeout(timer);
-      resolve4();
+      resolve5();
     };
     controller.signal.addEventListener("abort", onAbort, { once: true });
     const finish = () => {
       controller.signal.removeEventListener("abort", onAbort);
-      resolve4();
+      resolve5();
     };
     if (opts.sleep)
       opts.sleep(ms).then(finish);

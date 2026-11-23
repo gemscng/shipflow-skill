@@ -85,6 +85,11 @@ Scratch artifacts follow the same isolation — per-item paths, never a
 shared filename (#683; `loop-worker.md` § Scratch isolation). Run-end
 cleanup: `git worktree prune` after the orchestrator-worktree teardown
 catches leftovers.
+**Orca Editor (`$ORCA_WORKSPACE_ID` + `orca` on `PATH`):** dispatch fix and
+reconcile workers as kept-open Orca child workspaces (`orca orchestration
+worker-start --worktree new-child … --keep-open`) instead of ephemeral
+`.worktrees/shipflow-loop-*` checkouts so pressing **Resume** on any task in
+Orca jumps back to its chat — full contract in `references/orca.md`.
 
 **Solo exception** (`loop-concurrency 1` / `concurrency=1` only): workers
 MAY branch and commit in the orchestrator worktree — the old

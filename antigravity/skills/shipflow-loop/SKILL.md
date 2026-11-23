@@ -56,7 +56,9 @@ bound it.
    .worktrees/shipflow-loop -b shipflow-loop/base origin/<default>`; reuse if it
    exists. Serial claims/inbox/merges run here. Workers never checkout here —
    each adds `.worktrees/shipflow-loop-<issue>` (fix) or
-   `.worktrees/shipflow-loop-pr-<n>` (reconcile) (#744). § "Setup — run in a
+   `.worktrees/shipflow-loop-pr-<n>` (reconcile) (#744), or in Orca Editor
+   (`$ORCA_WORKSPACE_ID`) runs in a kept-open `orca orchestration worker-start`
+   child workspace (`skills/shipflow/references/orca.md`). § "Setup — run in a
    worktree (once, before the cycle)".
 2. Honour the policy knobs (`renaiss-shipflow config list`) and dispatch
    through the three roles — thin orchestrator, mandatory reviewer, worker —

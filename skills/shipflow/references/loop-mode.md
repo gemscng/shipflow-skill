@@ -56,7 +56,10 @@ the heavy work never enters yours.
   Contracts: intake → `references/loop-reviewer-intake.md`; PR gate → `references/loop-reviewer.md`.
 - **worker** — fixes ONE issue end-to-end (branch → fix → test → PR →
   evidence), returns `{pr, verified, blocked}`; also runs reconcile fixes.
-  Contract: `references/loop-worker.md`.
+  Contract: `references/loop-worker.md` (inside Orca Editor where
+  `$ORCA_WORKSPACE_ID` is set, dispatch via kept-open `orca orchestration
+  worker-start` child workspaces and resume via `orca orchestration send` per
+  `references/orca.md` so each task in Orca stays bound to its resumable chat).
   - **Worker model knob:** at run start read `renaiss-shipflow config get
     loop-worker-model` (env `SHIPFLOW_LOOP_WORKER_MODEL` overrides). If set,
     pass as Task `model` on every **worker** dispatch — fix and reconcile

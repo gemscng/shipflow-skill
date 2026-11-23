@@ -48,7 +48,12 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
 ## What a fix worker does (one issue, end-to-end)
 1. **Branch** — default: from the repo root, `git fetch origin &&
    git worktree add .worktrees/shipflow-loop-<n> -b fix/issue-<n>-<slug>
-   origin/<default>`, then work in that worktree only. Solo
+   origin/<default>`, then work in that worktree only. **Orca worker**
+   (`$ORCA_WORKSPACE_ID` set on a dedicated child workspace, `orca.md`): you
+   are already in your isolated Orca worktree — `git fetch origin && git
+   checkout -B fix/issue-<n>-<slug> origin/<default>` in place (never add a
+   nested `.worktrees/*` checkout, and never `git worktree remove` it at the
+   end so **Resume** in Orca reopens this chat). Solo
    (`loop-concurrency 1` only): `git checkout -b fix/issue-<n>-<slug>
    origin/<default>` in the loop worktree. Then
    `renaiss-shipflow git-identity --fix` **before the first commit** —
@@ -317,7 +322,9 @@ hit a wall):
 - [ ] Parallel mode: your worktree removed (`git worktree remove
       .worktrees/shipflow-loop-<n>` or, reconcile,
       `.worktrees/shipflow-loop-pr-<n>`) — after push, or on `blocked`;
-      the pushed branch is the artifact. If the PR merged mid-fix, the
+      the pushed branch is the artifact (**exception — Orca workspace
+      workers (`orca.md`):** keep your Orca child worktree in place so its
+      chat stays resumable). If the PR merged mid-fix, the
       artifacts are the leftover branch (`fix/pr-<n>-leftover`, pushed)
       and the follow-up issue — never a push to the closed head — and
       only when `$base..HEAD` is non-empty (§ "Merged mid-fix"); a

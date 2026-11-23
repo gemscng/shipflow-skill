@@ -40,8 +40,10 @@ Prints `UPGRADE_AVAILABLE` (and `SHIPFLOW_AUTO_UPDATE` is not `false`) →
 
 Under OpenAI Codex CLI read `references/codex.md` FIRST; under Cursor,
 `references/cursor.md` (the plugin cache resolves there — Task tool /
-CronCreate still degrade). Any other harness without Claude Code's plugin
-cache / Task tool / CronCreate / AskUserQuestion: start from
+CronCreate still degrade); inside **Orca Editor** (`$ORCA_WORKSPACE_ID` set and
+`orca` on `PATH`), also read `references/orca.md` so issues, PRs, and loop
+workers bind to resumable Orca task chats. Any other harness without Claude
+Code's plugin cache / Task tool / CronCreate / AskUserQuestion: start from
 `references/codex.md` — it replaces the preamble above and maps every
 harness-specific affordance. Commands, guardrails, and message contracts
 are identical across harnesses.
