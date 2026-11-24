@@ -28,6 +28,13 @@ Not a live page (composite, simulator/native shot, `--image` mock, terminal outp
 Draw the outline onto the image: `references/browser-testing.md` § "Mark what changed".
 `--pr` lands the comment on the PR for reviewers. Capture flow (headed browser,
 per-surface loop): `references/browser-testing.md` §4.
+**Auth-walled UI — never ask the user to sign in**: if `localhost` or a preview URL
+redirects to `/login` and no session cookies exist, render the real branch UI locally
+in dev mode with fake/fixture data (built-in dev/mock auth or fixtures first, else
+network stubbing, else a temporary local-only dev stub or preview route — revert and
+verify `git status`/`git diff` clean before committing so zero auth bypasses enter the
+PR). Note `local dev · fixture data` in the caption; never skip screenshots or emit
+`⚠ no screenshot` for an auth wall (`references/browser-testing.md` §3).
 **No UI surface** (schema, persistence, API-only, test-only)? Skip the pairs and
 attach the test-runner summary: `--file <issue>-vitest.txt --caption "Verified: …"`.
 The server renders the text inline; a pass/fail line in the PR body alone is not evidence.

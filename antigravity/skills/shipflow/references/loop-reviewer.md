@@ -163,7 +163,7 @@ mean "irrelevant", they stop meaning anything.
    | Look for | In particular |
    |---|---|
    | Secrets / tokens / keys | new literals, `.env`, fixtures, log lines that print credentials |
-   | Authz + access surfaces | who can call this, who can see this, gates removed or widened |
+   | Authz + access surfaces | who can call this, who can see this, gates removed or widened, leftover dev/evidence auth bypasses or fake-data stubs |
    | Input handling | parsing, deserialization, path joins, shell/SQL construction |
    | New exec / network paths | `execSync`, `spawn`, `fetch`, new endpoints, new file writes |
    | File + process posture | permissions on files written, predictable paths, symlink follows |
@@ -286,6 +286,14 @@ mean "irrelevant", they stop meaning anything.
      a gate finding naming the label and caption; the worker marks it
      (`browser-testing.md` § Mark what changed) and re-attaches it via
      `issue evidence`. Before-shots need no mark.
+   - **Local dev / fixture-data evidence:** screenshots captured in local
+     dev mode with fake/fixture data (`browser-testing.md` §3) are valid UI
+     proof when captioned honestly (e.g. `local dev · fixture data`) and
+     backed by a clean diff with zero leftover auth bypasses or stubs. A
+     missing screenshot excused only by a `/login` redirect on `localhost`
+     or preview is still missing evidence (`request_changes`): the worker
+     must render the UI locally with fake data rather than asking a human
+     to sign in.
    - **Preview-deploy regression gate (when available):** preview deploy
      (deploy-bot comment / GitHub deployment) + test_runner
      `previewUrlPatterns` configured → run

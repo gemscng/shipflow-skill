@@ -700,6 +700,9 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    `Closes #N`; partial slice → `Part of #N`, never a closing keyword —
    `loop-worker.md` §5), attach evidence with the health delta
    (`issue evidence <n> --pr <pr> --before … --after … --label … --caption …`;
+   auth-walled UI → render locally in dev mode with fake/fixture data and
+   revert any temporary stub before committing, never ask the user to sign
+   in, `browser-testing.md` §3;
    no UI surface → `--file <runner-summary>.txt` instead of pairs;
    upload fails → `⚠ no screenshot` line in the PR and a re-run later,
    never an `evidence/*` side branch; `loop-worker.md` §6).

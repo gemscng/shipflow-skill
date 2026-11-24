@@ -84,6 +84,15 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    **screenshots** Read, **score** affected + neighbour pages per
    `references/qa-report.md` — a dropped neighbour score = regression). Pure
    backend/library changes verify on tests alone.
+   - **Auth-walled UI — no login needed:** if `localhost` or a preview URL
+     still redirects to `/login` (or no browser session exists), never ask
+     a human to sign in or escalate for login cookies — render the real
+     branch UI locally in dev mode with fake/fixture data (existing
+     dev/mock auth first, else browser stubbing or a temporary local-only
+     dev stub/preview route), capture the before/after screenshots, revert
+     every temporary stub before committing (`git status` / `git diff` clean
+     of auth bypasses), and label the caption `local dev · fixture data`
+     (`references/browser-testing.md` §3).
    - Branch pass = *your branch* on the local dev server. PR has a **preview
      deploy**? Also `renaiss-shipflow regression --ref <head-sha>
      --preview-url <preview-url> --wait`, gate on exit code (`regression`
@@ -218,6 +227,11 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    branch, commit them to any repo, or use another image host. A usage
    error (bad flag, file over 8 MB) is yours to fix and re-run.
    Full rule: `references/browser-testing.md` §6.
+   **Auth wall ≠ upload failure** — never emit `⚠ no screenshot` or ask the
+   user to log in when `localhost` redirects to `/login`: capture locally in
+   dev mode with fake/fixture data, revert any temporary stub before
+   committing, and note `local dev · fixture data` in the caption
+   (`references/browser-testing.md` §3).
 
 Too risky / ambiguous / unreproducible / unverifiable → do **not** open a PR;
 report `blocked` with the reason (the orchestrator will escalate).

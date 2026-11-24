@@ -15181,11 +15181,12 @@ function evidenceReminder(prNumber, issueNumber, surface) {
   const cmd = `renaiss-shipflow issue evidence ${issueNumber ?? prNumber} --pr ${prNumber}`;
   const shots = `${cmd} --before <before.png> --after <after.png> --label "<surface>" --caption "Verified: <what>"`;
   const tests = `${cmd} --file <test-summary.txt> --caption "Verified: <what the tests prove>"`;
-  if (surface === "visible")
-    return `\uD83D\uDCA1 evidence: attach before/after screenshots of the fix: ${shots}`;
+  if (surface === "visible") {
+    return `\uD83D\uDCA1 evidence: attach before/after screenshots of the fix (if auth-walled, render locally in dev mode with fake data and revert any temporary stub before committing — never ask the user to sign in): ${shots}`;
+  }
   if (surface === "none")
     return `\uD83D\uDCA1 evidence: no UI change, so attach the test summary: ${tests}`;
-  return `\uD83D\uDCA1 evidence: attach proof of the fix. UI change: ${shots} · No UI change: ${tests}`;
+  return `\uD83D\uDCA1 evidence: attach proof of the fix. UI change (auth-walled? local dev mode with fake data, never ask the user to sign in): ${shots} · No UI change: ${tests}`;
 }
 function buildShipFlowFooter(project, issueNumber, linkMode = "closes") {
   const parts = [`${SHIPFLOW_FOOTER_PREFIX}${project}`];

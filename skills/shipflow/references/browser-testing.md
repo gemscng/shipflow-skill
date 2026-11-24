@@ -86,6 +86,43 @@ the homepage + top nav.
      (`$HOME/.cache/shipflow/cookie-import.$DOMAIN`) and serializes via a
      `mkdir` lock under `$TMPDIR` (picker/Keychain at most once; `flock`
      is missing on macOS).
+  4. **Still on a login wall (or no browser cookies / no gstack)? Never ask
+     the user to sign in — capture evidence in local dev mode with fake
+     data.** A `/login` redirect on `localhost` or a preview URL is not a
+     blocker, never grounds for `⚠ no screenshot` (which is only for
+     evidence-upload outages, §6), and never a reason to ship a
+     screenshot-less UI PR. Pick the lightest rung that renders the **real**
+     branch UI:
+     - **Built-in dev/mock auth or fixtures first** (zero temporary edits) —
+       check `.env.example`, `package.json`, auth middleware/guards, and E2E
+       tests for a dev-auth flag, demo/sandbox login, local seed script,
+       mock-data toggle, or Storybook/component preview; start the local dev
+       server with it and screenshot the real route.
+     - **Browser network stubbing** — when auth or data is fetched
+       client-side, intercept `/api/...` (e.g. Playwright `page.route()`)
+       with realistic fixture payloads against the local dev server.
+     - **Temporary local-only dev stub or preview harness** — when SSR /
+       middleware or an unreachable local DB blocks the route and no dev
+       toggle exists, render the real changed component or page in the local
+       dev server with a temporary local-only dev session + realistic fake
+       data (e.g. a temporary dev preview route mounting the real component
+       inside the app's real layout and styles, or a temporary local-only
+       dev guard stub). Capture both **before** (base/pre-change state with
+       the same fake data) and **after** (branch state, change outlined per
+       §4) so the shots show real rendered branch code, not a hand-drawn
+       HTML mock (static mocks are for pre-code UI proposals, §7).
+     - **Revert before commit (non-negotiable)** — immediately after saving
+       the PNGs, delete every temporary harness route/file and revert every
+       temporary auth or data stub, then confirm with `git status` and
+       `git diff` that **zero** auth bypasses, skipped checks, or fixture
+       stubs remain in the working tree or PR diff.
+     - **Label honestly** — note `local dev · fixture data` (or `mocked
+       session/data`) in the evidence caption and PR Testing notes, and list
+       any unverified live-DB or live-auth query separately. Never ask the
+       human to log in, paste cookies, or share prod credentials/DBs just to
+       take screenshots (only a change to the live login/OAuth handshake
+       itself leaves the external IdP step unverified; its surrounding UI
+       still gets local screenshots).
 
 ## 4. Drive the fix end-to-end (before → after, one pair PER changed surface)
 
@@ -234,6 +271,10 @@ first. `--no-api-scan` skips the diff scan. Nothing here blocks the upload.
   commit of the images to any repo, no third-party image host. A side
   branch puts the images in every clone of the repo, and its links break
   when the branch is deleted.
+- **Auth wall on the app under test ≠ upload failure**: never emit
+  `⚠ no screenshot` or ask the user to sign in because `localhost` or a
+  preview URL redirected to `/login` — capture locally in dev mode with
+  fake/fixture data and revert any temporary stub before committing (§3).
 
 ## 7. Draft a UI proposal — before the issue is filed (#1496)
 
