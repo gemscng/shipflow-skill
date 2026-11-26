@@ -3,21 +3,31 @@ description: Attach test evidence (screenshot/video) to a ShipFlow issue
 argument-hint: <issue-number> [files…]
 ---
 
-Attach testing evidence for issue $ARGUMENTS — screenshots must show the fix's
-effect as **before/after pairs, one per changed surface** (not one pair total):
+Attach testing evidence for issue $ARGUMENTS — inspect `git diff` and submit
+**all possible states added, deleted, and updated in the current code changes**
+as **before/after pairs, one labeled pair per changed surface and state** (never
+just one happy-path pair):
 
 ```bash
 renaiss-shipflow issue evidence <number> [--pr <pr>] \
-  --before <surface1-before.png> <surface2-before.png> \
-  --after  <surface1-after.png>  <surface2-after.png> \
-  --label  "Surface 1" "Surface 2" \
-  --before-caption "what surface 1 shows before" "what surface 2 shows before" \
-  --after-caption  "what surface 1 shows after"  "what surface 2 shows after" \
-  --caption "one-line summary of what was verified"
+  --before <state1-before.png> <state2-before.png> <state3-before.png> \
+  --after  <state1-after.png>  <state2-after.png>  <state3-after.png> \
+  --label  "Surface: state A (added)" "Surface: state B (updated)" "Surface: state C (deleted)" \
+  --before-caption "baseline before state A" "state B before" "removed state C before" \
+  --after-caption  "added state A outlined"  "updated state B outlined" "clean removal of state C" \
+  --caption "one-line summary covering all added, updated, and deleted states"
 ```
 
 Pair/mix: `validateEvidenceSelection`
 (`apps/renaissshipflow-cli/src/evidence.ts`).
+**All added, deleted, and updated states**: enumerate every conditional branch,
+empty/loading/error/success/modal/tab/variant state, and removed state or
+control in the current diff (`references/browser-testing.md` §2, §4) — capture
+`before` shots on `origin/<default>` and `after` shots on the branch so added
+states show baseline → new state, updated states show before → after, and
+deleted states show prior state → clean removal (reach non-default states via
+interaction or local dev fixtures/stubs, reverting temporary stubs before
+committing).
 **One claim per image**: a caption asserts only what its own image shows — if it
 needs "and" or lists surfaces/viewports, split into more labeled pairs.
 **Mark the change without covering it**: before each after-shot, outline the changed
@@ -36,7 +46,8 @@ verify `git status`/`git diff` clean before committing so zero auth bypasses ent
 PR). Note `local dev · fixture data` in the caption; never skip screenshots or emit
 `⚠ no screenshot` for an auth wall (`references/browser-testing.md` §3).
 **No UI surface** (schema, persistence, API-only, test-only)? Skip the pairs and
-attach the test-runner summary: `--file <issue>-vitest.txt --caption "Verified: …"`.
+attach the test-runner summary covering all states/branches added, deleted, and
+updated in the diff: `--file <issue>-vitest.txt --caption "Verified: …"`.
 The server renders the text inline; a pass/fail line in the PR body alone is not evidence.
 **API changes and public exposure** (#1489): with `--pr`, the command reads
 the PR diff and attaches `api-changes.diff`. It lists the routes added (`+`) and

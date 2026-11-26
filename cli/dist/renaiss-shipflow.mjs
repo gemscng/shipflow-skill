@@ -6761,7 +6761,7 @@ function defaultGitProbe() {
     } catch {
       defaultBranch = originDefaultBranch();
     }
-    let originUrl;
+    let originUrl = null;
     try {
       const rem = spawnSync2("git", ["remote", "get-url", "origin"], {
         timeout: ORCA_TIMEOUT_MS,
@@ -6772,7 +6772,7 @@ function defaultGitProbe() {
         originUrl = rem.stdout.trim();
       }
     } catch {
-      originUrl = undefined;
+      originUrl = null;
     }
     return { topLevel: top.stdout.trim(), branch, defaultBranch, originUrl };
   } catch {
@@ -6846,9 +6846,9 @@ function normalizeBranchRef(branch) {
   return b.startsWith("refs/heads/") ? b.slice("refs/heads/".length) : b;
 }
 function gitOriginMatchesRepo(originUrl, repoFullName) {
-  if (originUrl === undefined)
-    return true;
-  const url = originUrl.trim();
+  const url = (originUrl ?? "").trim();
+  if (!url)
+    return false;
   const host = url.match(/^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?([^:/]+)[:/]/i)?.[1] ?? "";
   if (host.toLowerCase() !== "github.com")
     return false;
@@ -6892,18 +6892,15 @@ function resolveActiveOrcaTarget(repoFullName, env = process.env) {
   const git = probeGit();
   if (!git)
     return null;
-  if (!isFolder && !gitOriginMatchesRepo(git.originUrl, repoFullName))
+  if (!gitOriginMatchesRepo(git.originUrl, repoFullName))
+    return null;
+  if (isReusableLoopCheckout(git.topLevel, git.branch))
+    return null;
+  if (isDefaultOrDetachedBranch(git.branch, git.defaultBranch))
     return null;
   if (!isFolder) {
     const envPath = parseOrcaWorktreeIdPath(rawId);
     if (!envPath || !samePath(git.topLevel, envPath))
-      return null;
-    if (isReusableLoopCheckout(git.topLevel, git.branch))
-      return null;
-    if (isDefaultOrDetachedBranch(git.branch, git.defaultBranch))
-      return null;
-  } else {
-    if (isReusableLoopCheckout(git.topLevel, git.branch))
       return null;
   }
   const cur = runOrca(["worktree", "current", "--json"]);
@@ -6913,7 +6910,7 @@ function resolveActiveOrcaTarget(repoFullName, env = process.env) {
   if (!wt)
     return null;
   if (isFolder || (wt.id ?? "").startsWith("folder:")) {
-    if (wt.path && !pathWithinOrEqual(git.topLevel, wt.path))
+    if (!wt.path?.trim() || !pathWithinOrEqual(git.topLevel, wt.path))
       return null;
     return { kind: "folder", worktree: wt };
   }
@@ -6937,7 +6934,7 @@ function syncOrcaIssueClaimed(params, env = process.env) {
     if (!target)
       return false;
     const existingIssue = extractLinkedNumber(target.worktree.linkedIssue);
-    if (target.kind === "git" && existingIssue !== null && existingIssue !== params.issueNumber) {
+    if (existingIssue !== null && existingIssue !== params.issueNumber) {
       return false;
     }
     const url = params.issueUrl?.trim() || githubIssueUrl(params.repo, params.issueNumber);
@@ -6956,7 +6953,7 @@ function syncOrcaIssueEscalated(params, env = process.env) {
     if (!target)
       return false;
     const existingIssue = extractLinkedNumber(target.worktree.linkedIssue);
-    if (target.kind === "git" && existingIssue !== null && existingIssue !== params.issueNumber) {
+    if (existingIssue !== null && existingIssue !== params.issueNumber) {
       return false;
     }
     if (existingIssue === null) {
@@ -6982,11 +6979,14 @@ function syncOrcaPrOpened(params, env = process.env) {
     if (!target)
       return false;
     const existingPr = extractLinkedNumber(target.worktree.linkedPR);
-    if (target.kind === "git" && existingPr !== null && existingPr !== params.prNumber) {
+    if (existingPr !== null && existingPr !== params.prNumber) {
       return false;
     }
     const existingIssue = extractLinkedNumber(target.worktree.linkedIssue);
     const validIssue = typeof params.issueNumber === "number" && Number.isSafeInteger(params.issueNumber) && params.issueNumber > 0 ? params.issueNumber : undefined;
+    if (existingIssue !== null && existingIssue !== validIssue) {
+      return false;
+    }
     const canLinkIssue = validIssue !== undefined && (existingIssue === null || existingIssue === validIssue);
     const urls = [];
     if (canLinkIssue && existingIssue === null) {
@@ -7009,15 +7009,20 @@ function syncOrcaPrOpened(params, env = process.env) {
 }
 function syncOrcaPrMerged(params, env = process.env) {
   try {
+    if (!Number.isSafeInteger(params.prNumber) || params.prNumber <= 0)
+      return false;
     if (!isOrcaSyncEnabled(env) || !hasOrcaRuntimeHint(env))
       return false;
+    const git = probeGit();
+    const cleanHead = normalizeBranchRef(params.headBranch);
+    const validHead = Boolean(cleanHead) && !isDefaultOrDetachedBranch(cleanHead, git?.defaultBranch);
     if (hasOrcaWorkspaceEnv(env)) {
       const target = resolveActiveOrcaTarget(params.repo, env);
       if (target) {
         const linkedPr = extractLinkedNumber(target.worktree.linkedPR);
-        const linkedIssue = extractLinkedNumber(target.worktree.linkedIssue);
-        const wtBranch = normalizeBranchRef(target.worktree.branch);
-        const matchesCurrent = linkedPr === params.prNumber || Boolean(params.headBranch) && wtBranch === normalizeBranchRef(params.headBranch) || linkedIssue !== null && Boolean(params.issueNumbers?.includes(linkedIssue));
+        const wtBranch2 = normalizeBranchRef(target.worktree.branch);
+        const prConflict = linkedPr !== null && linkedPr !== params.prNumber;
+        const matchesCurrent = !prConflict && (linkedPr === params.prNumber || validHead && wtBranch2 === cleanHead);
         if (matchesCurrent) {
           return runOrca([
             "worktree",
@@ -7032,34 +7037,32 @@ function syncOrcaPrMerged(params, env = process.env) {
         }
       }
     }
-    const selectors = [];
-    const cleanHead = normalizeBranchRef(params.headBranch);
-    if (cleanHead)
-      selectors.push(`branch:${cleanHead}`);
-    for (const n of params.issueNumbers ?? []) {
-      if (Number.isSafeInteger(n) && n > 0)
-        selectors.push(`issue:${n}`);
-    }
-    for (const sel of selectors) {
-      const shown = runOrca(["worktree", "show", "--worktree", sel, "--json"]);
-      if (shown.status !== 0)
-        continue;
-      const wt = parseOrcaWorktreeJson(shown.stdout);
-      if (!wt || isFixedMainWorkspace(wt) || !orcaWorktreeMatchesRepo(wt, params.repo))
-        continue;
-      const exactSelector = wt.id ? `id:${wt.id}` : sel;
-      return runOrca([
-        "worktree",
-        "set",
-        "--worktree",
-        exactSelector,
-        "--workspace-status",
-        "completed",
-        "--read",
-        "--json"
-      ]).status === 0;
-    }
-    return false;
+    if (!validHead)
+      return false;
+    const sel = `branch:${cleanHead}`;
+    const shown = runOrca(["worktree", "show", "--worktree", sel, "--json"]);
+    if (shown.status !== 0)
+      return false;
+    const wt = parseOrcaWorktreeJson(shown.stdout);
+    if (!wt || isFixedMainWorkspace(wt) || !orcaWorktreeMatchesRepo(wt, params.repo))
+      return false;
+    const wtBranch = normalizeBranchRef(wt.branch);
+    if (wtBranch && isDefaultOrDetachedBranch(wtBranch, git?.defaultBranch))
+      return false;
+    const wtPr = extractLinkedNumber(wt.linkedPR);
+    if (wtPr !== null && wtPr !== params.prNumber)
+      return false;
+    const exactSelector = wt.id ? `id:${wt.id}` : sel;
+    return runOrca([
+      "worktree",
+      "set",
+      "--worktree",
+      exactSelector,
+      "--workspace-status",
+      "completed",
+      "--read",
+      "--json"
+    ]).status === 0;
   } catch {
     return false;
   }
@@ -7067,7 +7070,10 @@ function syncOrcaPrMerged(params, env = process.env) {
 function isOrcaManagedWorktreePath(worktreePath, env = process.env) {
   if (!worktreePath)
     return false;
-  const normalized = worktreePath.replace(/\\/g, "/");
+  const normalized = worktreePath.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (normalized.includes("/.worktrees/") || normalized.endsWith("/.worktrees") || normalized.includes("/.claude/worktrees/") || normalized.endsWith("/.claude/worktrees")) {
+    return false;
+  }
   if (normalized.includes("/orca/workspaces/"))
     return true;
   const envPath = parseOrcaWorktreeIdPath(env.ORCA_WORKTREE_ID ?? env.ORCA_WORKSPACE_ID);
@@ -13024,7 +13030,7 @@ ${block}`));
     const released = await signalBestEffort(ctx, "issues", number, "release-claim", { repo, reason: `waiting on ${dep.repo}#${dep.number}` }, "Parked as waiting, but the release signal failed");
     emit(opts, { number, waiting: true, label: WAITING_ON_LABEL, on: `${dep.repo}#${dep.number}`, released, reason }, () => console.log(`⏳ #${number} waiting on ${depLabel} — labelled "${WAITING_ON_LABEL}"${released ? ", claim released" : ""}; the loop re-admits it when the dependency closes.`));
   }));
-  issue.command("evidence <number>").description("Attach testing evidence. Screenshots must show the fix: --before AND --after pairs, one per changed surface, named with --label — or --actual alone when filing a bug that has no fix yet (reporter thread + a PR comment, or the issue if no --pr)").option("--before <path...>", "Screenshot(s) BEFORE the fix — before[i] pairs with after[i]").option("--after <path...>", "Screenshot(s) AFTER the fix — one per --before").option("--actual <path...>", "Screenshot(s) of the BROKEN state for a bug report — legal alone (no fix exists yet, so there is nothing to pair); can't be combined with --before/--after").option("--label <text...>", 'Name for each pair, by position (e.g. --label "Mode row" "Grade ladder") — a multi-surface change attaches one labeled pair per surface').option("--before-caption <text...>", "Caption for each --before shot, by position — describes what THAT shot shows (keeps a summary from over-claiming)").option("--after-caption <text...>", "Caption for each --after shot, by position").option("--actual-caption <text...>", "Caption for each --actual shot, by position — what THAT shot shows is broken").option("--image-caption <text...>", "Caption for each supplementary --image/--file, by position").option("--touched <name...>", "Touched feature names — the evidence gallery renders a red gap card for each one without a matching proof pair").option("--image <path...>", "Extra screenshot file(s) — prefer --before/--after").option("--file <path...>", "Supplementary files — a screen recording (mp4/mov/webm), or the test-runner summary (.txt/.log) when the change has no UI surface to screenshot; text renders inline on the PR").option("--pr <n>", "Related PR number — when set, the evidence comment lands on the PR instead of the issue").option("--preview-url <url>", "Testing site URL").option("--caption <text>", "Short note shown with the evidence").option("--api-change <text...>", 'API change detection missed, each starting with + (added) or - (removed), e.g. "+ GET /api/v1/items" "- field email in GET /users" — listed in api-changes.diff (needs --pr)').option("--exposure <text>", 'Sensitive data the change makes public, and to whom — "none" when nothing (needs --pr)').option("--no-api-scan", "Skip the API-changes and exposure scan of the PR diff (text evidence is still redacted)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+  issue.command("evidence <number>").description("Attach testing evidence covering all possible states added, deleted, and updated in the current code changes. Screenshots must show the fix: --before AND --after pairs, one per changed surface and state, named with --label — or --actual alone when filing a bug that has no fix yet (reporter thread + a PR comment, or the issue if no --pr)").option("--before <path...>", "Screenshot(s) BEFORE the fix — before[i] pairs with after[i] across every added, updated, and deleted state").option("--after <path...>", "Screenshot(s) AFTER the fix — one per --before across every added, updated, and deleted state").option("--actual <path...>", "Screenshot(s) of the BROKEN state for a bug report — legal alone (no fix exists yet, so there is nothing to pair); can't be combined with --before/--after").option("--label <text...>", 'Name for each pair, by position (e.g. --label "Results: empty state (added)" "Toolbar: export button (deleted)") — attach one labeled pair per surface and per state added, deleted, or updated').option("--before-caption <text...>", "Caption for each --before shot, by position — describes what THAT shot shows (keeps a summary from over-claiming)").option("--after-caption <text...>", "Caption for each --after shot, by position").option("--actual-caption <text...>", "Caption for each --actual shot, by position — what THAT shot shows is broken").option("--image-caption <text...>", "Caption for each supplementary --image/--file, by position").option("--touched <name...>", "Touched feature names — the evidence gallery renders a red gap card for each one without a matching proof pair").option("--image <path...>", "Extra screenshot file(s) — prefer --before/--after").option("--file <path...>", "Supplementary files — a screen recording (mp4/mov/webm), or the test-runner summary (.txt/.log) when the change has no UI surface to screenshot; text renders inline on the PR").option("--pr <n>", "Related PR number — when set, the evidence comment lands on the PR instead of the issue").option("--preview-url <url>", "Testing site URL").option("--caption <text>", "Short note shown with the evidence").option("--api-change <text...>", 'API change detection missed, each starting with + (added) or - (removed), e.g. "+ GET /api/v1/items" "- field email in GET /users" — listed in api-changes.diff (needs --pr)').option("--exposure <text>", 'Sensitive data the change makes public, and to whom — "none" when nothing (needs --pr)').option("--no-api-scan", "Skip the API-changes and exposure scan of the PR diff (text evidence is still redacted)").option("--repo <fullname>", "Override target repo").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
     const before = opts.before ?? [];
     const after = opts.after ?? [];
     const actual = opts.actual ?? [];
@@ -14226,8 +14232,7 @@ async function automergeOnce(ctx, repo, number, opts) {
   syncOrcaPrMerged({
     repo,
     prNumber: number,
-    headBranch: result.headBranch,
-    issueNumbers: linkedIssueNumbers(prView)
+    headBranch: result.headBranch
   });
   cleanupMergedLocalBranch(result.headBranch);
   await signalBestEffort(ctx, "prs", number, "merged", { repo, mergedSha: result.mergedSha }, "Merged but ShipFlow signal failed");
@@ -14364,8 +14369,7 @@ ${footer}` : footer;
     syncOrcaPrMerged({
       repo,
       prNumber: number,
-      headBranch: result.headBranch,
-      issueNumbers: linkedIssueNumbers(prView)
+      headBranch: result.headBranch
     });
     if (!opts.keepBranch)
       cleanupMergedLocalBranch(result.headBranch);
@@ -15179,14 +15183,15 @@ function unlinkedVisibleSurfaceWarning(branch) {
 }
 function evidenceReminder(prNumber, issueNumber, surface) {
   const cmd = `renaiss-shipflow issue evidence ${issueNumber ?? prNumber} --pr ${prNumber}`;
-  const shots = `${cmd} --before <before.png> --after <after.png> --label "<surface>" --caption "Verified: <what>"`;
-  const tests = `${cmd} --file <test-summary.txt> --caption "Verified: <what the tests prove>"`;
+  const shots = `${cmd} --before <before.png>... --after <after.png>... --label "<surface: state (added|updated|deleted)>"... --caption "Verified: <all states>"`;
+  const tests = `${cmd} --file <test-summary.txt> --caption "Verified: <all added, deleted, and updated states>"`;
   if (surface === "visible") {
-    return `\uD83D\uDCA1 evidence: attach before/after screenshots of the fix (if auth-walled, render locally in dev mode with fake data and revert any temporary stub before committing — never ask the user to sign in): ${shots}`;
+    return `\uD83D\uDCA1 evidence: attach before/after screenshots covering all possible states added, deleted, and updated in the current diff (if auth-walled, render locally in dev mode with fake data and revert any temporary stub before committing — never ask the user to sign in): ${shots}`;
   }
-  if (surface === "none")
-    return `\uD83D\uDCA1 evidence: no UI change, so attach the test summary: ${tests}`;
-  return `\uD83D\uDCA1 evidence: attach proof of the fix. UI change (auth-walled? local dev mode with fake data, never ask the user to sign in): ${shots} · No UI change: ${tests}`;
+  if (surface === "none") {
+    return `\uD83D\uDCA1 evidence: no UI change, so attach the test summary covering all states added, deleted, and updated in the diff: ${tests}`;
+  }
+  return `\uD83D\uDCA1 evidence: attach proof covering all possible states added, deleted, and updated in the current diff. UI change (auth-walled? local dev mode with fake data, never ask the user to sign in): ${shots} · No UI change: ${tests}`;
 }
 function buildShipFlowFooter(project, issueNumber, linkMode = "closes") {
   const parts = [`${SHIPFLOW_FOOTER_PREFIX}${project}`];

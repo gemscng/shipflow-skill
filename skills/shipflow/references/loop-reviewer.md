@@ -279,6 +279,16 @@ mean "irrelevant", they stop meaning anything.
      thread); the worker attaches proof via `issue evidence`, not arguments.
      Pure-refactor features with no observable surface may be excused
      explicitly — never silently.
+   - **All diff states covered (added, deleted, updated):** compare
+     `/tmp/pr-<n>.patch` against the `🧪 Test evidence` pairs (or `--file` test
+     summary when there is no UI surface). Every UI or behavioral state
+     **added, deleted, or updated** in the current code changes — new
+     empty/loading/error/modal/variant branches, modified existing states, and
+     removed states or controls (`browser-testing.md` §2, §4) — must have its
+     own labeled proof. Submitting only a single happy-path pair while the diff
+     adds, deletes, or updates other states counts as missing evidence:
+     `request_changes` with a gate finding naming the uncovered
+     added/deleted/updated state(s).
    - **Marked evidence (#1375):** the packet carries captions, not images.
      Open the PR's `🧪 Test evidence` comment, download each after-shot and
      defect shot it links, and Read it. One with no red outline on the

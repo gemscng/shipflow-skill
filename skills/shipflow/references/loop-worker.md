@@ -79,11 +79,14 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
 3. **Test** — run the project's tests, then **verify end-to-end in a real
    browser** for any UI/behavior change (`references/browser-testing.md`:
    `bin/shipflow-browser --ensure` + `--import-if-needed` (do not raw-import),
-   scope from diff + adjacent pages, drive
-   the fix, `snapshot -D` + no new console errors, before/after
-   **screenshots** Read, **score** affected + neighbour pages per
+   scope from diff + adjacent pages, enumerate **all possible states added,
+   deleted, and updated in the current code changes**, capture `before` on
+   `origin/<default>` and `after` on the branch for each state (`snapshot -D` +
+   no new console errors), Read every before/after **screenshot** for
+   every added/updated/deleted state, **score** affected + neighbour pages per
    `references/qa-report.md` — a dropped neighbour score = regression). Pure
-   backend/library changes verify on tests alone.
+   backend/library changes verify on tests alone across all added, deleted, and
+   updated states/branches.
    - **Auth-walled UI — no login needed:** if `localhost` or a preview URL
      still redirects to `/login` (or no browser session exists), never ask
      a human to sign in or escalate for login cookies — render the real
@@ -191,18 +194,25 @@ and `NOTE #N is not a readable issue in <repo> — no acceptance brief to load`
    without it, the #236/#238 failure.
 6. **Evidence** — `renaiss-shipflow issue evidence <n> --pr <pr>
    --before <s1-before.png> <s2-before.png> --after <s1-after.png> <s2-after.png>
-   --label "<surface 1>" "<surface 2>"
+   --label "<surface 1: state (added|updated|deleted)>" "<surface 2: state (added|updated|deleted)>"
    --caption "Verified: <what> · health <before>→<after> (Δ<+/-N>)"`.
    Pair/mix: `validateEvidenceSelection`
-   (`apps/renaissshipflow-cli/src/evidence.ts`). Pass
+   (`apps/renaissshipflow-cli/src/evidence.ts`).
+   **Submit all possible states added, deleted, and updated in the current code
+   changes** — enumerate every conditional branch, empty/loading/error/modal/tab
+   variant, and removed control/state from `git diff` (`browser-testing.md` §2,
+   §4): added states show baseline → new state, updated states show before →
+   after, and deleted states show prior state → clean removal (never just one
+   happy-path pair). Pass
    `--touched "<feature>"…` (features the diff touches): the gallery renders
    a red gap card for any touched feature lacking a proof pair.
    **One proof per touched feature** — the reviewer blocks multi-feature
    PRs with fewer proofs than touched features.
    **No UI surface** (schema, persistence, API-only or test-only change) —
    nothing to screenshot, so attach the test-runner summary instead:
-   `--file "$EV/issue-<n>-<runner>.txt"` (pass/fail totals per suite, not
-   the whole log) with `--caption "Verified: <what the tests prove>"`. The
+   `--file "$EV/issue-<n>-<runner>.txt"` (pass/fail totals per suite covering
+   all states/branches added, deleted, and updated in the diff, not the whole
+   log) with `--caption "Verified: <what the tests prove>"`. The
    server renders the text inline on the PR. A `Verified vitest N/N` line
    in the PR body with no attachment is a claim, not evidence.
    **API changes** — `--pr` attaches `api-changes.diff` (routes `+`/`-`,

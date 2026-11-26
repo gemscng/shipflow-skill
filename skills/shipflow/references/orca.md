@@ -20,7 +20,7 @@ on failure so `--json` stdout and exit codes never change):
 | `renaiss-shipflow issue work <n>` · `renaiss-shipflow issue create --claim --lint=strict` · dedicated-worktree `renaiss-shipflow issue next` | Attaches the GitHub issue URL (`orca reference add`) and sets `--issue <n> --workspace-status in-progress` (skips if the workspace is already linked to another issue) |
 | `renaiss-shipflow issue escalate <n> --reason "..."` | Sets a short blocker `--comment` and marks `--unread` so Orca's sidebar attention dot lights up for a human to press **Resume** and reply in that chat |
 | `renaiss-shipflow pr create --lint=strict` | Attaches the PR URL (and linked issue URL when unset) and sets `--pr <pr> --workspace-status in-review` |
-| `renaiss-shipflow pr merge <n>` · `renaiss-shipflow pr automerge` | Resolves the task's Orca worktree (`current`, `branch:<headBranch>`, or `issue:<n>`), marks `--workspace-status completed --read`, and **detaches `HEAD` instead of deleting the Orca worktree** so the task card and its resumable chat history survive merge |
+| `renaiss-shipflow pr merge <n>` · `renaiss-shipflow pr automerge` | Resolves the PR's Orca worktree (`current` or `branch:<headBranch>`, when its linked PR matches or is unset), marks `--workspace-status completed --read`, and **detaches `HEAD` instead of deleting the Orca worktree** so the task card and its resumable chat history survive merge |
 
 Main checkouts (`isMainWorktree`, fixed `main`/`master` workspaces, default git
 branches) and the reusable `shipflow-loop` orchestrator worktree are skipped so

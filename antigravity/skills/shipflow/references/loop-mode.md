@@ -698,12 +698,13 @@ counter each tick; "🛑 at cap" only in a tick that itself opened `cap` PRs.
    **health score** (`references/browser-testing.md`), **add a regression
    test**, open the PR via `renaiss-shipflow pr create --json --lint=strict --loop-review` (full fix →
    `Closes #N`; partial slice → `Part of #N`, never a closing keyword —
-   `loop-worker.md` §5), attach evidence with the health delta
+   `loop-worker.md` §5), attach evidence with the health delta covering **all
+   possible states added, deleted, and updated in the current code changes**
    (`issue evidence <n> --pr <pr> --before … --after … --label … --caption …`;
    auth-walled UI → render locally in dev mode with fake/fixture data and
    revert any temporary stub before committing, never ask the user to sign
    in, `browser-testing.md` §3;
-   no UI surface → `--file <runner-summary>.txt` instead of pairs;
+   no UI surface → `--file <runner-summary>.txt` covering all added/deleted/updated states instead of pairs;
    upload fails → `⚠ no screenshot` line in the PR and a re-run later,
    never an `evidence/*` side branch; `loop-worker.md` §6).
    Returns `{pr, verified, regressionTest, healthDelta, blocked}`.

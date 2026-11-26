@@ -21,25 +21,33 @@ verification for a UI change.
 
 ## 2. Scope the test from the branch diff
 
-Map the diff to the pages it affects — don't just verify the one line you
-edited:
+Map the diff to the pages **and every UI/behavioral state added, deleted, or
+updated** in the current code changes — don't just verify the one happy-path
+line you edited:
 
 ```bash
 git diff origin/<default>...HEAD --name-only
+git diff origin/<default>...HEAD
 git log origin/<default>..HEAD --oneline
 ```
 
 - route/controller files → the URL paths they serve
-- view/template/component files → the pages that render them
+- view/template/component files → the pages that render them **and every state
+  branch touched** (empty, loading, error, success, disabled, selected,
+  expanded, modal/drawer, tab/filter, validation, or role/permission variants)
+- **every state added, deleted, and updated in the diff** — enumerate added
+  states/controls, updated existing states, and deleted/removed states or
+  controls from the hunks; every one of those states belongs in your step-4
+  capture matrix, never just the default view
 - model/service files → pages whose features use them
   (`renaiss-shipflow features --json` → each feature's `paths`)
 - **adjacent pages** — features sharing paths with the changed ones are the
   regression risk; test them too
-- API/backend-only change → exercise it (`$BROWSE js "await fetch('/api/...')"`)
-  and still load the main flow
+- API/backend-only change → exercise every added, deleted, and updated state or
+  branch (`$BROWSE js "await fetch('/api/...')"`) and still load the main flow
 
-Affected + adjacent pages = the step-3 test plan. No page mapped → smoke-pass
-the homepage + top nav.
+Affected pages × all added/deleted/updated states + adjacent pages = the step-3
+test plan. No page mapped → smoke-pass the homepage + top nav.
 
 ## 3. Get the app under test running
 
@@ -124,26 +132,76 @@ the homepage + top nav.
        itself leaves the external IdP step unverified; its surrounding UI
        still gets local screenshots).
 
-## 4. Drive the fix end-to-end (before → after, one pair PER changed surface)
+## 4. Drive the fix end-to-end (before on base → after on branch, one pair PER state added, deleted, or updated)
 
-**One before/after pair per surface or state the fix touches — not one pair
-total.** List the affected surfaces from the issue/PR, then loop:
+**Submit all possible states added, deleted, and updated in the current code
+changes — one before/after pair per touched surface × state, never one
+happy-path pair total.** Enumerate every added, updated, and deleted state from
+`git diff`, then capture every `before` PNG from a worktree at
+`origin/<default>` and every `after` PNG from the branch — never take both shots
+on the branch server (where deleted controls are already absent and default-load
+changes have already rendered):
+
+- **Added state** (new empty/loading/error/banner/modal/variant): `before` is the
+  `origin/<default>` UI where that state was absent or showed the old fallback;
+  `after` is the branch UI with the new element outlined.
+- **Updated state** (modified layout, copy, badge, interaction, calculation):
+  `before` is that state rendered on `origin/<default>`; `after` is the updated
+  state on the branch with the changed region outlined.
+- **Deleted state** (removed banner, tab, button, fallback, or branch): `before`
+  is the `origin/<default>` UI where the control or state still exists; `after`
+  is the branch UI with it cleanly removed, outlining the container/region where
+  it lived so layout integrity is visible.
+- **Non-default states** (empty, error, loading, edge branches): drive to them
+  on both revisions via the same interaction, query params, or local dev fixture
+  data / network stubbing (§3, reverting any temporary stub before committing)
+  so every reachable state in the diff has a true base → branch pair.
 
 ```bash
 EV="${TMPDIR:-/tmp}/shipflow-evidence/issue-<n>"; mkdir -p "$EV"
-# For EACH affected surface/state (name the files after it):
-$BROWSE goto <url>
-$BROWSE snapshot -i                          # interactive elements → @e1, @e2 refs
-$BROWSE screenshot "$EV/<surface>-before.png" # state before exercising the fix
-# Reproduce the issue's scenario using refs from the snapshot:
+
+# Pass 1 — BEFORE shots on a base worktree at `origin/<default>`:
+git worktree add "$EV/base-wt" origin/<default>
+[ -d node_modules ] && [ ! -e "$EV/base-wt/node_modules" ] && ln -s "$(pwd)/node_modules" "$EV/base-wt/node_modules"
+kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill "$1" 2>/dev/null; }
+BASE_RUN_DIR=$(mktemp -d)
+BASE_PORT=$((3100 + RANDOM % 900))
+while lsof -iTCP:$BASE_PORT -sTCP:LISTEN >/dev/null 2>&1; do BASE_PORT=$((3100 + RANDOM % 900)); done
+( cd "$EV/base-wt" && { PORT=$BASE_PORT nohup npm run dev > "$BASE_RUN_DIR/dev.log" 2>&1 & echo $! > "$BASE_RUN_DIR/dev.pid"; } )
+READY=
+for i in $(seq 1 30); do
+  curl -fsS -o /dev/null "http://localhost:$BASE_PORT" && { READY=1; break; }
+  sleep 2
+done
+if [ -z "$READY" ]; then
+  tail -40 "$BASE_RUN_DIR/dev.log"
+  kill_tree "$(cat "$BASE_RUN_DIR/dev.pid")"
+  git worktree remove --force "$EV/base-wt"
+  exit 1
+fi
+# For EACH state, repeat the browse lines below (same state drive as Pass 2,
+# using refs from base's own `snapshot -i`; omit click/fill/press for initial-load states):
+$BROWSE goto "http://localhost:$BASE_PORT/<route>"
+$BROWSE snapshot -i                          # interactive elements on base → @e1, @e2 refs
 $BROWSE click @e3
 $BROWSE fill @e4 "value"
 $BROWSE press Enter
-$BROWSE snapshot -D                          # DIFF — proves what changed, the heart of the check
+$BROWSE screenshot "$EV/<state>-before.png"  # pre-change baseline (still shows deleted controls)
+kill_tree "$(cat "$BASE_RUN_DIR/dev.pid")"
+git worktree remove --force "$EV/base-wt"
+
+# Pass 2 — AFTER shots on the branch server (`http://localhost:$PORT` from §3):
+# For EACH state in the same order, run the matching navigation/interaction on branch:
+$BROWSE goto "http://localhost:$PORT/<route>"
+$BROWSE snapshot -i                          # interactive elements on branch → @e1, @e2 refs
+$BROWSE click @e3
+$BROWSE fill @e4 "value"
+$BROWSE press Enter
+$BROWSE snapshot -D                          # DIFF — proves what changed on interaction
 $BROWSE console --errors                     # no new console errors introduced
-# Outline AROUND the changed element — never an overlay/arrow ACROSS it:
+# Outline AROUND the added/updated element (or container where a deleted element lived) — never across it:
 $BROWSE js 'document.querySelectorAll("<changed-el-selector>").forEach(e=>{e.style.outline="3px solid #ff3b30";e.style.outlineOffset="3px"})'
-$BROWSE screenshot "$EV/<surface>-after.png" # the fix working, change outlined
+$BROWSE screenshot "$EV/<state>-after.png"   # the fix working, change outlined
 ```
 
 - The `snapshot -D` diff IS the verification — the DOM changed the way the fix
@@ -221,17 +279,18 @@ delta in the caption (the reviewer and merge gate read it):
 
 ```bash
 renaiss-shipflow issue evidence <n> --pr <pr> \
-  --before "$EV/mode-row-before.png" "$EV/ladder-before.png" "$EV/sheet-before.png" \
-  --after  "$EV/mode-row-after.png"  "$EV/ladder-after.png"  "$EV/sheet-after.png" \
-  --label  "Mode row" "Grade ladder" "Photo sheet" \
-  --caption "Verified: <what you tested> · health <before>→<after> (Δ<+/-N>) · 0 new console errors"
+  --before "$EV/empty-before.png" "$EV/card-before.png" "$EV/legacy-banner-before.png" \
+  --after  "$EV/empty-after.png"  "$EV/card-after.png"  "$EV/legacy-banner-after.png" \
+  --label  "Results: empty state (added)" "Card row: active badge (updated)" "Header: legacy banner (deleted)" \
+  --caption "Verified: all added, updated, and deleted states · health <before>→<after> (Δ<+/-N>) · 0 new console errors"
 ```
 
-Any number of `--before`/`--after` pairs (and `--image`/`--file` extras) is
-fine: the CLI stages them through `/media` in server-sized batches and still
-posts **one** evidence comment and **one** gallery for the call (#1404). Do
-not split the command yourself to dodge the per-upload file cap, and never
-commit screenshots to the repo.
+Submit **all** captured pairs for every state added, deleted, and updated in the
+current code changes in a single call — any number of `--before`/`--after` pairs
+(and `--image`/`--file` extras) is fine: the CLI stages them through `/media` in
+server-sized batches and still posts **one** evidence comment and **one**
+gallery for the call (#1404). Do not split the command yourself to dodge the
+per-upload file cap, and never commit screenshots to the repo.
 
 Pair/mix: `validateEvidenceSelection`
 (`apps/renaissshipflow-cli/src/evidence.ts`). `--pr` lands the comment on
@@ -242,8 +301,9 @@ PR. A flow that needs motion gets a GIF (`--image repro.gif`): GitHub
 plays a GIF inline but strips an mp4 (`message-style.md` § Issue-body ladder,
 element 3). A change with no UI surface (schema, persistence,
 API-only, test-only) has nothing to screenshot: attach the test-runner summary
-instead, `--file "$EV/issue-<n>-vitest.txt" --caption "Verified: <what the
-tests prove>"`. The server renders the text inline on the PR.
+instead, `--file "$EV/issue-<n>-vitest.txt" --caption "Verified: <all added,
+deleted, and updated states>"`, covering tests for every state/branch added,
+deleted, and updated in the diff. The server renders the text inline on the PR.
 
 **API changes and public exposure** (#1489): with `--pr`, the command reads
 the PR diff and attaches `api-changes.diff`. It lists the routes added (`+`) and
