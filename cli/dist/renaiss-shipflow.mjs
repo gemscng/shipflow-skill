@@ -4216,6 +4216,18 @@ function resolveIssueTrack() {
     return cfg.autoIssue ? "auto" : "ask";
   return "auto";
 }
+function resolveAutoRelatePr() {
+  const env = process.env.SHIPFLOW_AUTO_RELATE_PR;
+  if (env != null && env !== "")
+    return parseBool(env);
+  const cfg = loadConfig();
+  if (cfg.autoRelatePr !== undefined)
+    return cfg.autoRelatePr;
+  return resolveIssueTrack() === "auto";
+}
+function resolveLoopMode() {
+  return resolveEnumKnob("SHIPFLOW_LOOP_MODE", loadConfig().loopMode, LOOP_MODES, "full");
+}
 function resolveLiveReload() {
   const env = process.env.SHIPFLOW_LIVE_RELOAD;
   if (env != null && env !== "")
@@ -4352,7 +4364,7 @@ function resolveApiKey() {
   const a = resolveAuthToken();
   return a?.token;
 }
-var INTAKE_APPROVAL_MODES, DEFAULT_BASE, configFile = () => join(configDir(), "config.json"), credsFile = () => join(configDir(), "credentials.json"), projectsFile = () => join(configDir(), "projects.json"), MERGE_POLICIES, PICKUP_SCOPES, INTENT_GATE_MODES, ISSUE_TRACK_MODES, loadConfig = () => readJsonOr(configFile(), {}), saveConfig = (c) => writeJson(configFile(), c), clearConfig = () => {
+var INTAKE_APPROVAL_MODES, DEFAULT_BASE, configFile = () => join(configDir(), "config.json"), credsFile = () => join(configDir(), "credentials.json"), projectsFile = () => join(configDir(), "projects.json"), MERGE_POLICIES, PICKUP_SCOPES, INTENT_GATE_MODES, ISSUE_TRACK_MODES, LOOP_MODES, loadConfig = () => readJsonOr(configFile(), {}), saveConfig = (c) => writeJson(configFile(), c), clearConfig = () => {
   try {
     unlinkSync(configFile());
   } catch {}
@@ -4371,6 +4383,7 @@ var init_config = __esm(() => {
   PICKUP_SCOPES = ["assigned", "all"];
   INTENT_GATE_MODES = ["strict", "trusted"];
   ISSUE_TRACK_MODES = ["off", "ask", "auto"];
+  LOOP_MODES = ["full", "fix"];
   BOOL_TRUE_WORDS = ["true", "1", "on", "yes"];
   BOOL_FALSE_WORDS = ["false", "0", "off", "no"];
   APP_SLUG_RE = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/;
@@ -4923,6 +4936,15 @@ function ghPRCreate(args) {
   const out = _exec(parts.join(" ")).toString().trim();
   const number = parseInt(out.split("/").pop() || "0", 10);
   return { url: out, number };
+}
+function ghPREditBody(repo, number, body) {
+  _exec(`gh pr edit ${number} --repo ${shellQuote(repo)} --body ${shellQuote(body)}`, { stdio: "ignore" });
+}
+function ghPRListMatchable(repo, limit = 100) {
+  const out = _exec(`gh pr list --repo ${shellQuote(repo)} --state open --limit ${limit} --json ${MATCHABLE_PR_FIELDS}`).toString().trim();
+  if (!out)
+    return [];
+  return JSON.parse(out);
 }
 function ghRepoMergeMethods(repo) {
   try {
@@ -5536,7 +5558,7 @@ function ghReplyToReviewThread(threadId, body) {
   const m = "mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$t,body:$b}){comment{id}}}";
   _exec(`gh api graphql -f query=${shellQuote(m)} -f t=${shellQuote(threadId)} -f b=${shellQuote(body)}`, { stdio: ["ignore", "pipe", "pipe"] });
 }
-var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, HeadCommitMismatchError, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner,headRefOid,mergedAt", GH_GRAPHQL_PAGE_MAX = 100, LIST_BY_LABEL_FIELDS, LABEL_COLORS, LABEL_PREFIX_COLORS, BODY_REVISION_PAGE_CAP = 50;
+var FIELDS = "number,title,body,state,labels,assignees,url,createdAt", ISSUE_READ_ANSWERED_PATTERNS, SHIPFLOW_TRIAGED_MARKER, VIA_SHIPFLOW_LABEL, DETAIL_FIELDS, MATCHABLE_PR_FIELDS = "number,title,body,headRefName,baseRefName,isDraft,url,author,closingIssuesReferences", HeadCommitMismatchError, PR_FIELDS = "number,title,body,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable,labels,reviews,comments,statusCheckRollup,closingIssuesReferences,createdAt,updatedAt,author,isCrossRepository,headRepositoryOwner,headRefOid,mergedAt", GH_GRAPHQL_PAGE_MAX = 100, LIST_BY_LABEL_FIELDS, LABEL_COLORS, LABEL_PREFIX_COLORS, BODY_REVISION_PAGE_CAP = 50;
 var init_gh = __esm(() => {
   init_sh();
   init_shipflow_contract_data();
@@ -8859,6 +8881,151 @@ init_gh();
 import { hostname as hostname2 } from "node:os";
 import { readFileSync as readFileSync4, statSync } from "node:fs";
 import { basename as basename3 } from "node:path";
+
+// src/pr-match.ts
+init_pr_state();
+var MATCH_BODY_MAX_CHARS2 = 1200;
+function extractCitedNumbers(query) {
+  const cited = new Set;
+  for (const m of query.matchAll(/(?<![\w/])#(\d+)\b/g)) {
+    const n = parseInt(m[1], 10);
+    if (Number.isSafeInteger(n) && n > 0)
+      cited.add(n);
+  }
+  if (/^\d+$/.test(query)) {
+    const n = parseInt(query, 10);
+    if (Number.isSafeInteger(n) && n > 0)
+      cited.add(n);
+  }
+  return cited;
+}
+function matchOpenPRs(query, openPRs, opts = {}) {
+  const limit = opts.limit ?? 10;
+  const minScore = opts.minScore ?? 0.15;
+  if (limit <= 0)
+    return [];
+  const rawQuery = (query ?? "").trim();
+  const branch = opts.branch && !isDefaultOrDetachedBranch(opts.branch) ? opts.branch.trim() : "";
+  const issueSet = new Set((opts.issueNumbers ?? []).filter((n) => Number.isSafeInteger(n) && n > 0));
+  const citedNumbers = rawQuery ? extractCitedNumbers(rawQuery) : new Set;
+  if (!rawQuery && !branch && issueSet.size === 0)
+    return [];
+  const qNorm = rawQuery ? normalizeTitle(rawQuery) : { tokens: [] };
+  const qLower = rawQuery.toLowerCase();
+  const out = [];
+  for (const pr of openPRs) {
+    if (opts.excludePrNumber !== undefined && pr.number === opts.excludePrNumber)
+      continue;
+    const linked = linkedIssueNumbers(pr);
+    let score = 0;
+    let matchReason = "text";
+    if (branch && pr.headRefName === branch) {
+      score = 1;
+      matchReason = "branch";
+    } else if (citedNumbers.has(pr.number)) {
+      score = 1;
+      matchReason = "number";
+    } else if (linked.some((n) => issueSet.has(n) || citedNumbers.has(n))) {
+      score = 0.95;
+      matchReason = "issue";
+    } else if (qNorm.tokens.length > 0) {
+      const titleNorm = normalizeTitle(pr.title);
+      const titleScore = tokenOverlapScore(qNorm.tokens, titleNorm.tokens);
+      const branchText = pr.headRefName.replace(/[/_-]+/g, " ");
+      const branchTokens = branchText ? normalizeTitle(branchText).tokens : [];
+      const branchScore = branchTokens.length > 0 ? tokenOverlapScore(qNorm.tokens, branchTokens) : 0;
+      const bodySample = (pr.body ?? "").slice(0, MATCH_BODY_MAX_CHARS2);
+      const bodyTokens = bodySample ? normalizeTitle(bodySample).tokens : [];
+      const bodyScore = bodyTokens.length > 0 ? tokenOverlapScore(qNorm.tokens, bodyTokens) : 0;
+      const bestHeadline = Math.max(titleScore, branchScore * 0.9);
+      score = bestHeadline > 0 ? Math.min(1, 0.75 * bestHeadline + 0.25 * Math.max(bestHeadline, bodyScore)) : 0.45 * bodyScore;
+      if (qLower.length >= 4 && pr.title.toLowerCase().includes(qLower)) {
+        score = Math.min(1, Math.max(score, 0.85));
+      }
+      matchReason = "text";
+    }
+    if (score >= minScore) {
+      out.push({
+        number: pr.number,
+        title: pr.title,
+        branch: pr.headRefName,
+        base: pr.baseRefName ?? "",
+        author: pr.author?.login ?? null,
+        isDraft: Boolean(pr.isDraft),
+        ...pr.url ? { url: pr.url } : {},
+        score: Math.round(score * 1000) / 1000,
+        matchReason,
+        linkedIssues: linked,
+        snippet: issueSnippet(pr.body)
+      });
+    }
+  }
+  out.sort((a, b) => b.score - a.score || b.number - a.number);
+  return out.slice(0, limit);
+}
+function pickAutoRelateIssue(query, openIssues, opts = {}) {
+  const minScore = opts.minScore ?? 0.55;
+  const minLead = opts.minLead ?? 0.15;
+  const candidates = matchOpenIssues(query, openIssues, {
+    limit: opts.limit ?? 5,
+    minScore: 0.15
+  });
+  if (candidates.length === 0) {
+    return { matched: null, reason: "no-match", candidates };
+  }
+  const citedNumbers = extractCitedNumbers((query ?? "").trim());
+  const top = candidates[0];
+  const second = candidates[1];
+  if (citedNumbers.has(top.number)) {
+    if (second && citedNumbers.has(second.number)) {
+      return { matched: null, reason: "ambiguous", candidates };
+    }
+    if (opts.claimedByOther?.has(top.number)) {
+      return { matched: null, reason: "claimed-by-other", candidates };
+    }
+    return { matched: top, reason: "explicit-citation", candidates };
+  }
+  if (top.score < minScore) {
+    return { matched: null, reason: "no-match", candidates };
+  }
+  if (second && top.score - second.score < minLead) {
+    return { matched: null, reason: "ambiguous", candidates };
+  }
+  if (opts.claimedByOther?.has(top.number)) {
+    return { matched: null, reason: "claimed-by-other", candidates };
+  }
+  return { matched: top, reason: "unique-high-confidence", candidates };
+}
+function buildPrAutoRelateQuery(title, body) {
+  const parts = [];
+  const t = (title ?? "").trim();
+  if (t)
+    parts.push(t);
+  const outcomeMatch = (body ?? "").match(/(?:^|\n)\s*\*\*Outcome:\*\*\s*([^\n]+)/i);
+  if (outcomeMatch?.[1]?.trim()) {
+    parts.push(outcomeMatch[1].trim());
+  }
+  return parts.join(" ").trim();
+}
+function upsertShipFlowFooter(existingBody, footer) {
+  const trimmed = (existingBody ?? "").trimEnd();
+  if (!trimmed)
+    return footer;
+  const lines = trimmed.split(`
+`);
+  const idx = lines.findIndex((l) => l.trim().startsWith(SHIPFLOW_FOOTER_PREFIX));
+  if (idx !== -1) {
+    const start = idx > 0 && lines[idx - 1].trim() === "---" ? idx - 1 : idx;
+    const footerLines = footer.split(`
+`);
+    lines.splice(start, idx - start + 1, ...footerLines);
+    return lines.join(`
+`);
+  }
+  return `${trimmed}
+
+${footer}`;
+}
 
 // src/review-contract-data.ts
 var REVIEW_CONTRACT = {
@@ -12338,7 +12505,7 @@ function registerIssueCommand(program2) {
       console.log(`${created.url}${who}${tag}`);
     });
   }));
-  issue.command("match <query>").description("Find open issues matching a short fix/feature description, annotated with active claims (issue #1499)").option("--repo <fullname>", "Override target repo").option("--limit <n>", "Max candidates to return (default 10)").option("--scan-limit <n>", `Open issues to scan (default ${DUPLICATE_SCAN_LIMIT})`).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (query, opts) => {
+  issue.command("match <query>").description("Find open issues and related open PRs matching a short fix/feature description, annotated with active claims (issue #1499)").option("--repo <fullname>", "Override target repo").option("--limit <n>", "Max candidates to return (default 10)").option("--scan-limit <n>", `Open issues to scan (default ${DUPLICATE_SCAN_LIMIT})`).option("--no-prs", "Skip scanning open PRs for related pull requests").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (query, opts) => {
     const ctx = await loadCtx(program2);
     const repo = opts.repo ?? ctx.project.repoFullName;
     const limit = opts.limit ? Math.max(1, parseInt(opts.limit, 10)) : 10;
@@ -12354,21 +12521,58 @@ function registerIssueCommand(program2) {
       ...m,
       claimedBy: claimByNumber.get(m.number) ?? null
     }));
+    let relatedPrs = [];
+    let relatedPrsUnavailable = false;
+    if (opts.prs !== false) {
+      try {
+        const openPrs = ghPRListMatchable(repo, 100);
+        relatedPrs = matchOpenPRs(query, openPrs, {
+          limit: Math.min(limit, 5),
+          branch: localRepoMatches(repo) ? currentLocalBranch() : undefined,
+          issueNumbers: matches.slice(0, 5).map((m) => m.number)
+        });
+      } catch {
+        relatedPrsUnavailable = true;
+      }
+    }
     const issueTrack = resolveIssueTrack();
     const truncated = open.length >= scanLimit;
-    emit(opts, { repo, query, issueTrack, scanned: open.length, truncated, claimsUnavailable, matches }, () => {
+    emit(opts, {
+      repo,
+      query,
+      issueTrack,
+      scanned: open.length,
+      truncated,
+      claimsUnavailable,
+      matches,
+      relatedPrs,
+      ...relatedPrsUnavailable ? { relatedPrsUnavailable: true } : {}
+    }, () => {
       if (matches.length === 0) {
         console.log(`No matching open issues in ${repo} (scanned ${open.length}; issue-track=${issueTrack}).`);
-        return;
+      } else {
+        const rows = matches.map((m) => [
+          `#${m.number}`,
+          m.score.toFixed(2),
+          m.claimedBy ? `@${m.claimedBy.actor}${m.claimedBy.agent ? ` (${m.claimedBy.agent})` : ""}` : "—",
+          m.title
+        ]);
+        for (const l of renderTable(["Issue", "Score", "Claimed", "Title"], rows))
+          console.log(l);
       }
-      const rows = matches.map((m) => [
-        `#${m.number}`,
-        m.score.toFixed(2),
-        m.claimedBy ? `@${m.claimedBy.actor}${m.claimedBy.agent ? ` (${m.claimedBy.agent})` : ""}` : "—",
-        m.title
-      ]);
-      for (const l of renderTable(["Issue", "Score", "Claimed", "Title"], rows))
-        console.log(l);
+      if (relatedPrs.length > 0) {
+        console.log(`
+Related open PR(s):`);
+        const prRows = relatedPrs.map((p) => [
+          `#${p.number}`,
+          p.score.toFixed(2),
+          p.matchReason,
+          p.branch,
+          p.title
+        ]);
+        for (const l of renderTable(["PR", "Score", "Match", "Branch", "Title"], prRows))
+          console.log(l);
+      }
       if (truncated)
         console.warn(`⚠️  scan window full (${open.length}) — older open issues were not scanned.`);
     }, { pretty: true });
@@ -14241,7 +14445,7 @@ async function automergeOnce(ctx, repo, number, opts) {
 }
 function registerPRCommand(program2) {
   const pr = program2.command("pr").description("Pull request actions");
-  pr.command("create").description("Open a PR; appends a ShipFlow footer (project, issue link) to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch or branch config if omitted)").option("--no-issue", "Explicitly open this PR without a linked issue (escape hatch for trivial/chore PRs under --lint=strict)").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (the ShipFlow footer is added after it)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--loop-review", "The ShipFlow loop reviews this PR itself: claim its review so the server's pr_review workflow skips it (see `pr review-claim`)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").addOption(new Option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR). Anything else is REFUSED (exit 1, no PR) — never treated as warn (issue #648)").choices([...LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  pr.command("create").description("Open a PR; appends a ShipFlow footer (project, issue link) to the body and signals ShipFlow").option("--issue <n>", "Issue number this PR closes (auto-detected from branch or branch config if omitted)").option("--no-issue", "Explicitly open this PR without a linked issue (escape hatch for trivial/chore PRs under --lint=strict)").option("--auto-relate", "Auto-match and link an unambiguous open issue when --issue is omitted (default follows config auto-relate-pr)").option("--no-auto-relate", "Disable automatic open-issue and related-PR matching during PR creation").option("--partial", "This PR is a partial slice: link the issue as 'Part of #N' (no closing keyword) so merging leaves the parent open").option("--title <title>", "PR title").option("--body <body>", "PR body (the ShipFlow footer is added after it)").option("--base <ref>", "Base branch").option("--draft", "Create as draft").option("--preview-url <url>", "Testing/preview site for this PR (relayed to the issue reporter)").option("--loop-review", "The ShipFlow loop reviews this PR itself: claim its review so the server's pr_review workflow skips it (see `pr review-claim`)").option("--allow-suspicious-email", "Skip the commit-email identity guard (not recommended)").addOption(new Option("--lint <mode>", "Prose lint on --body (issue #196): warn (print problems, proceed) or strict (exit 2, no PR). Anything else is REFUSED (exit 1, no PR) — never treated as warn (issue #648)").choices([...LINT_MODES]).default("warn")).option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
     const rawLint = opts.lint ?? "";
     if (!LINT_MODES.includes(rawLint)) {
       console.error(`Unknown lint mode "${opts.lint ?? ""}" — valid: ${LINT_MODES.join(", ")}. Nothing was created.`);
@@ -14284,7 +14488,27 @@ function registerPRCommand(program2) {
     const ctx = await loadCtx(program2);
     const branch = currentBranch();
     const allowNoIssue = opts.issue === false;
-    const issueNumber = allowNoIssue ? undefined : typeof opts.issue === "string" ? parseInt(opts.issue, 10) : detectIssueFromBranch(branch) ?? readBranchIssue(branch);
+    const autoRelateEnabled = opts.autoRelate === true ? true : opts.autoRelate === false ? false : resolveAutoRelatePr();
+    let issueNumber = allowNoIssue ? undefined : typeof opts.issue === "string" ? parseInt(opts.issue, 10) : detectIssueFromBranch(branch) ?? readBranchIssue(branch);
+    const autoRelateQuery = buildPrAutoRelateQuery(opts.title, opts.body);
+    let autoRelateHint = "";
+    if (!issueNumber && !allowNoIssue && autoRelateEnabled && autoRelateQuery) {
+      try {
+        const openIssues = ghIssueList(ctx.project.repoFullName, "open", DUPLICATE_SCAN_LIMIT);
+        const me = ghCurrentLogin().toLowerCase();
+        const claims = await ctx.client.listClaims(ctx.creds.org, ctx.project.projectId).catch(() => []);
+        const claimedByOther = new Set(claims.filter((c) => c.repo.toLowerCase() === ctx.project.repoFullName.toLowerCase() && (!me || c.actor.toLowerCase() !== me)).map((c) => c.issueNumber));
+        const decision = pickAutoRelateIssue(autoRelateQuery, openIssues, { claimedByOther });
+        if (decision.matched) {
+          issueNumber = decision.matched.number;
+          recordBranchIssue(issueNumber, branch);
+          console.warn(`\uD83D\uDD17 Auto-related PR to #${issueNumber} — ${decision.matched.title} (${decision.reason}, score ${decision.matched.score.toFixed(2)})`);
+        } else if (decision.candidates.length > 0) {
+          const top = decision.candidates.slice(0, 3).map((c) => `#${c.number} (${c.score.toFixed(2)}) ${c.title}`).join(" · ");
+          autoRelateHint = decision.reason === "claimed-by-other" ? `Top match #${decision.candidates[0].number} is claimed by someone else (${top}) — coordinate or pass --issue <n> explicitly.` : `Closest open issue(s): ${top} — pass --issue <n> to link one.`;
+        }
+      } catch {}
+    }
     const baseRef = opts.base ? refExists(opts.base) ? opts.base : refExists(`origin/${opts.base}`) ? `origin/${opts.base}` : null : originHeadRef() ?? defaultBranchRef();
     const changed = baseRef ? changedPaths(baseRef) : { paths: [], ok: false, cmd: "" };
     if (!issueNumber) {
@@ -14292,16 +14516,39 @@ function registerPRCommand(program2) {
         const msg = unlinkedVisibleSurfaceWarning(branch);
         if (opts.lint === "strict" && !allowNoIssue) {
           console.error(msg);
+          if (autoRelateHint)
+            console.error(`\uD83D\uDCA1 ${autoRelateHint}`);
           process.exit(2);
         }
         console.warn(msg);
+        if (autoRelateHint)
+          console.warn(`\uD83D\uDCA1 ${autoRelateHint}`);
       } else {
         if (opts.lint === "strict" && !allowNoIssue) {
           console.error(unlinkedPrStrictError(branch));
+          if (autoRelateHint)
+            console.error(`\uD83D\uDCA1 ${autoRelateHint}`);
           process.exit(2);
         }
         console.warn(unlinkedPrWarning(branch));
+        if (autoRelateHint)
+          console.warn(`\uD83D\uDCA1 ${autoRelateHint}`);
       }
+    }
+    if (autoRelateEnabled) {
+      try {
+        const openPrs = ghPRListMatchable(ctx.project.repoFullName, 100);
+        const relatedPrs = matchOpenPRs(autoRelateQuery, openPrs, {
+          limit: 3,
+          minScore: 0.55,
+          branch,
+          issueNumbers: issueNumber ? [issueNumber] : []
+        });
+        if (relatedPrs.length > 0) {
+          const summary = relatedPrs.map((p) => `#${p.number} [${p.matchReason}] (${p.branch}) ${p.title}`).join(" · ");
+          console.warn(`⚠️  Related open PR(s) in ${ctx.project.repoFullName}: ${summary}`);
+        }
+      } catch {}
     }
     const linkMode = opts.partial ? "part-of" : "closes";
     const footer = buildShipFlowFooter(ctx.project.projectName, issueNumber, linkMode);
@@ -15046,6 +15293,133 @@ ${t.body}`);
       ghResolveReviewThread(t.id);
     }
     emit(opts, { number, resolved: targets.length, replied: targets.length, reason, ...degradedField(ctx) }, () => console.log(`\uD83E\uDDF5 Resolved ${targets.length} review thread(s) on PR #${number} (reason posted on each).`));
+  }));
+  pr.command("match [query]").description("Find open PRs related to a description, current branch, or issue number").option("--repo <fullname>", "Override target repo").option("--issue <n>", "Find open PRs linked to issue #N").option("--branch <name>", "Match against a specific branch name (defaults to current branch)").option("--limit <n>", "Max candidates to return (default 10)").option("--scan-limit <n>", "Open PRs to scan (default 100)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (query, opts) => {
+    const ctx = await loadGhCtx(program2, opts.repo);
+    const repo = opts.repo ?? ctx.project.repoFullName;
+    const limit = opts.limit ? Math.max(1, parseInt(opts.limit, 10)) : 10;
+    const scanLimit = opts.scanLimit ? Math.max(1, parseInt(opts.scanLimit, 10)) : 100;
+    const explicitBranch = opts.branch?.trim();
+    const detectedBranch = explicitBranch ?? (localRepoMatches(repo) ? currentLocalBranch() : "");
+    const explicitIssue = opts.issue ? parseInt(opts.issue, 10) : undefined;
+    if (opts.issue !== undefined && (!Number.isSafeInteger(explicitIssue) || (explicitIssue ?? 0) <= 0)) {
+      throw new UsageError(`pr match: invalid --issue "${opts.issue}"`);
+    }
+    const branchIssue = !explicitIssue && detectedBranch ? detectIssueFromBranch(detectedBranch) ?? readBranchIssue(detectedBranch) : undefined;
+    const issueNumber = explicitIssue ?? branchIssue ?? null;
+    const q = (query ?? "").trim();
+    const openPrs = ghPRListMatchable(repo, scanLimit);
+    const matches = matchOpenPRs(q, openPrs, {
+      limit,
+      branch: detectedBranch || undefined,
+      issueNumbers: issueNumber ? [issueNumber] : []
+    });
+    const truncated = openPrs.length >= scanLimit;
+    emit(opts, {
+      repo,
+      query: q,
+      branch: detectedBranch || null,
+      issueNumber,
+      scanned: openPrs.length,
+      truncated,
+      matches,
+      ...degradedField(ctx)
+    }, () => {
+      if (matches.length === 0) {
+        console.log(`No related open PRs in ${repo} (scanned ${openPrs.length}).`);
+        return;
+      }
+      const rows = matches.map((m) => [
+        `#${m.number}`,
+        m.score.toFixed(2),
+        m.matchReason,
+        m.linkedIssues.length ? m.linkedIssues.map((n) => `#${n}`).join(",") : "—",
+        m.branch,
+        m.title
+      ]);
+      for (const l of renderTable(["PR", "Score", "Match", "Issues", "Branch", "Title"], rows))
+        console.log(l);
+      if (truncated)
+        console.warn(`⚠️  scan window full (${openPrs.length}) — older open PRs were not scanned.`);
+    }, { pretty: true });
+  }));
+  pr.command("relate <number>").description("Find (and optionally link with --apply) the matching open issue and related open PRs for an existing PR").option("--repo <fullname>", "Override target repo").option("--issue <n>", "Explicitly link this issue number instead of auto-matching").option("--partial", "Link as 'Part of #N' (no closing keyword) instead of 'Closes #N' when applying").option("--apply", "Update the PR body's ShipFlow footer with the resolved issue link").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (numberStr, opts) => {
+    const ctx = await loadCtx(program2);
+    const { number, repo } = resolveTarget(ctx, numberStr, opts);
+    const prView = ghPRView(repo, number);
+    const existingIssues = linkedIssueNumbers(prView);
+    const explicitIssue = opts.issue !== undefined ? parseInt(opts.issue, 10) : undefined;
+    if (opts.issue !== undefined && (!Number.isSafeInteger(explicitIssue) || (explicitIssue ?? 0) <= 0)) {
+      throw new UsageError(`pr relate: invalid --issue "${opts.issue}"`);
+    }
+    const query = buildPrAutoRelateQuery(prView.title, prView.body);
+    let decision = { matched: null, reason: "no-match", candidates: [] };
+    if (!explicitIssue && existingIssues.length === 0) {
+      const openIssues = ghIssueList(repo, "open", DUPLICATE_SCAN_LIMIT);
+      const me = ghCurrentLogin().toLowerCase();
+      const claims = await ctx.client.listClaims(ctx.creds.org, ctx.project.projectId).catch(() => []);
+      const claimedByOther = new Set(claims.filter((c) => c.repo.toLowerCase() === repo.toLowerCase() && (!me || c.actor.toLowerCase() !== me)).map((c) => c.issueNumber));
+      decision = pickAutoRelateIssue(query, openIssues, { claimedByOther });
+    }
+    const targetIssue = explicitIssue ?? existingIssues[0] ?? decision.matched?.number ?? null;
+    const openPrs = ghPRListMatchable(repo, 100);
+    const relatedPrs = matchOpenPRs(query, openPrs, {
+      limit: 5,
+      minScore: 0.35,
+      issueNumbers: targetIssue ? [targetIssue, ...existingIssues] : existingIssues,
+      excludePrNumber: number
+    });
+    let applied = false;
+    let alreadyLinked = targetIssue !== null && existingIssues.includes(targetIssue);
+    if (opts.apply) {
+      if (!targetIssue) {
+        emit(opts, { repo, pr: number, existingIssues, targetIssue: null, decision, relatedPrs, applied: false, alreadyLinked: false }, () => {
+          console.error(`⛔ Could not auto-relate PR #${number}: ${decision.reason}.`);
+          if (decision.candidates.length > 0) {
+            console.error("Closest open issue(s):");
+            for (const c of decision.candidates.slice(0, 3)) {
+              console.error(`  • #${c.number} (${c.score.toFixed(2)}) ${c.title}`);
+            }
+          }
+          console.error("Re-run with --issue <n> --apply to link an issue explicitly.");
+        }, { pretty: true });
+        process.exit(1);
+      }
+      if (!alreadyLinked) {
+        const linkMode = opts.partial ? "part-of" : "closes";
+        const footer = buildShipFlowFooter(ctx.project.projectName, targetIssue, linkMode);
+        const updatedBody = upsertShipFlowFooter(prView.body ?? "", footer);
+        ghPREditBody(repo, number, updatedBody);
+        applied = true;
+        if (localRepoMatches(repo) && currentLocalBranch() === prView.headRefName) {
+          recordBranchIssue(targetIssue, prView.headRefName);
+        }
+        syncOrcaPrOpened({
+          repo,
+          prNumber: number,
+          prUrl: prView.url,
+          issueNumber: targetIssue
+        });
+      }
+    }
+    emit(opts, { repo, pr: number, existingIssues, targetIssue, decision, relatedPrs, applied, alreadyLinked }, () => {
+      if (applied && targetIssue) {
+        console.log(`\uD83D\uDD17 Linked PR #${number} to #${targetIssue} (${opts.partial ? "Part of" : "Closes"} #${targetIssue}).`);
+      } else if (alreadyLinked && targetIssue) {
+        console.log(`✓ PR #${number} already links #${targetIssue}.`);
+      } else if (targetIssue) {
+        console.log(`\uD83D\uDD17 Proposed link for PR #${number}: #${targetIssue} (re-run with --apply to write).`);
+      } else {
+        console.log(`No unambiguous open issue match for PR #${number} (${decision.reason}).`);
+      }
+      if (relatedPrs.length > 0) {
+        console.log(`
+Related open PR(s):`);
+        const prRows = relatedPrs.map((p) => [`#${p.number}`, p.score.toFixed(2), p.matchReason, p.branch, p.title]);
+        for (const l of renderTable(["PR", "Score", "Match", "Branch", "Title"], prRows))
+          console.log(l);
+      }
+    }, { pretty: true });
   }));
 }
 function branchAuthorEmails() {
@@ -16005,6 +16379,12 @@ function planAdmission(opts) {
     candidates.push(issue);
   }
   const ordered = sortIssuesForPickup(candidates);
+  if (opts.mode === "fix") {
+    for (const issue of ordered) {
+      deferred.push({ number: issue.number, reason: "fix-mode" });
+    }
+    return { admit: [], deferred };
+  }
   const wipSlots = Math.max(0, opts.wipLimit - opts.wipActionable);
   const slots = Math.min(capSlots(opts.cap), wipSlots);
   const overflowReason = wipSlots <= capSlots(opts.cap) ? "wip-limit" : "over-cap";
@@ -16028,7 +16408,8 @@ function buildLoopPlan(input) {
     assignee: input.assignee,
     intakeMode: input.intakeMode,
     label: input.label,
-    sliceMergedParents: input.sliceMergedParents
+    sliceMergedParents: input.sliceMergedParents,
+    mode: input.policies.mode
   });
   return {
     policies: input.policies,
@@ -16043,7 +16424,24 @@ init_pr_state();
 init_helpers();
 function registerLoopCommand(program2) {
   const loop = program2.command("loop").description("Autonomous loop planner");
-  loop.command("plan").description("Tick decision table: classifyPR state → action. Admit list is read-only (never claims)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Include foreign conflicted PRs (same as inbox)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+  loop.command("plan").description("Tick decision table: classifyPR state → action. Admit list is read-only (never claims)").option("--repo <fullname>", "Override target repo").option("--conflict-sweep", "Include foreign conflicted PRs (same as inbox)").option("--mode <mode>", `Loop operating mode: ${LOOP_MODES.join(" | ")} (fix reconciles existing PRs only — no new issue admission or bug sweep)`).option("--fix-only", "Shorthand for --mode fix (reconcile/fix existing PRs only)").option("--json", "Output JSON").option("--yaml", "Output YAML").action(runAction(async (opts) => {
+    let loopMode;
+    if (opts.mode !== undefined) {
+      const normalized = opts.mode.trim().toLowerCase();
+      if (!LOOP_MODES.includes(normalized)) {
+        console.error(`Unknown loop mode "${opts.mode}" — valid: ${LOOP_MODES.join(", ")}.`);
+        process.exit(1);
+      }
+      if (opts.fixOnly && normalized !== "fix") {
+        console.error(`Conflicting flags: --fix-only cannot be combined with --mode ${normalized}.`);
+        process.exit(1);
+      }
+      loopMode = normalized;
+    } else if (opts.fixOnly) {
+      loopMode = "fix";
+    } else {
+      loopMode = resolveLoopMode();
+    }
     const ctx = await loadCtx(program2);
     const repo = opts.repo ?? ctx.project.repoFullName;
     const me = ghCurrentLogin();
@@ -16059,7 +16457,8 @@ function registerLoopCommand(program2) {
       cap: resolveLoopCap(),
       wipLimit: resolveWipLimit(),
       pickupScope,
-      intentGate: resolveIntentGateMode()
+      intentGate: resolveIntentGateMode(),
+      ...loopMode === "fix" ? { mode: "fix" } : {}
     };
     const { scanned, collections: prCollections, degradedInputs } = collectInboxPrRows(repo, me, { sweepEnabled, staleHours, maxReworks, readOnly: true });
     const prs = scanned.map(({ pr, row }) => {
@@ -16121,7 +16520,7 @@ function registerLoopCommand(program2) {
       if (otherDegraded.length) {
         console.log(`⚠️  Degraded input(s): ${otherDegraded.join(", ")} — this plan is INCOMPLETE; re-read before concluding there is no work.`);
       }
-      console.log(`Policies: merge-policy=${policies.mergePolicy} · require-ci=${policies.requireCi} · cap=${policies.cap} · wip-limit=${policies.wipLimit} · pickup-scope=${policies.pickupScope} · intent-gate=${policies.intentGate}`);
+      console.log(`Policies: merge-policy=${policies.mergePolicy} · require-ci=${policies.requireCi} · cap=${policies.cap} · wip-limit=${policies.wipLimit} · pickup-scope=${policies.pickupScope} · intent-gate=${policies.intentGate}${policies.mode === "fix" ? " · mode=fix (reconcile/fix existing PRs only)" : ""}`);
       if (reconcile.length) {
         console.log("");
         const rows = reconcile.map((r) => [
@@ -16131,6 +16530,9 @@ function registerLoopCommand(program2) {
         ]);
         for (const l of renderTable(["PR", "State", "Action"], rows))
           console.log(`  ${l}`);
+      } else if (policies.mode === "fix") {
+        console.log(`
+Fix mode: no open PRs need fixes (new issue admission and bug sweep skipped).`);
       }
       if (admit.length) {
         console.log("");
@@ -16558,6 +16960,23 @@ var SETTINGS = [
       return c.issueTrack = m;
     },
     effective: resolveIssueTrack
+  },
+  {
+    key: "auto-relate-pr",
+    field: "autoRelatePr",
+    set: (v, c) => String(c.autoRelatePr = parseBoolStrict("auto-relate-pr", v)),
+    effective: resolveAutoRelatePr
+  },
+  {
+    key: "loop-mode",
+    field: "loopMode",
+    set: (v, c) => {
+      const m = v.trim().toLowerCase();
+      if (!LOOP_MODES.includes(m))
+        throw new Error(`loop-mode must be one of: ${LOOP_MODES.join(", ")}`);
+      return c.loopMode = m;
+    },
+    effective: resolveLoopMode
   },
   {
     key: "live-reload",

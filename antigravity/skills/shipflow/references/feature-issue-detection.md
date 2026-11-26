@@ -17,10 +17,13 @@ un-tracked; never create duplicate issues.
 1. **Summarize the work** in a sentence or two (the user's description, the
    branch name, and/or `git diff` / recent commits) — that intent is the query.
 2. **Find candidates:** `renaiss-shipflow issue match "<summary>" --json`
-   (scans the full 1,000-issue open window, joins active claims, and returns
-   the top matches plus `issueTrack`: `auto` | `ask` | `off`). If `truncated: true`,
-   raise `--scan-limit` or fall back to `renaiss-shipflow issues list --json --limit 2000`
-   before treating the list as complete (#582).
+   (scans the full 1,000-issue open window, joins active claims and related open
+   PRs in `relatedPrs`, and returns the top matches plus `issueTrack`: `auto` |
+   `ask` | `off`). Use `renaiss-shipflow pr match "<summary>" --json` (or
+   `--issue <n>`) to search open PRs directly before opening a duplicate PR. If
+   `truncated: true`, raise `--scan-limit` or fall back to
+   `renaiss-shipflow issues list --json --limit 2000` before treating the list
+   as complete (#582).
 3. **Match (you verify — it's semantic).** Compare the work against the top
    candidates; be conservative — only a match when the work plainly implements
    or fixes that issue.
@@ -198,16 +201,23 @@ screens, cards and payouts, never table names or routes; those go in
 
 5. Once linked (matched or created), open the PR with `pr create --lint=strict --issue N`
    (`--partial` for a slice); its footer links the issue. Do not hand-write
-   `Fixes #N` for it.
+   `Fixes #N` for it. When `--issue` is omitted and `auto-relate-pr` is on
+   (default when `issue-track` is `auto`; toggle with `config set auto-relate-pr
+   true|false` or `--auto-relate` / `--no-auto-relate`), `pr create --lint=strict`
+   conservatively matches an unambiguous, uncontested open issue from the PR
+   title/outcome, links it automatically, and warns on related open PRs. For an
+   already-open PR, inspect or apply its link with `renaiss-shipflow pr relate
+   <pr> --apply --json`.
 
 ## Auto mode
 
 Auto-tracking defaults to `auto` (`issue-track`):
 
 ```
-renaiss-shipflow config set issue-track auto   # default (or env SHIPFLOW_ISSUE_TRACK=auto)
-renaiss-shipflow config set issue-track ask    # prompt before claiming fuzzy matches or filing
-renaiss-shipflow config set issue-track off    # disable ambient tracking
+renaiss-shipflow config set issue-track auto      # default (or env SHIPFLOW_ISSUE_TRACK=auto)
+renaiss-shipflow config set issue-track ask       # prompt before claiming fuzzy matches or filing
+renaiss-shipflow config set issue-track off       # disable ambient tracking
+renaiss-shipflow config set auto-relate-pr true   # auto-link unambiguous open issues & warn on sibling PRs during PR creation (default follows issue-track=auto; env SHIPFLOW_AUTO_RELATE_PR)
 ```
 
 Legacy `renaiss-shipflow config set auto-issue true|false` (or env

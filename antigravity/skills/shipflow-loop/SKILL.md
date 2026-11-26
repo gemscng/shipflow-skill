@@ -21,6 +21,7 @@ file's real section headings (§) — follow them there, never from memory.
 |---|---|
 | `once` | run a single pass and stop, no trigger (the old one-shot behavior) |
 | `stop` | stop continuous mode (delete the trigger; an in-session loop ends after the current pass) |
+| `fix` / `mode=fix` | **fix mode** (`fix-only`): reconcile/fix existing PRs (review comments, CI failures, conflicts, reporter corrections, behind-base syncs, reviewer gate, automerge) **without** admitting new issues (Phase B skipped) or running bug sweeps (Phase C skipped). Pairs with `once` (`fix once`) or continuous mode |
 | `watch=<dur>` | override the re-run interval (default `15m`) |
 | `cap=N` | how many PRs to open per pass before pausing; `cap=all` drains the queue |
 | `concurrency=N` | max issues/PRs worked at once (#744); `concurrency=1` = fully serial |
@@ -48,6 +49,10 @@ tenant.
 **Refill:** a `refill=on` token → `$SHIPFLOW_LOOP_REFILL` → **off**. Also
 invocation-only; the sweep's `bug-hunt` / `bug-hunt-cap` config knobs still
 bound it.
+**Loop mode:** a `fix` / `mode=fix` / `fix-only` token → `$SHIPFLOW_LOOP_MODE` →
+`config get loop-mode` → **`full`**. In `fix` mode pass `--mode fix` (or
+`--fix-only`) to `renaiss-shipflow loop plan --json`, run Phase A in full, and
+skip Phases B and C.
 
 ## The tick — skeleton (each step lives in loop-mode.md at the § named)
 

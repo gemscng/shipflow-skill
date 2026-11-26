@@ -86,7 +86,8 @@ the heavy work never enters yours.
 ## The cycle — each tick
 
 **Tick 1 only — lay out the Initial Plan before ANY dispatch (#600).** After
-the drift probe, run `renaiss-shipflow loop plan --json` (READ-only — never
+the drift probe, run `renaiss-shipflow loop plan --json` (pass `--mode fix` /
+`--fix-only` in **fix mode** — see below; READ-only — never
 `issue next`) and render its envelope as the plan block. Do not rebuild it
 from `inbox --json` or `renaiss-shipflow issues list --assignee @me
 --state open --json`, and do not re-derive actions from this file's
@@ -94,10 +95,19 @@ playbook table.
 
 | Envelope | Render as |
 |---|---|
-| `policies` | merge-policy · require-ci · cap · wip-limit · pickup-scope · intent-gate, one line |
+| `policies` | merge-policy · require-ci · cap · wip-limit · pickup-scope · intent-gate (plus `mode=fix` in fix mode), one line |
 | `reconcile[]` | one row per in-flight PR: `#N · state · action` (`escalateOnce` / `unsatisfiable` when set) |
-| `admit[]` | the scope's eligible issues in pickup order, up to `cap`: `#N · priority · title` |
-| `deferred[]` | anything visible but not actionable this run (`reason`: parked / waiting-on / over-cap / …) |
+| `admit[]` | the scope's eligible issues in pickup order, up to `cap`: `#N · priority · title` (always empty in fix mode) |
+| `deferred[]` | anything visible but not actionable this run (`reason`: parked / waiting-on / over-cap / `fix-mode` / …) |
+
+**Fix mode (`fix` / `mode=fix` / `fix-only` / `SHIPFLOW_LOOP_MODE=fix` /
+`config set loop-mode fix`):** reconcile and fix existing PRs **only**. Run
+`renaiss-shipflow loop plan --mode fix --json` (or `--fix-only`), execute
+**Phase A** in full (CI fixes, review comments, changes requested, conflicts,
+reporter corrections, behind-base syncs, reviewer gate, automerge), and **skip
+Phase B** (no `issue route`, no `issue next`, no new issue admission) and
+**skip Phase C** (no bug sweep or refill). Tag the pass-end summary line with
+`[fix mode]`.
 
 The operator's chance to interrupt a wrong plan before workers spend tokens;
 later ticks print only the one-line summary — never repeat the plan block.
@@ -497,6 +507,9 @@ parked:
 
 ### B. Admit new work — under the WIP limit, every issue reviewed first
 
+**Fix mode (`mode=fix`):** skip Phase B entirely — never route, claim, or admit
+new issues; end the pass after Phase A drains.
+
 WIP counts **actionable** open PRs only — `summary.wipActionable` from
 `inbox --json` (#451): reporter-parked (`awaiting_reporter`) PRs are a
 timer like `issue wait --on #X` and would jam admission (a PR whose PARENT
@@ -769,6 +782,8 @@ change, never by hand:
 `Decide` line is absent — fix before dispatching.
 
 ### C. Bug sweep — when there's nothing left to fix, hunt for new bugs
+
+**Fix mode (`mode=fix`):** skip Phase C entirely (no bug sweep or refill).
 
 B exit 4 + A clean + `bug-hunt` on → load `loop-bug-sweep.md` and follow it:
 test + regression + browser QA, file only REPRODUCED bugs (dedupe enforced,

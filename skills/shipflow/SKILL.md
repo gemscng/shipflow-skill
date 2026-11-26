@@ -58,7 +58,9 @@ are identical across harnesses.
 | "file an issue about X" | `renaiss-shipflow issue create --lint=strict --title "X" --body "..."` — body: `references/message-style.md` § "Issue-body ladder", with a **Business flow** in business words, and a picture (table, mermaid diagram, screenshot or GIF) once it runs past 120 visible words; strict exits 2 and files nothing without them; visible bug → `--screenshot <path...>`, broken element outlined (`references/browser-testing.md` § Mark what changed); UI change → draw a UI proposal first (reference only, not a requirement) and pass `--screenshot now.png --proposal proposal.png` (`references/browser-testing.md` § 7), or write `**UI proposal:** none — <why>`. **Exit 12 = duplicate, nothing created** (#580) → `references/feature-issue-detection.md` |
 | ↳ who it lands on | Under `pickup-scope=assigned` (the default) it **auto-assigns the current gh login** (#673) — assignment is the queueing gesture, so an unassigned filing is invisible to `issue next`. `--assignee <login...>` overrides; **`--no-assign`** files it unassigned so the loop does NOT pick it up |
 | feature work with no issue / PR without `Fixes #N` | → `references/feature-issue-detection.md` (always-on rule: `references/issue-track-first.md`; opt out: `SHIPFLOW_ISSUE_TRACK_HOOK=false`) |
-| "match open issues for X" | `renaiss-shipflow issue match "X" --json` (top open candidates + active claims + `issueTrack` mode) |
+| "match open issues for X" | `renaiss-shipflow issue match "X" --json` (top open issue candidates + `relatedPrs` + active claims + `issueTrack` mode) |
+| "match / find related open PRs for X" | `renaiss-shipflow pr match "X" --json` (open PRs matching the query, current branch, or `--issue <n>`) |
+| "auto-relate PR to an open issue" | `renaiss-shipflow pr relate <n> --apply --json` (or automatic during `pr create --lint=strict` when `auto-relate-pr` is on: `renaiss-shipflow config set auto-relate-pr true`) |
 | "auto-create / auto-track issues" | `renaiss-shipflow config set issue-track auto` (`auto` default · `ask` · `off`; legacy `config set auto-issue true` still maps to `auto`) |
 | "file and claim an issue for this fix" | `renaiss-shipflow issue create --claim --lint=strict --title "X" --body "..."` — files and claims atomically + records the issue on the current branch |
 | "pick up #42" | `renaiss-shipflow issue work 42 --json` |
@@ -69,7 +71,7 @@ are identical across harnesses.
 | "commit" / "git commit" | Never bare `git commit`. Invoke **`shipflow:smart-commit`** (message-style.md). SessionStart + PreToolUse gate enforce this after install (`references/smart-commit-first.md`; opt out: `SHIPFLOW_SMART_COMMIT_HOOK=false`) |
 | "regenerate feature map" / empty-map | `renaiss-shipflow features generate --json` |
 | "standing priorities" | `renaiss-shipflow priorities --json` (human-edited `docs/PRIORITIES.md`) |
-| "loop through issues and fix them" / `/shipflow-loop` | Loop mode → `references/loop-mode.md` |
+| "loop through issues and fix them" / `/shipflow-loop` | Loop mode → `references/loop-mode.md` (pass `fix` / `mode=fix` or `renaiss-shipflow config set loop-mode fix` for **fix mode**: reconcile/fix existing PRs only — skips admitting new issues and bug sweeps; plan with `renaiss-shipflow loop plan --mode fix --json` or `--fix-only`) |
 | "escalate #42 to a human" | `renaiss-shipflow issue escalate 42 --reason-file reason.md --category <cat>` — categories, `--update`, and the `--for-pr`/`--once-reason` once-key: `references/loop-mode.md` |
 | "set the default sign-off owner" | `renaiss-shipflow config set signoff-owner <github-login>` |
 | "unmatched commit email" | `renaiss-shipflow git-identity --fix` |

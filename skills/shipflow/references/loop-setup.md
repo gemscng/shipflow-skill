@@ -112,6 +112,7 @@ restore the default with `renaiss-shipflow config unset <key>`
 | Knob | Default | Meaning |
 |---|---|---|
 | `merge-policy` | `manual` | `manual` = never auto-merge (park for a human) · `auto-on-green` = merge when CI green **and** approved · `auto-timeout` = green + no objection past `stale-pr-hours` |
+| `loop-mode` | `full` | `full` = reconcile PRs + admit new issues + bug sweep · `fix` = reconcile/fix existing PRs only (skips Phase B admission and Phase C bug sweeps; also selectable per run with `fix` / `mode=fix` or `loop plan --mode fix` / `--fix-only`) |
 | `require-ci` | `true` | CI must be green before a PR is "advanced" / merged |
 | `max-fix-attempts` | `3` | CI-fix tries on one PR before escalating to a human — also caps reporter-correction reworks (#442) |
 | `pickup-scope` | `assigned` | `assigned` = the loop claims only issues assigned to its own account — assignment is the queueing gesture (#600) · `all` = repo-wide pickup (pre-#600) |
